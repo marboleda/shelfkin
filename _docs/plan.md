@@ -32,6 +32,7 @@ Shelfkin is an app for managing a pantry: the ingredients a household has for co
 - Every item has both a **storage location** (e.g. Pantry, Fridge, Freezer, Spice rack) and a **category** (e.g. Baking, Produce, Dairy, Grains, Spices)
 - Users can **toggle the view** or filter by location or category
 - Entries with the same name are **grouped into one row** in the view (e.g. "Milk ×2"), which expands to show each entry
+- **Later:** Custom storage locations per household (e.g. "Garage freezer")
 
 ## Item lifecycle
 
@@ -43,12 +44,15 @@ Shelfkin is an app for managing a pantry: the ingredients a household has for co
 - A **built-in catalog** of common ingredients, each with a default category, location and typical shelf life
 - Users can add **custom items**, which are **private to the household**
 - Members can set a custom item's **default category and location once**, and it is remembered for the household
+- Members can also **override a built-in item's default category and location** for their household
 
 ## Households
 
 - Users join a household via an **invite link or code**
 - Roles: **owner** and **member**
   - The owner can manage members (e.g. remove them) and delete the household
+  - **Only the owner** can create or revoke invite codes
+  - Members can leave a household; the **owner cannot leave** until they transfer ownership to another member (or delete the household)
 - A user can belong to **multiple households** and switch between them
 
 ## Expiry alerts
@@ -71,7 +75,29 @@ Shelfkin is an app for managing a pantry: the ingredients a household has for co
 - Shopping list
 - Recipe matching / ingredient deduction
 
+## Tech stack
+
+*Decided October 26, 2026*
+
+- **Client (web + iOS + Android):** Expo (React Native) + Expo Router, TypeScript
+- **Data fetching / offline v1:** TanStack Query, with the cache persisted to device storage
+- **API:** Go on Cloud Run
+- **Database:** Cloud SQL for PostgreSQL
+  - Typed queries with sqlc + pgx; migrations with goose or Atlas
+  - Household isolation enforced in the API and backed by Postgres row-level security (RLS) using a per-transaction `app.user_id` setting
+- **Auth:** Firebase Auth (Identity Platform); the API verifies Firebase ID tokens
+- **API contract:** OpenAPI spec, with a generated Go server and TS client
+- **Expiry pushes:** Cloud Scheduler → Cloud Run job → Expo Push (FCM / APNs)
+- **Web hosting:** Expo static web export on Firebase Hosting, which also serves the universal / app links for invites
+- **Mobile builds:** EAS Build / Submit
+- **Live updates:** refetch on focus and pull-to-refresh in v1; optional SSE driven by Postgres `LISTEN/NOTIFY`
+- **Full offline (later):** self-hosted PowerSync or ElectricSQL against Cloud SQL logical replication
+- **Local dev:** Postgres in Docker + Firebase Auth emulator
+
+## Data model
+
+See [data-model.md](data-model.md).
+
 ## Not yet decided
 
-- Tech stack
-- Screen designs and data model
+- Screen designs
