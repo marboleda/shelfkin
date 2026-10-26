@@ -1,0 +1,12 @@
+# Build output
+/bin/
+*.exe
+
+# Test output
+*.test
+*.out
+coverage.*
+
+# Local env files
+.env
+.env.*.local

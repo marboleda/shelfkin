@@ -1,0 +1,9 @@
+{
+  "name": "shelfkin",
+  "private": true,
+  "scripts": {
+    "test": "npm run test:api && npm run test:app",
+    "test:api": "cd api && go test ./...",
+    "test:app": "npm --prefix app test"
+  }
+}
