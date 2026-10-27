@@ -1,0 +1,8 @@
+# Root tooling; each project in api/ and app/ has its own .gitignore
+node_modules/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
