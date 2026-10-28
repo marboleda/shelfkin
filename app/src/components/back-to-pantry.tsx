@@ -1,22 +1,22 @@
-import { Link } from 'expo-router';
-import { Pressable, Text } from 'react-native';
+import { Text } from 'react-native';
 
 import { useThemedStyles, type Theme } from '@/theme';
+
+import { PressableLink } from './pressable-link';
 
 /** Visible back control for screens opened from Pantry. Always returns to Pantry. */
 export function BackToPantry() {
   const styles = useThemedStyles(createStyles);
   return (
-    <Link href="/" asChild>
-      <Pressable
-        accessibilityRole="link"
-        accessibilityLabel="Back to Pantry"
-        hitSlop={8}
-        style={({ pressed }) => [styles.button, pressed && styles.pressed]}
-      >
-        <Text style={styles.label}>‹ Back to Pantry</Text>
-      </Pressable>
-    </Link>
+    <PressableLink
+      href="/"
+      accessibilityRole="link"
+      accessibilityLabel="Back to Pantry"
+      hitSlop={8}
+      style={styles.button}
+    >
+      <Text style={styles.label}>‹ Back to Pantry</Text>
+    </PressableLink>
   );
 }
 
@@ -28,9 +28,6 @@ function createStyles(theme: Theme) {
       paddingHorizontal: theme.spacing.sm,
       marginLeft: -theme.spacing.sm,
       borderRadius: theme.radii.sm,
-    },
-    pressed: {
-      backgroundColor: theme.colors.primarySubtle,
     },
     label: {
       ...theme.typography.label,

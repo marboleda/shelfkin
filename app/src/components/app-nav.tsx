@@ -1,10 +1,11 @@
 import type { BottomTabBarProps } from 'expo-router/js-tabs';
-import { Link, type Href } from 'expo-router';
-import { Pressable, Text, View } from 'react-native';
+import type { Href } from 'expo-router';
+import { Text, View } from 'react-native';
 
 import { useIsWideLayout } from '@/hooks/use-is-wide-layout';
 import { SIDE_NAV_WIDTH, useTheme, useThemedStyles, type Theme } from '@/theme';
 
+import { PressableLink } from './pressable-link';
 import { APP_NAME } from './screen';
 
 type NavItem = {
@@ -46,22 +47,29 @@ export function BottomTabBar({ activeLabel, insets }: NavProps) {
     <View
       testID="bottom-tab-bar"
       role="tablist"
-      style={[styles.tabBar, { paddingBottom: insets.bottom, paddingLeft: insets.left, paddingRight: insets.right }]}
+      style={[
+        styles.tabBar,
+        {
+          paddingBottom: insets.bottom,
+          paddingLeft: insets.left,
+          paddingRight: insets.right,
+        },
+      ]}
     >
       {NAV_ITEMS.map((item) => {
         const active = item.label === activeLabel;
         return (
-          <Link key={item.label} href={item.href} asChild>
-            <Pressable
-              role="tab"
-              aria-selected={active}
-              accessibilityState={{ selected: active }}
-              style={({ pressed }) => [styles.tabItem, pressed && styles.pressed]}
-            >
-              <View style={[styles.tabIndicator, active && styles.tabIndicatorActive]} />
-              <Text style={[styles.navLabel, active && styles.navLabelActive]}>{item.label}</Text>
-            </Pressable>
-          </Link>
+          <PressableLink
+            key={item.label}
+            href={item.href}
+            role="tab"
+            aria-selected={active}
+            accessibilityState={{ selected: active }}
+            style={styles.tabItem}
+          >
+            <View style={[styles.tabIndicator, active && styles.tabIndicatorActive]} />
+            <Text style={[styles.navLabel, active && styles.navLabelActive]}>{item.label}</Text>
+          </PressableLink>
         );
       })}
     </View>
@@ -88,16 +96,16 @@ export function SideNav({ activeLabel, insets }: NavProps) {
       {NAV_ITEMS.map((item) => {
         const active = item.label === activeLabel;
         return (
-          <Link key={item.label} href={item.href} asChild>
-            <Pressable
-              role="tab"
-              aria-selected={active}
-              accessibilityState={{ selected: active }}
-              style={({ pressed }) => [styles.sideItem, active && styles.sideItemActive, pressed && styles.pressed]}
-            >
-              <Text style={[styles.navLabel, active && styles.navLabelActive]}>{item.label}</Text>
-            </Pressable>
-          </Link>
+          <PressableLink
+            key={item.label}
+            href={item.href}
+            role="tab"
+            aria-selected={active}
+            accessibilityState={{ selected: active }}
+            style={[styles.sideItem, active && styles.sideItemActive]}
+          >
+            <Text style={[styles.navLabel, active && styles.navLabelActive]}>{item.label}</Text>
+          </PressableLink>
         );
       })}
     </View>
@@ -151,9 +159,6 @@ function createStyles(theme: Theme) {
     },
     sideItemActive: {
       backgroundColor: theme.colors.primarySubtle,
-    },
-    pressed: {
-      opacity: 0.7,
     },
     navLabel: {
       ...theme.typography.label,

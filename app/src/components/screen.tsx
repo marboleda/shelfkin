@@ -27,14 +27,27 @@ type ScreenProps = {
 
 function safeAreaPadding(insets: EdgeInsets, inShell: boolean, wide: boolean) {
   if (!inShell) {
-    return { paddingTop: insets.top, paddingRight: insets.right, paddingBottom: insets.bottom, paddingLeft: insets.left };
+    return {
+      paddingTop: insets.top,
+      paddingRight: insets.right,
+      paddingBottom: insets.bottom,
+      paddingLeft: insets.left,
+    };
   }
   if (wide) {
     // The side nav covers the left edge.
-    return { paddingTop: insets.top, paddingRight: insets.right, paddingBottom: insets.bottom };
+    return {
+      paddingTop: insets.top,
+      paddingRight: insets.right,
+      paddingBottom: insets.bottom,
+    };
   }
   // The bottom tab bar covers the bottom edge.
-  return { paddingTop: insets.top, paddingRight: insets.right, paddingLeft: insets.left };
+  return {
+    paddingTop: insets.top,
+    paddingRight: insets.right,
+    paddingLeft: insets.left,
+  };
 }
 
 export function Screen({ title, inShell = false, accessory, children }: ScreenProps) {

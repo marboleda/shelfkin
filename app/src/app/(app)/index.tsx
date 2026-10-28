@@ -1,6 +1,6 @@
-import { Link } from 'expo-router';
-import { Pressable, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 
+import { PressableLink } from '@/components/pressable-link';
 import { Screen } from '@/components/screen';
 import { ThemedText } from '@/components/themed-text';
 import { useThemedStyles, type Theme } from '@/theme';
@@ -12,29 +12,24 @@ export default function PantryScreen() {
     <Screen title="Pantry" inShell>
       <ThemedText variant="muted">Your household&apos;s items will appear here.</ThemedText>
 
-      <Link href="/add" asChild>
-        <Pressable
-          accessibilityRole="button"
-          style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
-        >
-          <Text style={styles.primaryButtonLabel}>Add item</Text>
-        </Pressable>
-      </Link>
+      <PressableLink
+        href="/add"
+        testID="add-item-button"
+        accessibilityRole="button"
+        style={styles.primaryButton}
+      >
+        <Text style={styles.primaryButtonLabel}>Add item</Text>
+      </PressableLink>
 
-      <Link href="/entries/sample" asChild>
-        <Pressable
-          accessibilityRole="link"
-          style={({ pressed }) => [styles.row, pressed && styles.pressed]}
-        >
-          <View style={styles.rowText}>
-            <ThemedText>Sample entry</ThemedText>
-            <ThemedText variant="muted" style={styles.rowCaption}>
-              Opens the entry detail placeholder
-            </ThemedText>
-          </View>
-          <ThemedText variant="muted">›</ThemedText>
-        </Pressable>
-      </Link>
+      <PressableLink href="/entries/sample" accessibilityRole="link" style={styles.row}>
+        <View style={styles.rowText}>
+          <ThemedText>Sample entry</ThemedText>
+          <ThemedText variant="muted" style={styles.rowCaption}>
+            Opens the entry detail placeholder
+          </ThemedText>
+        </View>
+        <ThemedText variant="muted">›</ThemedText>
+      </PressableLink>
     </Screen>
   );
 }
@@ -67,9 +62,6 @@ function createStyles(theme: Theme) {
     },
     rowCaption: {
       ...theme.typography.caption,
-    },
-    pressed: {
-      opacity: 0.7,
     },
   };
 }

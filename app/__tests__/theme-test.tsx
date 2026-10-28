@@ -93,5 +93,7 @@ describe('theme', () => {
     const heading = screen.getByRole('heading', { name: 'Pantry' });
     expect(StyleSheet.flatten(heading.props.style).color).toBe(colors.dark.text);
     expect(screen.getByTestId('bottom-tab-bar')).toHaveStyle({ backgroundColor: colors.dark.surface });
+    // Themed styles must survive <Link asChild> (a style function on the child is dropped).
+    expect(screen.getByTestId('add-item-button')).toHaveStyle({ backgroundColor: colors.dark.primary });
   });
 });

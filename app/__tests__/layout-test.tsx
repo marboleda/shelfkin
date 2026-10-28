@@ -32,13 +32,16 @@ describe('breakpoint', () => {
 });
 
 describe('phone and desktop layout', () => {
-  test.each([320, 390, 767])('below 768 px (%i px) shows the bottom tab bar and no side nav', async (width) => {
-    await setWindowWidth(width);
-    await renderRouter(APP_DIR, { initialUrl: '/' });
+  test.each([320, 390, 767])(
+    'below 768 px (%i px) shows the bottom tab bar and no side nav',
+    async (width) => {
+      await setWindowWidth(width);
+      await renderRouter(APP_DIR, { initialUrl: '/' });
 
-    expect(screen.getByTestId('bottom-tab-bar')).toBeTruthy();
-    expect(screen.queryByTestId('side-nav')).toBeNull();
-  });
+      expect(screen.getByTestId('bottom-tab-bar')).toBeTruthy();
+      expect(screen.queryByTestId('side-nav')).toBeNull();
+    },
+  );
 
   test.each([768, 1024, 1440])('at %i px shows the side nav and no bottom tab bar', async (width) => {
     await setWindowWidth(width);
