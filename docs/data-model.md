@@ -201,7 +201,7 @@ Stops the nightly job from sending the same alert twice.
   `households` has no `household_id` column, so it is scoped by its own `id` the same way.
 - `catalog_items`: the same policy, OR `household_id IS NULL` (built-ins are readable by everyone, writable by no one through the app role).
 - `users`, `push_tokens` and `expiry_notifications` have no RLS (they hold no household data) and are scoped by the API: every query filters by the caller's user ID.
-- Owner-only actions (create or revoke invites, remove a member, transfer ownership, rename or delete the household) are checked in the API, with a stricter RLS policy as a second check.
+- Owner-only actions (create or revoke invites, remove a member, rename or delete the household) are checked in the API, with a stricter RLS policy as a second check. Transfer ownership is also owner-only, but it goes through `transfer_ownership` (below) because RLS would block it.
 - `shelfkin_app` cannot insert into `households` or `household_members`, or update `household_members`, directly. Three narrow privileged (`SECURITY DEFINER`) functions do this instead. Each reads the caller from `app.user_id`, fails if it is not set, has a fixed `search_path`, and `shelfkin_app` has `EXECUTE` on it and nothing more:
   - `create_household(name)` creates a household together with the caller's `owner` row (#14).
   - `transfer_ownership(household_id, new_owner_id)` demotes the owner and promotes a member (#15). It is needed because, as `shelfkin_app`, the owner loses owner rights after demoting themselves, so the RLS policy would block the promote.
