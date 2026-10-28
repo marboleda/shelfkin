@@ -1,6 +1,6 @@
 Roles
 
-- project-manager - grooms a task before anyone implements it
+- product-manager - grooms a task before anyone implements it
 - software-engineer - implements one groomed task
 - quality-assurance - checks the result against the acceptance criteria
 
