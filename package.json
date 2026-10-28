@@ -4,6 +4,11 @@
   "scripts": {
     "test": "npm run test:api && npm run test:app",
     "test:api": "cd api && go test ./...",
-    "test:app": "npm --prefix app test"
+    "test:app": "npm --prefix app test",
+    "db:up": "docker compose up -d --wait",
+    "db:down": "docker compose down",
+    "db:reset": "docker compose down -v",
+    "db:migrate": "go -C api run ./cmd/migrate up",
+    "db:status": "go -C api run ./cmd/migrate status"
   }
 }
