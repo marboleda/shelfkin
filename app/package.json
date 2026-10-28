@@ -24,6 +24,7 @@
     "eslint-config-expo": "~58.0.4",
     "jest": "~30.5.2",
     "jest-expo": "~58.0.12",
+    "openapi-typescript": "7.13.0",
     "typescript": "~6.0.3"
   },
   "scripts": {
@@ -38,5 +39,10 @@
   "private": true,
   "jest": {
     "preset": "jest-expo"
+  },
+  "overrides": {
+    "openapi-typescript": {
+      "typescript": "$typescript"
+    }
   }
 }

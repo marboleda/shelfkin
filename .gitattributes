@@ -1,2 +1,6 @@
 # Store text files with LF line endings, matching .editorconfig
 * text=auto eol=lf
+
+# Generated from openapi/openapi.yaml by `npm run generate`; do not edit by hand
+api/internal/openapi/*.gen.go linguist-generated=true
+app/src/api/schema.ts linguist-generated=true
