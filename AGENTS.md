@@ -4,8 +4,8 @@ Shelfkin is an app for managing a household pantry. It has an Expo / React Nativ
 
 ## Repository layout
 
-- `app/` contains the Expo and React Native front-end code
-- `api/` contains the Go backend code
+- `app/` contains the Expo and React Native front-end code.
+- `api/` contains the Go backend code.
 
 ## Expo conventions
 
