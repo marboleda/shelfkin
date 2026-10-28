@@ -10,7 +10,7 @@ Shelfkin is an app for managing a household pantry: the ingredients a household 
 | `app/` | Expo (React Native) app for web, iOS and Android, using Expo Router; screens live in `app/src/app/` |
 | `_docs/` | Product plan, data model and backlog |
 
-Planned additions: `api/db/migrations/` for SQL migrations and `openapi/` for the API spec.
+SQL migrations live in `api/db/migrations/` (see [Local database](#local-database)). Planned addition: `openapi/` for the API spec.
 
 ## Requirements
 
