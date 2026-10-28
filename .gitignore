@@ -6,3 +6,10 @@ node_modules/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Terraform (infra/): provider cache, state and real variable values
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
