@@ -1,8 +1,8 @@
 Roles
 
-- PM - grooms a task before anyone implements it, follows _docs/team/pm.md
-- Engineer - implements one groomed task, follows _docs/team/software-engineer.md
-- QA - checks the result against the acceptance criteria, follows _docs/team/qa-engineer.md
+- PM - grooms a task before anyone implements it, follows `docs/team/pm.md`
+- Engineer - implements one groomed task, follows `docs/team/software-engineer.md`
+- QA - checks the result against the acceptance criteria, follows `docs/team/qa-engineer.md`
 
 Work in isolated git worktrees and run up to five agents in parallel.
 
