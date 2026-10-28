@@ -2,7 +2,7 @@
 
 *Draft — October 26, 2026*
 
-Postgres (Cloud SQL). Every table that holds household data has a `household_id` column, so a single RLS rule can scope it (see [Access control](#access-control)).
+Postgres (Cloud SQL). Tables that hold household data are scoped by row-level security (see [Access control](#access-control)): `households` by its own `id`, and the other household tables by their `household_id` column. `expiry_notifications` has no household column; like `users` and `push_tokens`, it is scoped by the API.
 
 ## Conventions
 
@@ -36,12 +36,12 @@ categories, locations (built-in lookup tables)
 | `display_name` | text, not null | Shown in "Set to Low by Sam" |
 | `email` | text | Copied from Firebase for display/invites |
 | `timezone` | text, not null | IANA name, e.g. `America/Toronto`; used to send expiry pushes at a sensible local time |
-| `push_enabled` | boolean, not null, default false | Push notifications are opt-in |
+| `push_enabled` | boolean, not null, default false | Push notifications are opt-in. The setting is per user, not per device: turning notifications off on one device means removing that device's row from `push_tokens` |
 | `created_at`, `updated_at` | timestamptz | |
 
 ### `push_tokens`
 
-One row per device that can receive pushes.
+One row per device that can receive pushes. Deleting a device's token (on sign-out, or to turn notifications off on just that device) stops pushes to it; `users.push_enabled` turns them off for all of the user's devices.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -74,7 +74,7 @@ Deleting a household (owner only) cascades to members, invites, custom catalog i
 - Exactly one owner per household: partial unique index on `(household_id) WHERE role = 'owner'`.
 - Index on `(user_id)` for "which households am I in?" (household switcher).
 - **Leaving:** members can leave (delete their own row). The owner cannot leave; they must transfer ownership first, or delete the household.
-- **Transferring ownership:** done by the owner in one transaction: demote the current owner to `member`, then promote the new owner. The order matters because the one-owner index is checked on each statement. The new owner must already be a member.
+- **Transferring ownership:** done by the owner through the privileged `transfer_ownership` function (see [Access control](#access-control)), in one transaction: demote the current owner to `member`, then promote the new owner. The order matters because the one-owner index is checked on each statement. The new owner must already be a member.
 
 ### `household_invites`
 
@@ -135,7 +135,7 @@ A household's own default category and location for a **built-in** catalog item.
 | `updated_by` | uuid FK → users, on delete set null | |
 | `updated_at` | timestamptz | |
 
-Any member can set these. **Effective defaults** for an item in a household = `COALESCE(override, catalog default)`, computed in the item queries (a SQL view keeps this in one place).
+Any member can set these. **Effective defaults** for an item in a household = `COALESCE(override, catalog default)`, computed in the item queries (a SQL view keeps this in one place). The view is created `WITH (security_invoker = true)`, so RLS applies to whoever queries it; without this, a view runs with its owner's rights and would bypass RLS.
 
 ### `pantry_entries`
 
@@ -168,7 +168,7 @@ Append-only change log. It powers the "Set to Low by Sam, 2h ago" label now and 
 | `entry_id` | uuid, **no FK** | Survives deletion of the entry |
 | `catalog_item_id` | uuid, no FK | Lets the feed show the item name even after deletion (with `snapshot`) |
 | `actor_id` | uuid FK → users, on delete set null | |
-| `type` | `event_type` | `entry_created`, `level_changed`, `expiry_changed`, `location_changed`, `entry_deleted` |
+| `type` | `event_type` | `entry_created`, `level_changed`, `expiry_changed`, `location_changed`, `purchase_date_changed`, `entry_deleted`. `purchase_date_changed` exists because users can edit an entry's purchase date, and every edit produces an event |
 | `changes` | jsonb | e.g. `{"level": {"from": "half", "to": "low"}}` |
 | `snapshot` | jsonb | Entry state after the event (name, level, location, expiry), so the feed does not need joins and works for deleted entries |
 | `occurred_at` | timestamptz, not null | |
@@ -191,14 +191,21 @@ Stops the nightly job from sending the same alert twice.
 
 ## Access control
 
-- The Go API verifies the Firebase ID token, looks up `users.id`, and at the start of each transaction runs `SET LOCAL app.user_id = '<uuid>'`.
-- RLS policy on household-scoped tables (`households`, `household_members`, `household_invites`, `household_item_defaults`, `pantry_entries`, `item_events`):
+- The Go API verifies the Firebase ID token and looks up `users.id`. At the start of each transaction it switches to the restricted `shelfkin_app` role with `SET LOCAL ROLE shelfkin_app` and sets `app.user_id` for that transaction (`SELECT set_config('app.user_id', $1, true)`, since `SET LOCAL` cannot take a bind parameter).
+- Policies read the current user as `NULLIF(current_setting('app.user_id', true), '')::uuid`. On a pooled connection the setting reads as `''` after an earlier transaction set it, so a plain `::uuid` cast would error.
+- Policies use a `SECURITY DEFINER` helper function (e.g. `app_user_household_ids()`, `STABLE`, with a fixed `search_path`) that returns the caller's household IDs. A policy on `household_members` that queried `household_members` directly would recurse ("infinite recursion detected in policy").
+- RLS policy on household-scoped tables (`household_members`, `household_invites`, `household_item_defaults`, `pantry_entries`, `item_events`):
 
-  `household_id IN (SELECT household_id FROM household_members WHERE user_id = current_setting('app.user_id')::uuid)`
+  `household_id IN (SELECT app_user_household_ids())`
 
+  `households` has no `household_id` column, so it is scoped by its own `id` the same way.
 - `catalog_items`: the same policy, OR `household_id IS NULL` (built-ins are readable by everyone, writable by no one through the app role).
-- Owner-only actions (create or revoke invites, remove a member, transfer ownership, delete the household) are checked in the API, with a stricter RLS policy as a second check.
-- Joining by invite code runs as a narrow privileged function (`SECURITY DEFINER`), because the user is not a member yet.
+- `users`, `push_tokens` and `expiry_notifications` have no RLS (they hold no household data) and are scoped by the API: every query filters by the caller's user ID.
+- Owner-only actions (create or revoke invites, remove a member, rename or delete the household) are checked in the API, with a stricter RLS policy as a second check. Transfer ownership is also owner-only, but it goes through `transfer_ownership` (below) because RLS would block it.
+- `shelfkin_app` cannot insert into `households` or `household_members`, or update `household_members`, directly. Three narrow privileged (`SECURITY DEFINER`) functions do this instead. Each reads the caller from `app.user_id`, fails if it is not set, has a fixed `search_path`, and `shelfkin_app` has `EXECUTE` on it and nothing more:
+  - `create_household(name)` creates a household together with the caller's `owner` row (#14).
+  - `transfer_ownership(household_id, new_owner_id)` demotes the owner and promotes a member (#15). It is needed because, as `shelfkin_app`, the owner loses owner rights after demoting themselves, so the RLS policy would block the promote.
+  - `join_household(code)` joins a household by invite code (#16), because the user is not a member yet.
 
 ## Expiry rules (v1)
 
