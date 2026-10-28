@@ -8,9 +8,10 @@ Shelfkin is an app for managing a household pantry: the ingredients a household 
 |---|---|
 | `api/` | Go HTTP API (deployed to Cloud Run) |
 | `app/` | Expo (React Native) app for web, iOS and Android, using Expo Router; screens live in `app/src/app/` |
+| `openapi/` | The API contract, `openapi/openapi.yaml` (OpenAPI 3.0.3), that the Go server interface and the app's types are generated from (see [API spec and generated code](#api-spec-and-generated-code)) |
 | [`docs/`](docs/) | Product plan, data model and backlog |
 
-SQL migrations live in `api/db/migrations/` (see [Local database](#local-database)). Planned addition: `openapi/` for the API spec.
+SQL migrations live in `api/db/migrations/` (see [Local database](#local-database)).
 
 ## Requirements
 
@@ -59,6 +60,23 @@ New migrations go in `api/db/migrations/` and are named `YYYYMMDDHHMMSS_name.sql
 
 Go tests that need a database call `dbtest.New(t)` from `api/db/dbtest`. It creates a database named `shelfkin_test_<random>`, applies every migration, returns a `pgxpool.Pool` and drops the database when the test ends. If Postgres is not reachable, the test fails, so run `npm run db:up` before `npm test`.
 
+## API spec and generated code
+
+The API contract lives in one file, [`openapi/openapi.yaml`](openapi/openapi.yaml). Its `info.description` lists the shared conventions (IDs, timestamps, dates, error format, auth). Two files are generated from it:
+
+| Generated file | Generator |
+|---|---|
+| `api/internal/openapi/openapi.gen.go` | [oapi-codegen](https://github.com/oapi-codegen/oapi-codegen) v2: models and a strict server interface for `net/http`, configured by `api/oapi-codegen.yaml` |
+| `app/src/api/schema.ts` | [openapi-typescript](https://openapi-ts.dev/): TypeScript types for paths, operations and schemas |
+
+After changing the spec, regenerate both from the repository root and commit the result:
+
+```sh
+npm run generate
+```
+
+**Do not edit generated files by hand**; change the spec and regenerate instead. `npm test` fails, naming the stale files, if a generated file does not match the spec. Generator versions are pinned (oapi-codegen through the `tool` directive in `api/go.mod`, openapi-typescript as an exact devDependency of the app), so no global installs are needed, but `npm --prefix app install` must have been run.
+
 ## Tests
 
 Run every test suite from the repository root:
@@ -70,8 +88,10 @@ npm test
 Or run one side:
 
 ```sh
-npm run test:api   # go test ./... in api/
-npm run test:app   # Jest in app/
+npm run check:generated  # generated code matches openapi/openapi.yaml
+npm run test:codegen     # tests for the generate scripts in scripts/
+npm run test:api         # go test ./... in api/
+npm run test:app         # Jest in app/
 ```
 
 ## Docs
