@@ -56,4 +56,4 @@ Screen designs are handled separately.
 
 ### 23. Screen designs
 Goal: Agreed wireframes and a visual direction for every v1 screen.
-Description: Design the sign-in, onboarding (create or join household), pantry list (grouped rows, location/category toggle, filters, expiry highlighting), add item, entry detail/edit, household settings and notification settings screens for phone and desktop widths. Define a small set of design tokens (colors, type scale, spacing) that is clean and simple but pleasant. Record the result in `_docs/` (images or links plus notes).
+Description: Design the sign-in, onboarding (create or join household), pantry list (grouped rows, location/category toggle, filters, expiry highlighting), add item, entry detail/edit, household settings and notification settings screens for phone and desktop widths. Define a small set of design tokens (colors, type scale, spacing) that is clean and simple but pleasant. Record the result in `docs/` (images or links plus notes).

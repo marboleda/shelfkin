@@ -9,7 +9,7 @@ Shelfkin is an app for managing a household pantry. It has an Expo / React Nativ
 
 ## Orchestration
 
-Reference `_docs/process.md` to see how work is organized and how features should be implemented
+Reference `docs/process.md` to see how work is organized and how features should be implemented
 
 ## Expo conventions
 

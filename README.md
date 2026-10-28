@@ -8,7 +8,7 @@ Shelfkin is an app for managing a household pantry: the ingredients a household 
 |---|---|
 | `api/` | Go HTTP API (deployed to Cloud Run) |
 | `app/` | Expo (React Native) app for web, iOS and Android, using Expo Router; screens live in `app/src/app/` |
-| `_docs/` | Product plan, data model and backlog |
+| `docs/` | Product plan, data model and backlog |
 
 Planned additions: `api/db/migrations/` for SQL migrations and `openapi/` for the API spec.
 
@@ -48,6 +48,6 @@ npm run test:app   # Jest in app/
 
 ## Docs
 
-- [Product plan](_docs/plan.md)
-- [Data model](_docs/data-model.md)
-- [Backlog](_docs/tasks.md) (tracked as GitHub issues)
+- [Product plan](docs/plan.md)
+- [Data model](docs/data-model.md)
+- [Backlog](docs/tasks.md) (tracked as GitHub issues)
