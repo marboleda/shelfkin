@@ -47,7 +47,17 @@ output "firebase_apple_app_id" {
   value       = google_firebase_apple_app.ios.app_id
 }
 
+output "project_id" {
+  description = "GCP and Firebase project ID."
+  value       = var.project_id
+}
+
 output "region" {
   description = "Region of every regional resource."
   value       = var.region
+}
+
+output "hosting_site_id" {
+  description = "Firebase Hosting site ID."
+  value       = google_firebase_hosting_site.web.site_id
 }

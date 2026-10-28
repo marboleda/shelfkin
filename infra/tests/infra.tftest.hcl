@@ -360,6 +360,11 @@ run "budget" {
 
 run "outputs" {
   assert {
+    condition     = output.project_id == "test-project" && output.region == "europe-west1" && output.hosting_site_id == "shelfkin-test"
+    error_message = "Unexpected project, region or Hosting site outputs"
+  }
+
+  assert {
     condition     = output.hosting_url == "https://shelfkin-test.web.app"
     error_message = "Unexpected Hosting URL"
   }
