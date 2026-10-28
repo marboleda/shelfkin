@@ -13,4 +13,4 @@ Reference `docs/process.md` to see how work is organized and how features should
 
 ## Expo conventions
 
-Reference `app\AGENTS.md` for context only when modifying Expo/React Native code.
+Reference `app/AGENTS.md` for context only when modifying Expo/React Native code.
