@@ -25,7 +25,7 @@ type ScreenProps = {
   children?: ReactNode;
 };
 
-function safeAreaPadding(insets: EdgeInsets, inShell: boolean, wide: boolean) {
+export function safeAreaPadding(insets: EdgeInsets, inShell: boolean, wide: boolean) {
   if (!inShell) {
     return {
       paddingTop: insets.top,
@@ -56,12 +56,12 @@ export function Screen({ title, inShell = false, accessory, children }: ScreenPr
   const wide = useIsWideLayout();
 
   return (
-    <View style={[styles.root, safeAreaPadding(insets, inShell, wide)]}>
+    <View testID="screen" style={[styles.root, safeAreaPadding(insets, inShell, wide)]}>
       <Head>
         <title>{documentTitle(title)}</title>
       </Head>
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
-        <View style={styles.content}>
+        <View testID="screen-content" style={styles.content}>
           {accessory}
           <Text role="heading" aria-level={1} style={styles.heading}>
             {title}

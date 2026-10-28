@@ -133,7 +133,6 @@ function createStyles(theme: Theme) {
       marginHorizontal: theme.spacing.xl,
       borderBottomLeftRadius: theme.radii.sm,
       borderBottomRightRadius: theme.radii.sm,
-      backgroundColor: 'transparent',
     },
     tabIndicatorActive: {
       backgroundColor: theme.colors.primary,
