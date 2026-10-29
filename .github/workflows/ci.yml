@@ -1,6 +1,6 @@
 name: CI
 
-# No path filters on purpose: every push and PR runs both jobs, so a check
+# No path filters on purpose: every push and PR runs every job, so a check
 # can never be silently skipped.
 on:
   push:
@@ -96,3 +96,32 @@ jobs:
 
       - name: Test
         run: npm test -- --ci
+
+  # Static checks only: no backend, no credentials, nothing is created.
+  infra:
+    name: infra
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.14.3
+          terraform_wrapper: false
+
+      - name: Format
+        run: terraform fmt -check -recursive -diff
+
+      - name: Init
+        run: terraform init -backend=false -input=false -lockfile=readonly
+
+      - name: Validate
+        run: terraform validate
+
+      # Every provider is mocked, so this also needs no credentials.
+      - name: Test
+        run: terraform test

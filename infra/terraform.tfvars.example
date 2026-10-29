@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+project_id        = "shelfkin-prod"
+region            = "us-central1"
+billing_account   = "000000-000000-000000"
+hosting_site_id   = "shelfkin"
+budget_amount     = 25
+github_repository = "marboleda/shelfkin"

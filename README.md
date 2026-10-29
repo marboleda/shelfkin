@@ -7,6 +7,7 @@ Shelfkin is an app for managing a household pantry: the ingredients a household 
 | Path | What it is |
 |---|---|
 | `api/` | Go HTTP API (deployed to Cloud Run) |
+| `infra/` | Terraform for the production GCP and Firebase project (see [Infrastructure](#infrastructure)) |
 | `app/` | Expo (React Native) app for web, iOS and Android, using Expo Router; screens live in `app/src/app/` |
 | `openapi/` | The API contract, `openapi/openapi.yaml` (OpenAPI 3.0.3), that the Go server interface and the app's types are generated from (see [API spec and generated code](#api-spec-and-generated-code)) |
 | [`docs/`](docs/) | Product plan, data model and backlog |
@@ -93,6 +94,117 @@ npm run test:codegen     # tests for the generate scripts in scripts/
 npm run test:api         # go test ./... in api/
 npm run test:app         # Jest in app/
 ```
+
+## Infrastructure
+
+The production GCP and Firebase project is defined in Terraform under `infra/`: Cloud SQL for PostgreSQL 18, Secret Manager, Artifact Registry, the `shelfkin-api` Cloud Run service and `shelfkin-migrate` job, service accounts, Workload Identity Federation for GitHub Actions, Firebase (Auth, Hosting and the web, Android and Apple apps) and a billing budget. `terraform apply` against an empty project (after the one-time bootstrap below) recreates all of it. Apply from a developer machine, never from CI.
+
+Fixed values:
+
+| What | Value |
+|---|---|
+| Region (every regional resource) | `us-central1` |
+| Firebase Hosting site ID | `shelfkin` (served at `https://shelfkin.web.app`) |
+| iOS bundle identifier and Android package | `com.marboleda.shelfkin` |
+| Terraform | 1.14.3 (pinned in `infra/versions.tf`) |
+
+If the Hosting site ID is taken when first applied, pick another, then update `terraform.tfvars` and this table.
+
+### Prerequisites
+
+- A Google account with Owner on the target project, or permission to create one
+- Billing Account User on the billing account (to link it) and Billing Account Costs Manager or Administrator (to create the budget)
+- [gcloud CLI](https://cloud.google.com/sdk/docs/install) and [Terraform 1.14.3](https://developer.hashicorp.com/terraform/install)
+- Admin on `marboleda/shelfkin`, to add the GitHub Actions variables. No repository secrets are needed
+
+### One-time bootstrap
+
+These steps are not done by Terraform: the project and its billing link must exist before anything can be created in it, the Firebase terms are accepted by a person, and Terraform cannot keep its state in a bucket it has not created yet.
+
+```sh
+PROJECT_ID=shelfkin-prod            # your project ID
+BILLING_ACCOUNT=XXXXXX-XXXXXX-XXXXXX
+REGION=us-central1
+
+gcloud auth login
+gcloud auth application-default login
+
+# 1. Create the project (skip if it exists) and link billing
+gcloud projects create "$PROJECT_ID"
+gcloud billing projects link "$PROJECT_ID" --billing-account="$BILLING_ACCOUNT"
+gcloud auth application-default set-quota-project "$PROJECT_ID"
+
+# 2. The state bucket: versioned, uniform bucket-level access, no public access
+gcloud storage buckets create "gs://$PROJECT_ID-tfstate" \
+  --project="$PROJECT_ID" --location="$REGION" \
+  --uniform-bucket-level-access --public-access-prevention
+gcloud storage buckets update "gs://$PROJECT_ID-tfstate" --versioning
+```
+
+3. Accept the Firebase terms once with the same Google account: open the [Firebase console](https://console.firebase.google.com/) and follow the prompt (you do not need to create a project there).
+
+### Init, plan and apply
+
+```sh
+cd infra
+cp terraform.tfvars.example terraform.tfvars   # then fill in real values; it is gitignored
+terraform init -backend-config="bucket=$PROJECT_ID-tfstate"
+terraform plan
+terraform apply
+```
+
+Running `terraform plan` again after an apply should show "No changes". The Cloud Run service and job are created with a public placeholder image; deploys (#38) replace it and Terraform ignores image changes, so an apply never rolls a deploy back.
+
+CI runs `terraform fmt -check`, `terraform init -backend=false`, `terraform validate` and `terraform test` (all providers mocked) with no credentials. Run the same locally from `infra/`.
+
+### Outputs to GitHub Actions and EAS variables
+
+`terraform output` prints these. Copy them into the repository's Actions **variables** (Settings > Secrets and variables > Actions > Variables) and the EAS environment variables:
+
+| Output | GitHub Actions variable | EAS environment variable |
+|---|---|---|
+| `project_id` | `GCP_PROJECT_ID` (#38) | |
+| `region` | `GCP_REGION` (#38) | |
+| `workload_identity_provider` | `GCP_WIF_PROVIDER` (#38) | |
+| `deployer_service_account` | `GCP_DEPLOYER_SA` (#38) | |
+| `api_url` | `API_URL` (#38), `EXPO_PUBLIC_API_URL` (#39) | `EXPO_PUBLIC_API_URL` (#41) |
+| `hosting_site_id` | `FIREBASE_HOSTING_SITE` (#39) | |
+| `firebase_web_config.apiKey` | `EXPO_PUBLIC_FIREBASE_API_KEY` (#39) | `EXPO_PUBLIC_FIREBASE_API_KEY` (#41) |
+| `firebase_web_config.authDomain` | `EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN` (#39) | `EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN` (#41) |
+| `firebase_web_config.projectId` | `EXPO_PUBLIC_FIREBASE_PROJECT_ID` (#39) | `EXPO_PUBLIC_FIREBASE_PROJECT_ID` (#41) |
+| `firebase_android_app_id` | | `google-services.json` file variable (#41), downloaded with `firebase apps:sdkconfig android <id>` |
+| `firebase_apple_app_id` | | Used by #41 for the iOS config and push |
+
+`artifact_registry_repository` (the image path prefix), `cloudsql_connection_name` and `hosting_url` are for reference: #38 derives image names from the project and region variables. The Firebase web API key is not a secret; it ships in the web bundle.
+
+Notes for the workflows and the app:
+
+- Workload Identity only issues tokens to `marboleda/shelfkin` workflows on `refs/heads/main` triggered by `workflow_run` or `workflow_dispatch` (the deploy triggers of #38 and #39). A deploy workflow with any other trigger, such as `push` or `pull_request_target`, cannot authenticate; widen the condition in `infra/wif.tf` if one is needed.
+- The `authDomain` output is Firebase's default `<project_id>.firebaseapp.com`, which is **not** in the authorized domains (those are exactly `<hosting_site_id>.web.app`, `<hosting_site_id>.firebaseapp.com` and `localhost`). Email/password sign-in does not need it. Redirect or popup sign-in flows would, so #39 should either use `<hosting_site_id>.firebaseapp.com` as `authDomain` or add the default domain to `authorized_domains` in `infra/firebase.tf`.
+- Do not click "Get started" under Hosting in the Firebase console: it can create a default site named after the project and add its domains to the authorized domains. If a plan ever shows a change to `authorized_domains`, apply restores the list.
+
+### IAM: Owner and Editor
+
+Every member with `roles/owner` or `roles/editor` should be either a human admin (`user:`) or a Google-managed service agent that GCP grants automatically. Terraform grants Owner or Editor to none of the service accounts it creates, and it removes Editor from the Compute Engine default service account (`<project_number>-compute@developer.gserviceaccount.com`) if enabling an API creates it. After an apply, `gcloud projects get-iam-policy` still shows `roles/editor` for the **Google APIs Service Agent**, `<project_number>@cloudservices.gserviceaccount.com`. GCP grants it on every project and uses it to run internal Google processes for you. Google's docs say not to remove or change it, because that breaks managed instance groups, autoscaling and other services ([Compute Engine service accounts](https://cloud.google.com/compute/docs/access/service-accounts#google_apis_service_agent), [Service agents](https://cloud.google.com/iam/docs/service-agents)), so Terraform leaves it alone. To check after an apply, list the Owner and Editor members and confirm each is a `user:` or a Google-managed agent:
+
+```sh
+gcloud projects get-iam-policy "$PROJECT_ID" --flatten=bindings --filter='bindings.role:(roles/owner OR roles/editor)' --format='table(bindings.role, bindings.members)'
+```
+
+### Rotating the database passwords
+
+The passwords of `shelfkin_api` and `shelfkin_migrator` are generated by Terraform and kept only in Secret Manager (`api-database-url`, `migrator-database-url`) and the Terraform state. To rotate one:
+
+```sh
+terraform apply -replace=random_password.api        # shelfkin_api
+terraform apply -replace=random_password.migrator   # shelfkin_migrator
+```
+
+This sets the new password on the Cloud SQL user and replaces the secret version. The old password stops working at once. `shelfkin-migrate` reads the latest version on every execution, so it needs nothing more. `shelfkin-api` reads the secret when an instance starts, so redeploy it straight after (re-run the #38 deploy workflow) to start a revision with the new password.
+
+### Destroying
+
+Cloud SQL has deletion protection on, so `terraform destroy` fails until it is turned off. Set both `deletion_protection = false` and `settings.deletion_protection_enabled = false` in `infra/database.tf`, run `terraform apply`, then `terraform destroy`. This deletes the database and its backups. A deleted Workload Identity pool keeps its ID reserved for 30 days. The state bucket, the project and its billing link are not managed by Terraform.
 
 ## Docs
 
