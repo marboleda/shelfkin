@@ -53,7 +53,8 @@ export interface components {
         ErrorDetail: {
             /**
              * @description A stable, machine-readable error code, for example `bad_request`,
-             *     `unauthorized`, `forbidden`, `not_found`, `internal` or `unavailable`.
+             *     `unauthorized`, `forbidden`, `not_found`, `method_not_allowed`,
+             *     `internal` or `database_unavailable`.
              * @example not_found
              */
             code: string;
@@ -181,7 +182,7 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            /** @description A dependency, such as the database, is down. */
+            /** @description The database is down or did not answer within about 2 seconds (code `database_unavailable`). */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -190,7 +191,7 @@ export interface operations {
                     /**
                      * @example {
                      *       "error": {
-                     *         "code": "unavailable",
+                     *         "code": "database_unavailable",
                      *         "message": "The database is unavailable."
                      *       }
                      *     }

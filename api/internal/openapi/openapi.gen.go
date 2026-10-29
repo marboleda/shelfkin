@@ -36,7 +36,8 @@ type Error struct {
 // ErrorDetail defines model for ErrorDetail.
 type ErrorDetail struct {
 	// Code A stable, machine-readable error code, for example `bad_request`,
-	// `unauthorized`, `forbidden`, `not_found`, `internal` or `unavailable`.
+	// `unauthorized`, `forbidden`, `not_found`, `method_not_allowed`,
+	// `internal` or `database_unavailable`.
 	//
 	//
 	// Example: not_found

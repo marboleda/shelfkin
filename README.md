@@ -50,7 +50,7 @@ Environment variables:
 | Variable | Used by | Default |
 |---|---|---|
 | `SHELFKIN_DB_PORT` | `db:up`, and the local fallbacks below | `5432`. Set it (e.g. `55432`) if you already run Postgres locally |
-| `DATABASE_URL` | `db:migrate`, `db:status` | The local compose database |
+| `DATABASE_URL` | `db:migrate`, `db:status`, and the API server (see [Running the API](#running-the-api)) | The local compose database for `db:migrate` and `db:status`. The API server has no default and requires it |
 | `TEST_DATABASE_URL` | Go tests (`api/db/dbtest`) | The local compose database |
 
 The local compose database is `postgres://shelfkin:shelfkin@localhost:5432/shelfkin?sslmode=disable`, with the port taken from `SHELFKIN_DB_PORT`. These credentials are for local development only and are not used anywhere else.
@@ -61,22 +61,58 @@ New migrations go in `api/db/migrations/` and are named `YYYYMMDDHHMMSS_name.sql
 
 Go tests that need a database call `dbtest.New(t)` from `api/db/dbtest`. It creates a database named `shelfkin_test_<random>`, applies every migration, returns a `pgxpool.Pool` and drops the database when the test ends. If Postgres is not reachable, the test fails, so run `npm run db:up` before `npm test`.
 
+## Running the API
+
+The API server is `api/main.go`. It reads its configuration from environment variables:
+
+| Variable | Required | Default | What it is |
+|---|---|---|---|
+| `DATABASE_URL` | Yes | None | Postgres connection string, as a URL (`postgres://user:password@host:port/db?sslmode=...`) or `key=value` pairs. If it sets no `connect_timeout`, each new connection gives up after 5s |
+| `PORT` | No | `8080` | Port to listen on, 1 to 65535. Cloud Run sets it |
+| `LOG_LEVEL` | No | `info` | `debug`, `info`, `warn` or `error` |
+
+An empty variable counts as unset. If a variable is missing or invalid, the server logs one line naming it and exits with code 1. The database password is never logged. Every occurrence of the password in a log line is replaced with `[REDACTED]`; with the local credentials, where the password is the same as the user name, `shelfkin` is redacted wherever it appears.
+
+To run it against the local compose database, from the repository root:
+
+```sh
+npm run db:up
+npm run db:migrate
+```
+
+then in bash:
+
+```sh
+DATABASE_URL='postgres://shelfkin:shelfkin@localhost:5432/shelfkin?sslmode=disable' go -C api run .
+```
+
+or in PowerShell:
+
+```powershell
+$env:DATABASE_URL = 'postgres://shelfkin:shelfkin@localhost:5432/shelfkin?sslmode=disable'; go -C api run .
+```
+
+Change `5432` if you set `SHELFKIN_DB_PORT`. Check it with `curl http://localhost:8080/health`, which returns `{"status":"ok"}`, or 503 with code `database_unavailable` if the database does not answer within 2s. The server starts even when the database is down. Logs are JSON lines on stdout: a `listening` line with the port, one `request` line per request (method, path, status, `duration_ms`), and a `stopped` line after shutdown. Ctrl+C (or SIGTERM) stops it gracefully: it stops accepting connections, gives in-flight requests up to 9s to finish, closes the database pool and exits 0.
+
 ## API spec and generated code
 
-The API contract lives in one file, [`openapi/openapi.yaml`](openapi/openapi.yaml). Its `info.description` lists the shared conventions (IDs, timestamps, dates, error format, auth). Two files are generated from it:
+The API contract lives in one file, [`openapi/openapi.yaml`](openapi/openapi.yaml). Its `info.description` lists the shared conventions (IDs, timestamps, dates, error format, auth). Generated code:
 
-| Generated file | Generator |
-|---|---|
-| `api/internal/openapi/openapi.gen.go` | [oapi-codegen](https://github.com/oapi-codegen/oapi-codegen) v2: models and a strict server interface for `net/http`, configured by `api/oapi-codegen.yaml` |
-| `app/src/api/schema.ts` | [openapi-typescript](https://openapi-ts.dev/): TypeScript types for paths, operations and schemas |
+| Generated file | Generated from | Generator |
+|---|---|---|
+| `api/internal/openapi/openapi.gen.go` | `openapi/openapi.yaml` | [oapi-codegen](https://github.com/oapi-codegen/oapi-codegen) v2: models and a strict server interface for `net/http`, configured by `api/oapi-codegen.yaml` |
+| `app/src/api/schema.ts` | `openapi/openapi.yaml` | [openapi-typescript](https://openapi-ts.dev/): TypeScript types for paths, operations and schemas |
+| `api/internal/db/*.go` (package `db`) | SQL queries in `api/db/queries/`, checked against the schema in `api/db/migrations/` | [sqlc](https://sqlc.dev/): type-safe Go functions using pgx/v5, configured by `api/sqlc.yaml` |
 
-After changing the spec, regenerate both from the repository root and commit the result:
+After changing the spec, a query or a migration, regenerate everything from the repository root and commit the result:
 
 ```sh
 npm run generate
 ```
 
-**Do not edit generated files by hand**; change the spec and regenerate instead. `npm test` fails, naming the stale files, if a generated file does not match the spec. Generator versions are pinned (oapi-codegen through the `tool` directive in `api/go.mod`, openapi-typescript as an exact devDependency of the app), so no global installs are needed, but `npm --prefix app install` must have been run.
+**Do not edit generated files by hand**; change the spec or the queries and regenerate instead. `npm test` fails, naming the stale files, if a generated file does not match its source, and also if `api/internal/db/` holds a file sqlc does not generate (`npm run generate` deletes such files). Generator versions are pinned (oapi-codegen and sqlc through the `tool` directive in `api/go.mod`, openapi-typescript as an exact devDependency of the app), so no global installs are needed, but `npm --prefix app install` must have been run. sqlc builds from source with `go tool sqlc` and needs no cgo: without cgo (the default on Windows) it parses PostgreSQL with a WebAssembly build of the Postgres parser, so it runs on Windows and Linux alike.
+
+Queries go in `api/db/queries/*.sql`, each starting with a sqlc annotation such as `-- name: Ping :one`. sqlc reads only the `-- +goose Up` sections of the migrations.
 
 ## Tests
 
