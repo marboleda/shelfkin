@@ -3,3 +3,111 @@
 //   sqlc v1.31.1
 
 package db
+
+import (
+	"database/sql/driver"
+	"fmt"
+
+	"github.com/jackc/pgx/v5/pgtype"
+)
+
+type MemberRole string
+
+const (
+	MemberRoleOwner  MemberRole = "owner"
+	MemberRoleMember MemberRole = "member"
+)
+
+func (e *MemberRole) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = MemberRole(s)
+	case string:
+		*e = MemberRole(s)
+	default:
+		return fmt.Errorf("unsupported scan type for MemberRole: %T", src)
+	}
+	return nil
+}
+
+type NullMemberRole struct {
+	MemberRole MemberRole
+	Valid      bool // Valid is true if MemberRole is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullMemberRole) Scan(value interface{}) error {
+	if value == nil {
+		ns.MemberRole, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.MemberRole.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullMemberRole) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.MemberRole), nil
+}
+
+type Category struct {
+	ID        int16
+	Key       string
+	Name      string
+	SortOrder int16
+}
+
+type Household struct {
+	ID        pgtype.UUID
+	Name      string
+	CreatedBy pgtype.UUID
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
+
+type HouseholdInvite struct {
+	ID          pgtype.UUID
+	HouseholdID pgtype.UUID
+	Code        string
+	CreatedBy   pgtype.UUID
+	CreatedAt   pgtype.Timestamptz
+	ExpiresAt   pgtype.Timestamptz
+	RevokedAt   pgtype.Timestamptz
+}
+
+type HouseholdMember struct {
+	HouseholdID pgtype.UUID
+	UserID      pgtype.UUID
+	Role        MemberRole
+	JoinedAt    pgtype.Timestamptz
+}
+
+type Location struct {
+	ID        int16
+	Key       string
+	Name      string
+	SortOrder int16
+}
+
+type PushToken struct {
+	ID         pgtype.UUID
+	UserID     pgtype.UUID
+	Token      string
+	Platform   pgtype.Text
+	CreatedAt  pgtype.Timestamptz
+	LastSeenAt pgtype.Timestamptz
+}
+
+type User struct {
+	ID          pgtype.UUID
+	FirebaseUid string
+	DisplayName string
+	Email       pgtype.Text
+	Timezone    string
+	PushEnabled bool
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
