@@ -71,7 +71,7 @@ The API server is `api/main.go`. It reads its configuration from environment var
 | `PORT` | No | `8080` | Port to listen on, 1 to 65535. Cloud Run sets it |
 | `LOG_LEVEL` | No | `info` | `debug`, `info`, `warn` or `error` |
 
-An empty variable counts as unset. If a variable is missing or invalid, the server logs one line naming it and exits with code 1. The database password is never logged.
+An empty variable counts as unset. If a variable is missing or invalid, the server logs one line naming it and exits with code 1. The database password is never logged. Every occurrence of the password in a log line is replaced with `[REDACTED]`; with the local credentials, where the password is the same as the user name, `shelfkin` is redacted wherever it appears.
 
 To run it against the local compose database, from the repository root:
 

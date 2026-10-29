@@ -24,8 +24,6 @@ import (
 	"github.com/marboleda/shelfkin/api/internal/server"
 )
 
-const serviceName = "shelfkin-api"
-
 // connectTimeout bounds each new database connection when DATABASE_URL does
 // not set connect_timeout, so connections to an unresponsive host do not
 // pile up.
@@ -47,10 +45,10 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer, shut
 	cfg, err := config.Load(getenv)
 	if err != nil {
 		// Config errors never contain the database password (see config.Error).
-		logging.New(stdout, slog.LevelInfo).Error(err.Error(), "service", serviceName)
+		logging.New(stdout, slog.LevelInfo).Error(err.Error())
 		return 1
 	}
-	logger := logging.New(stdout, cfg.LogLevel, cfg.Pool.ConnConfig.Password).With("service", serviceName)
+	logger := logging.New(stdout, cfg.LogLevel, cfg.Pool.ConnConfig.Password)
 	slog.SetDefault(logger)
 
 	if cfg.Pool.ConnConfig.ConnectTimeout == 0 {
