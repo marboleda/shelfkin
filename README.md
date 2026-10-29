@@ -185,7 +185,11 @@ Notes for the workflows and the app:
 
 ### IAM: Owner and Editor
 
-Terraform grants no service account Owner or Editor, and it removes Editor from the Compute Engine default service account if enabling an API creates it. After an apply, `gcloud projects get-iam-policy` still shows `roles/editor` for one non-human member: the **Google APIs Service Agent**, `<project_number>@cloudservices.gserviceaccount.com`. GCP grants it on every project and uses it to run internal Google processes for you. Google's docs say not to remove or change it, because that breaks managed instance groups, autoscaling and other services ([Compute Engine service accounts](https://cloud.google.com/compute/docs/access/service-accounts#google_apis_service_agent), [Service agents](https://cloud.google.com/iam/docs/service-agents)). So Terraform leaves it alone. Other Google-managed service agents (`service-<number>@gcp-sa-*.iam.gserviceaccount.com`) get their own narrow roles, never Owner or Editor.
+Every member with `roles/owner` or `roles/editor` should be either a human admin (`user:`) or a Google-managed service agent that GCP grants automatically. Terraform grants Owner or Editor to none of the service accounts it creates, and it removes Editor from the Compute Engine default service account (`<project_number>-compute@developer.gserviceaccount.com`) if enabling an API creates it. After an apply, `gcloud projects get-iam-policy` still shows `roles/editor` for the **Google APIs Service Agent**, `<project_number>@cloudservices.gserviceaccount.com`. GCP grants it on every project and uses it to run internal Google processes for you. Google's docs say not to remove or change it, because that breaks managed instance groups, autoscaling and other services ([Compute Engine service accounts](https://cloud.google.com/compute/docs/access/service-accounts#google_apis_service_agent), [Service agents](https://cloud.google.com/iam/docs/service-agents)), so Terraform leaves it alone. To check after an apply, list the Owner and Editor members and confirm each is a `user:` or a Google-managed agent:
+
+```sh
+gcloud projects get-iam-policy "$PROJECT_ID" --flatten=bindings --filter='bindings.role:(roles/owner OR roles/editor)' --format='table(bindings.role, bindings.members)'
+```
 
 ### Rotating the database passwords
 
