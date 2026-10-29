@@ -1,0 +1,163 @@
+openapi: 3.0.3
+info:
+  title: Shelfkin API
+  version: 0.1.0
+  description: |
+    HTTP API for Shelfkin, an app for managing a household pantry.
+
+    This file is the API contract. The Go server interface
+    (`api/internal/openapi/`) and the app's TypeScript types
+    (`app/src/api/schema.ts`) are generated from it with `npm run generate`.
+
+    ## Conventions
+
+    - **IDs** are UUIDv7 strings: `type: string, format: uuid` (see `Id`).
+    - **Timestamps** are RFC 3339 strings in UTC: `type: string, format: date-time`
+      (see `Timestamp`), for example `2026-01-31T18:04:05Z`.
+    - **Calendar dates** with no time of day, such as an expiry date, are
+      `type: string, format: date` in `YYYY-MM-DD` form (see `Date`).
+    - **JSON property names** are camelCase, for example `householdId` and `createdAt`.
+    - **Errors** from every endpoint use the `Error` format:
+      `{ "error": { "code": "not_found", "message": "Household not found." } }`.
+      `code` is a stable, machine-readable string that clients can branch on;
+      `message` is readable text and may change.
+    - **Authentication**: every endpoint requires a Firebase ID token as a bearer
+      token (`Authorization: Bearer <token>`) unless it sets `security: []`.
+servers:
+  - url: http://localhost:8080
+    description: Local development
+security:
+  - firebaseAuth: []
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Check that the API and its dependencies are up
+      description: Does not require authentication.
+      security: []
+      responses:
+        '200':
+          description: The API and its dependencies are up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: A dependency, such as the database, is down.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: unavailable
+                  message: The database is unavailable.
+components:
+  securitySchemes:
+    firebaseAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 'A Firebase ID token (a JWT) for the signed-in user, sent as `Authorization: Bearer <token>`.'
+  schemas:
+    Id:
+      description: A UUIDv7 identifier.
+      type: string
+      format: uuid
+      example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+    Timestamp:
+      description: A point in time, as an RFC 3339 string in UTC.
+      type: string
+      format: date-time
+      example: '2026-01-31T18:04:05Z'
+    Date:
+      description: A calendar date with no time of day, in `YYYY-MM-DD` form.
+      type: string
+      format: date
+      example: '2026-02-14'
+    Error:
+      description: The error format every endpoint uses.
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
+    ErrorDetail:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          description: |
+            A stable, machine-readable error code, for example `bad_request`,
+            `unauthorized`, `forbidden`, `not_found`, `internal` or `unavailable`.
+          type: string
+          example: not_found
+        message:
+          description: Readable text describing the error. It may change; branch on `code` instead.
+          type: string
+          example: Household not found.
+    Health:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+  responses:
+    BadRequest:
+      description: The request is malformed or fails validation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: bad_request
+              message: The request body is not valid JSON.
+    Unauthorized:
+      description: The bearer token is missing, invalid or expired.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: unauthorized
+              message: A valid Firebase ID token is required.
+    Forbidden:
+      description: The caller is authenticated but not allowed to do this.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: forbidden
+              message: You are not a member of this household.
+    NotFound:
+      description: The resource does not exist, or the caller cannot see it.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: not_found
+              message: Household not found.
+    InternalError:
+      description: An unexpected server error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: internal
+              message: Something went wrong.

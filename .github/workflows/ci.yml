@@ -81,6 +81,13 @@ jobs:
       - name: Install
         run: npm ci
 
+      # Regenerates from openapi/openapi.yaml and fails if the committed
+      # generated code differs. Needs app/node_modules (above) and Go, which
+      # the runner has; go.mod's go line makes it fetch the pinned toolchain.
+      - name: Generated code is up to date
+        working-directory: .
+        run: npm run check:generated
+
       - name: Type check
         run: npm run typecheck
 

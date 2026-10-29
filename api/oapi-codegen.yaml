@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/oapi-codegen/oapi-codegen/HEAD/configuration-schema.json
+# oapi-codegen config for the Go server. Run `npm run generate` from the
+# repository root rather than calling oapi-codegen directly.
+package: openapi
+generate:
+  models: true
+  std-http-server: true
+  strict-server: true
+compatibility:
+  # Name enum constants after their type (HealthStatusOk, not Ok) so values
+  # from different enums cannot collide.
+  always-prefix-enum-values: true

@@ -2,7 +2,10 @@
   "name": "shelfkin",
   "private": true,
   "scripts": {
-    "test": "npm run test:api && npm run test:app",
+    "generate": "node scripts/generate.mjs",
+    "check:generated": "node scripts/check-generated.mjs",
+    "test": "npm run check:generated && npm run test:codegen && npm run test:api && npm run test:app",
+    "test:codegen": "node --test \"scripts/**/*.test.mjs\"",
     "test:api": "cd api && go test ./...",
     "test:app": "npm --prefix app test",
     "db:up": "docker compose up -d --wait",
