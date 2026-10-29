@@ -101,8 +101,10 @@ resource "google_service_account_iam_member" "deployer_acts_as_migrate_runtime" 
 }
 
 # Enabling some APIs can create the Compute Engine default service account
-# with Editor on the project. Make sure it does not keep that role, so Owner
-# and Editor are held only by the human admin(s).
+# with Editor on the project. Make sure it does not keep that role. The Google
+# APIs Service Agent (<number>@cloudservices.gserviceaccount.com) keeps its
+# Editor grant on purpose: Google documents that removing it breaks Google
+# services (see "IAM: Owner and Editor" in the README).
 resource "google_project_iam_member_remove" "default_compute_editor" {
   project = var.project_id
   role    = "roles/editor"

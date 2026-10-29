@@ -296,8 +296,8 @@ run "workload_identity" {
   command = plan
 
   assert {
-    condition     = google_iam_workload_identity_pool_provider.github.attribute_condition == "assertion.repository == 'marboleda/shelfkin' && assertion.ref == 'refs/heads/main'"
-    error_message = "Only marboleda/shelfkin on refs/heads/main may get a token"
+    condition     = google_iam_workload_identity_pool_provider.github.attribute_condition == "assertion.repository == 'marboleda/shelfkin' && assertion.ref == 'refs/heads/main' && assertion.event_name in ['workflow_run', 'workflow_dispatch']"
+    error_message = "Only workflow_run and workflow_dispatch runs of marboleda/shelfkin on refs/heads/main may get a token"
   }
 
   assert {

@@ -29,6 +29,13 @@ resource "google_identity_platform_config" "this" {
     }
   }
 
+  # Exactly these three, and Terraform owns the list. Firebase adds its default
+  # domains (<project_id>.firebaseapp.com and .web.app) when it is enabled;
+  # this resource is applied after that and replaces them. If anything adds a
+  # domain later (for example creating the default Hosting site from the
+  # console), the next plan shows it and apply restores this list. It is not
+  # in ignore_changes, because that would let the list drift silently from
+  # "the two Hosting domains and localhost".
   authorized_domains = concat(local.hosting_domains, ["localhost"])
 
   depends_on = [google_firebase_project.this]
