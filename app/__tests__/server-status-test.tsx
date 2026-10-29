@@ -111,8 +111,21 @@ test('after the API comes back, reopening Settings shows Connected again', async
   expect(await screen.findByText(SERVER_STATUS_TEXT.connected)).toBeTruthy();
 });
 
+test("after the API stops, reopening Settings shows Can't reach the server, not the old Connected", async () => {
+  server.use(healthOk());
+  await openSettings();
+  expect(await screen.findByText(SERVER_STATUS_TEXT.connected)).toBeTruthy();
+
+  await pressNav('Pantry');
+  server.use(apiStopped());
+  await pressNav('Settings');
+
+  expect(await screen.findByText(SERVER_STATUS_TEXT.unreachable)).toBeTruthy();
+  expect(screen.queryByText(SERVER_STATUS_TEXT.connected)).toBeNull();
+});
+
 test('every test renders the app with a fresh QueryClient', () => {
   // One client per render above, none shared.
-  expect(mockCreatedClients.length).toBeGreaterThanOrEqual(5);
+  expect(mockCreatedClients.length).toBeGreaterThanOrEqual(6);
   expect(new Set(mockCreatedClients).size).toBe(mockCreatedClients.length);
 });

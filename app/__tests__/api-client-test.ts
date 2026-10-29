@@ -97,6 +97,37 @@ describe('error kinds', () => {
     expect(error.timedOut).toBe(true);
   });
 
+  test('a body that stalls after the headers arrive also times out', async () => {
+    // A stub fetch rather than MSW: aborting a half-sent MSW response trips an
+    // assertion inside Node's HTTP parser. Like a real fetch, the stub errors
+    // the body stream when the request's signal aborts.
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"status":'));
+          init?.signal?.addEventListener('abort', () =>
+            controller.error(new DOMException('This operation was aborted', 'AbortError')),
+          );
+        },
+      });
+      return new Response(body, { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+    try {
+      const error = await caught(getHealth(createApiClient({ baseUrl: API_URL, timeoutMs: 100 })));
+      expect(error.kind).toBe('network');
+      expect(error.timedOut).toBe(true);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test('a 204 with no body succeeds with no data', async () => {
+    server.use(http.get(apiUrl('/health'), () => new HttpResponse(null, { status: 204 })));
+
+    await expect(getHealth()).resolves.toBeUndefined();
+  });
+
   test('the default timeout is 15 seconds', async () => {
     expect(REQUEST_TIMEOUT_MS).toBe(15_000);
 

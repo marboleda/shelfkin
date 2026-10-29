@@ -49,9 +49,14 @@ export function createApiClient({
   return client;
 }
 
+/** Statuses whose responses cannot have a body. */
+const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
+
 /**
- * Calls `fetch`, failing with a `network` ApiError when there is no response:
- * the server is unreachable, the caller's signal aborted, or `timeoutMs` passed.
+ * Calls `fetch` and reads the whole body, failing with a `network` ApiError
+ * when there is no complete response: the server is unreachable, the caller's
+ * signal aborted, or `timeoutMs` passed. The timeout covers the body too, so a
+ * server that sends headers and then stalls cannot hang the request.
  */
 async function fetchWithTimeout(request: Request, timeoutMs: number): Promise<Response> {
   const controller = new AbortController();
@@ -68,7 +73,14 @@ async function fetchWithTimeout(request: Request, timeoutMs: number): Promise<Re
   }
 
   try {
-    return await fetch(request, { signal: controller.signal });
+    const response = await fetch(request, { signal: controller.signal });
+    // The API only sends JSON (or, from proxies, text such as HTML), so the body is read as text.
+    const body = NULL_BODY_STATUSES.has(response.status) ? null : await response.text();
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
   } catch (cause) {
     if (timedOut) {
       throw new ApiError('network', `No response within ${timeoutMs} ms`, { timedOut: true, cause });

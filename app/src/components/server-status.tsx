@@ -20,7 +20,7 @@ export const SERVER_STATUS_TEXT = {
 export function ServerStatus() {
   const styles = useThemedStyles(createStyles);
   const theme = useTheme();
-  const { data, error, isFetching, refetch } = useHealthQuery();
+  const { error, isError, isFetching, isSuccess, refetch } = useHealthQuery();
 
   // The tab navigator keeps Settings mounted, so re-check whenever it is focused
   // again (the first focus is covered by the query's own initial fetch).
@@ -38,16 +38,20 @@ export function ServerStatus() {
   let statusStyle = styles.value;
   if (isFetching) {
     status = SERVER_STATUS_TEXT.checking;
-  } else if (data) {
+  } else if (isError) {
+    // Checked before success: TanStack Query keeps the last good `data` after a
+    // failed refetch, but the line must show the result of the latest check.
+    status =
+      isApiError(error) && error.kind === 'network'
+        ? SERVER_STATUS_TEXT.unreachable
+        : // The API answered, but with an error, e.g. 503 when its database is down.
+          userMessage(error);
+    statusStyle = styles.problem;
+  } else if (isSuccess) {
     status = SERVER_STATUS_TEXT.connected;
     statusStyle = styles.connected;
-  } else if (isApiError(error) && error.kind === 'network') {
-    status = SERVER_STATUS_TEXT.unreachable;
-    statusStyle = styles.problem;
   } else {
-    // The API answered, but with an error, e.g. 503 when its database is down.
-    status = userMessage(error);
-    statusStyle = styles.problem;
+    status = SERVER_STATUS_TEXT.checking;
   }
 
   return (
