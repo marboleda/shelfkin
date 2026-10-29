@@ -6,8 +6,9 @@ Postgres (Cloud SQL). Tables that hold household data are scoped by row-level se
 
 ## Conventions
 
-- **IDs:** UUIDv7 (time-ordered). The client generates them for `pantry_entries` and `item_events`, so full offline editing later needs no schema change; the server generates all others.
-- **Timestamps:** `timestamptz`, stored in UTC. Calendar dates (expiry, purchase) are `date`.
+- **IDs:** UUIDv7 (time-ordered). The client generates them for `pantry_entries` and `item_events`, so full offline editing later needs no schema change; the server generates all others. Server-generated `id` columns default to Postgres's built-in `uuidv7()` (Postgres 18+). Client-generated IDs (`pantry_entries.id`, `item_events.id`) have **no** default, so an insert without an `id` fails. `categories` and `locations` use `smallint` IDs set explicitly in the seed, with no default and no sequence.
+- **Timestamps:** `timestamptz`, stored in UTC. Calendar dates (expiry, purchase) are `date`. Every "row written at" timestamp (`created_at`, `updated_at`, `joined_at`, `last_seen_at`, `occurred_at`, `sent_at`) is `timestamptz NOT NULL DEFAULT now()`. Keeping `updated_at` (and `last_seen_at`) current on writes is the API's job; there are no triggers. Other timestamps (`expires_at`, `revoked_at`) have no default.
+- **Nullability:** a column marked PK is not null. Every other column is nullable unless its Type cell below says "not null"; "not null" is never implied. Defaults are listed in the Type cell too; apart from the `uuidv7()` ID default above, a column with no default listed has none.
 - **Enums:** Postgres enum types for small fixed sets (`member_role`, `stock_level`, `event_type`).
 - **Deletes:** Hard deletes. History survives because `item_events` keeps the IDs and a snapshot, not foreign keys to deleted rows.
 
@@ -37,7 +38,7 @@ categories, locations (built-in lookup tables)
 | `email` | text | Copied from Firebase for display/invites |
 | `timezone` | text, not null | IANA name, e.g. `America/Toronto`; used to send expiry pushes at a sensible local time |
 | `push_enabled` | boolean, not null, default false | Push notifications are opt-in. The setting is per user, not per device: turning notifications off on one device means removing that device's row from `push_tokens` |
-| `created_at`, `updated_at` | timestamptz | |
+| `created_at`, `updated_at` | timestamptz, not null, default `now()` | |
 
 ### `push_tokens`
 
@@ -46,10 +47,12 @@ One row per device that can receive pushes. Deleting a device's token (on sign-o
 | Column | Type | Notes |
 |---|---|---|
 | `id` | uuid PK | |
-| `user_id` | uuid FK → users, on delete cascade | |
+| `user_id` | uuid FK → users, on delete cascade, not null | |
 | `token` | text, unique, not null | Expo push token |
-| `platform` | text | `ios` / `android` / `web` |
-| `created_at`, `last_seen_at` | timestamptz | Prune stale tokens using `last_seen_at` and Expo's delivery receipts |
+| `platform` | text | `ios` / `android` / `web`; validated by the API, not the database |
+| `created_at`, `last_seen_at` | timestamptz, not null, default `now()` | Prune stale tokens using `last_seen_at` and Expo's delivery receipts |
+
+- **Indexes:** `(user_id)` (non-unique) for per-user token lookups and for the `on delete cascade` when a user is deleted; Postgres does not index foreign-key columns on its own. Added by a later migration in #21.
 
 ### `households`
 
@@ -57,8 +60,8 @@ One row per device that can receive pushes. Deleting a device's token (on sign-o
 |---|---|---|
 | `id` | uuid PK | |
 | `name` | text, not null | |
-| `created_by` | uuid FK → users | |
-| `created_at`, `updated_at` | timestamptz | |
+| `created_by` | uuid FK → users | Nullable; #46 changes the FK to on delete set null |
+| `created_at`, `updated_at` | timestamptz, not null, default `now()` | |
 
 Deleting a household (owner only) cascades to members, invites, custom catalog items, entries and events.
 
@@ -66,10 +69,10 @@ Deleting a household (owner only) cascades to members, invites, custom catalog i
 
 | Column | Type | Notes |
 |---|---|---|
-| `household_id` | uuid FK → households, cascade | PK part 1 |
-| `user_id` | uuid FK → users, cascade | PK part 2 |
-| `role` | `member_role` (`owner`, `member`) | |
-| `joined_at` | timestamptz | |
+| `household_id` | uuid FK → households, cascade, not null | PK part 1 |
+| `user_id` | uuid FK → users, cascade, not null | PK part 2 |
+| `role` | `member_role` (`owner`, `member`), not null | |
+| `joined_at` | timestamptz, not null, default `now()` | |
 
 - Exactly one owner per household: partial unique index on `(household_id) WHERE role = 'owner'`.
 - Index on `(user_id)` for "which households am I in?" (household switcher).
@@ -81,11 +84,11 @@ Deleting a household (owner only) cascades to members, invites, custom catalog i
 | Column | Type | Notes |
 |---|---|---|
 | `id` | uuid PK | |
-| `household_id` | uuid FK → households, cascade | |
+| `household_id` | uuid FK → households, cascade, not null | |
 | `code` | text, unique, not null | Short, human-typable (e.g. 8 chars, no ambiguous characters). Link form: `https://<host>/join/<code>` |
-| `created_by` | uuid FK → users | |
-| `created_at` | timestamptz | |
-| `expires_at` | timestamptz, not null | e.g. 7 days after creation |
+| `created_by` | uuid FK → users | Nullable; #46 changes the FK to on delete set null |
+| `created_at` | timestamptz, not null, default `now()` | |
+| `expires_at` | timestamptz, not null, no default | Set by the API, e.g. 7 days after creation |
 | `revoked_at` | timestamptz | Set when revoked |
 
 The same code works as both the typed code and the link, can be reused by several people until it expires, and can be revoked. Only the owner can create or revoke invites.
@@ -96,10 +99,10 @@ Built-in lookup tables with the same shape:
 
 | Column | Type | Notes |
 |---|---|---|
-| `id` | smallint PK | |
-| `key` | text, unique | Stable identifier, e.g. `dairy`, `fridge` |
-| `name` | text | Display name |
-| `sort_order` | smallint | |
+| `id` | smallint PK, no default | Set explicitly in the seed (no `serial` or identity sequence), so IDs are the same in every database |
+| `key` | text, unique, not null | Stable identifier, e.g. `dairy`, `fridge` |
+| `name` | text, not null | Display name |
+| `sort_order` | smallint, not null | |
 
 Seed data: categories (Baking, Produce, Dairy, Grains, Spices, …) and locations (Pantry, Fridge, Freezer, Spice rack, …). Custom locations per household are planned for a later version (custom categories are not planned yet). Adding them means adding a nullable `household_id`, as `catalog_items` already has, and switching the IDs to a type that households can create rows for.
 
@@ -116,7 +119,7 @@ Built-in ingredients and household custom items in one table.
 | `default_location_id` | smallint FK → locations, not null | |
 | `shelf_life_days` | integer | Typical shelf life; used to suggest an expiry date. `NULL` = no suggestion |
 | `created_by` | uuid FK → users | `NULL` for built-ins |
-| `created_at`, `updated_at` | timestamptz | |
+| `created_at`, `updated_at` | timestamptz, not null, default `now()` | |
 
 - Unique names: unique index on `(household_id, lower(name))` (with `NULLS NOT DISTINCT`, so built-in names are unique too). A custom item cannot use the same name as a built-in one; the API checks this.
 - Type-ahead: `pg_trgm` GIN index on `lower(name)`. The search returns built-ins plus the current household's custom items.
@@ -128,12 +131,12 @@ A household's own default category and location for a **built-in** catalog item.
 
 | Column | Type | Notes |
 |---|---|---|
-| `household_id` | uuid FK → households, cascade | PK part 1 |
-| `catalog_item_id` | uuid FK → catalog_items, cascade | PK part 2. Must be a built-in item (the API checks this); custom items keep their defaults on their own row |
+| `household_id` | uuid FK → households, cascade, not null | PK part 1 |
+| `catalog_item_id` | uuid FK → catalog_items, cascade, not null | PK part 2. Must be a built-in item (the API checks this); custom items keep their defaults on their own row |
 | `category_id` | smallint FK → categories | `NULL` = use the built-in default |
 | `location_id` | smallint FK → locations | `NULL` = use the built-in default |
 | `updated_by` | uuid FK → users, on delete set null | |
-| `updated_at` | timestamptz | |
+| `updated_at` | timestamptz, not null, default `now()` | |
 
 Any member can set these. **Effective defaults** for an item in a household = `COALESCE(override, catalog default)`, computed in the item queries (a SQL view keeps this in one place). The view is created `WITH (security_invoker = true)`, so RLS applies to whoever queries it; without this, a view runs with its owner's rights and would bypass RLS.
 
@@ -143,15 +146,15 @@ One row per purchase ("Milk (Oct 20)", "Milk (Oct 27)").
 
 | Column | Type | Notes |
 |---|---|---|
-| `id` | uuid PK | Client-generated UUIDv7 |
-| `household_id` | uuid FK → households, cascade | |
-| `catalog_item_id` | uuid FK → catalog_items | Every entry points at a catalog item; typing a new name creates a custom catalog item first |
+| `id` | uuid PK, no default | Client-generated UUIDv7 |
+| `household_id` | uuid FK → households, cascade, not null | |
+| `catalog_item_id` | uuid FK → catalog_items, not null | Every entry points at a catalog item; typing a new name creates a custom catalog item first |
 | `location_id` | smallint FK → locations, not null | Defaults from the item's effective default location; can be changed per entry (one milk in the fridge, one in the freezer) |
-| `level` | `stock_level` (`full`, `half`, `low`, `out`) | `out` entries stay visible |
+| `level` | `stock_level` (`full`, `half`, `low`, `out`), not null, no default | The API always sets it. `out` entries stay visible |
 | `purchased_on` | date, not null, default today | Label in the expanded group ("Milk (Oct 20)") |
 | `expires_on` | date | Optional; prefilled from `purchased_on + shelf_life_days` |
 | `created_by`, `updated_by` | uuid FK → users, on delete set null | |
-| `created_at`, `updated_at` | timestamptz | `updated_at` is also the "last write wins" clock for future offline sync |
+| `created_at`, `updated_at` | timestamptz, not null, default `now()` | `updated_at` is also the "last write wins" clock for future offline sync |
 
 - **Grouping** ("Milk ×2") is by `catalog_item_id`.
 - **Category** comes from the item's effective default category for the household, not from the entry, so a group never splits across categories. Changing it re-categorizes every entry of that item.
@@ -163,15 +166,15 @@ Append-only change log. It powers the "Set to Low by Sam, 2h ago" label now and 
 
 | Column | Type | Notes |
 |---|---|---|
-| `id` | uuid PK | Client-generated UUIDv7. Also makes retries idempotent: a repeated insert is ignored |
-| `household_id` | uuid FK → households, cascade | |
-| `entry_id` | uuid, **no FK** | Survives deletion of the entry |
-| `catalog_item_id` | uuid, no FK | Lets the feed show the item name even after deletion (with `snapshot`) |
+| `id` | uuid PK, no default | Client-generated UUIDv7. Also makes retries idempotent: a repeated insert is ignored |
+| `household_id` | uuid FK → households, cascade, not null | |
+| `entry_id` | uuid, **no FK**, not null | Survives deletion of the entry |
+| `catalog_item_id` | uuid, no FK, not null | Lets the feed show the item name even after deletion (with `snapshot`) |
 | `actor_id` | uuid FK → users, on delete set null | |
-| `type` | `event_type` | `entry_created`, `level_changed`, `expiry_changed`, `location_changed`, `purchase_date_changed`, `entry_deleted`. `purchase_date_changed` exists because users can edit an entry's purchase date, and every edit produces an event |
-| `changes` | jsonb | e.g. `{"level": {"from": "half", "to": "low"}}` |
-| `snapshot` | jsonb | Entry state after the event (name, level, location, expiry), so the feed does not need joins and works for deleted entries |
-| `occurred_at` | timestamptz, not null | |
+| `type` | `event_type`, not null | `entry_created`, `level_changed`, `expiry_changed`, `location_changed`, `purchase_date_changed`, `entry_deleted`. `purchase_date_changed` exists because users can edit an entry's purchase date, and every edit produces an event |
+| `changes` | jsonb, not null, default `'{}'` | e.g. `{"level": {"from": "half", "to": "low"}}` |
+| `snapshot` | jsonb, not null | Entry state after the event (name, level, location, expiry), so the feed does not need joins and works for deleted entries |
+| `occurred_at` | timestamptz, not null, default `now()` | |
 
 - The API writes the event in the **same transaction** as the entry change.
 - The app's database role gets INSERT and SELECT only on this table, never UPDATE or DELETE.
@@ -184,10 +187,10 @@ Stops the nightly job from sending the same alert twice.
 
 | Column | Type | Notes |
 |---|---|---|
-| `entry_id` | uuid | PK part 1 (no FK; delete rows with the entry, or let old rows age out) |
-| `user_id` | uuid FK → users, cascade | PK part 2 |
-| `expires_on` | date | PK part 3; if the expiry date is edited, a new alert can be sent |
-| `sent_at` | timestamptz | |
+| `entry_id` | uuid, not null | PK part 1 (no FK; delete rows with the entry, or let old rows age out) |
+| `user_id` | uuid FK → users, cascade, not null | PK part 2 |
+| `expires_on` | date, not null | PK part 3; if the expiry date is edited, a new alert can be sent |
+| `sent_at` | timestamptz, not null, default `now()` | |
 
 ## Access control
 
