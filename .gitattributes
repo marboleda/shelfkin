@@ -4,3 +4,5 @@
 # Generated from openapi/openapi.yaml by `npm run generate`; do not edit by hand
 api/internal/openapi/*.gen.go linguist-generated=true
 app/src/api/schema.ts linguist-generated=true
+# Generated from api/db/queries/ by sqlc (`npm run generate`); do not edit by hand
+api/internal/db/*.go linguist-generated=true

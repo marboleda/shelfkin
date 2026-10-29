@@ -1,0 +1,15 @@
+# sqlc config. Run `npm run generate` from the repository root rather than
+# calling sqlc directly; it runs the sqlc version pinned by the tool directive
+# in go.mod (`go tool sqlc`).
+version: "2"
+sql:
+  - engine: postgresql
+    # The goose migrations are the schema. sqlc understands goose annotations
+    # and reads only the `-- +goose Up` sections.
+    schema: db/migrations
+    queries: db/queries
+    gen:
+      go:
+        package: db
+        out: internal/db
+        sql_package: pgx/v5
