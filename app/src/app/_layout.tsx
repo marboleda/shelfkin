@@ -3,6 +3,9 @@ import { StatusBar } from 'expo-status-bar';
 import * as SystemUI from 'expo-system-ui';
 import { useEffect, useMemo } from 'react';
 
+import { apiConfig } from '@/api/config';
+import { QueryProvider } from '@/api/query-provider';
+import { ConfigError } from '@/components/config-error';
 import { getNavigationTheme, useTheme } from '@/theme';
 
 export default function RootLayout() {
@@ -17,12 +20,19 @@ export default function RootLayout() {
   return (
     <ThemeProvider value={navigationTheme}>
       <StatusBar style={theme.dark ? 'light' : 'dark'} />
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          contentStyle: { backgroundColor: theme.colors.background },
-        }}
-      />
+      {apiConfig.ok ? (
+        <QueryProvider>
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: theme.colors.background },
+            }}
+          />
+        </QueryProvider>
+      ) : (
+        // A production build without EXPO_PUBLIC_API_URL: say so instead of calling the wrong server.
+        <ConfigError message={apiConfig.message} />
+      )}
     </ThemeProvider>
   );
 }
