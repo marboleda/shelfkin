@@ -5,6 +5,9 @@ import * as SystemUI from 'expo-system-ui';
 import { useEffect, useMemo } from 'react';
 import { View } from 'react-native';
 
+import { apiConfig } from '@/api/config';
+import { QueryProvider } from '@/api/query-provider';
+import { ConfigError } from '@/components/config-error';
 import { getNavigationTheme, useTheme } from '@/theme';
 import { useAppFonts } from '@/theme/fonts';
 
@@ -31,17 +34,22 @@ export default function RootLayout() {
   return (
     <ThemeProvider value={navigationTheme}>
       <StatusBar style={theme.dark ? 'light' : 'dark'} />
-      {fontsReady ? (
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: theme.colors.background },
-          }}
-        />
-      ) : (
+      {!fontsReady ? (
         // Behind the splash screen on native; on web (which has no native splash) this keeps
         // the page on the theme background instead of a blank white page.
         <View testID="fonts-loading" style={{ flex: 1, backgroundColor: theme.colors.background }} />
+      ) : apiConfig.ok ? (
+        <QueryProvider>
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: theme.colors.background },
+            }}
+          />
+        </QueryProvider>
+      ) : (
+        // A production build without EXPO_PUBLIC_API_URL: say so instead of calling the wrong server.
+        <ConfigError message={apiConfig.message} />
       )}
     </ThemeProvider>
   );
