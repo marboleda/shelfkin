@@ -8,6 +8,14 @@ import { apiUrl, setupApiServer } from '../test-utils/api';
 
 jest.setTimeout(60000);
 
+// Fonts never really load in Jest: report them as loaded so the app renders (see font-loading-test).
+jest.mock('expo-font', () => ({
+  ...jest.requireActual('expo-font'),
+  useFonts: () => [true, null],
+  loadAsync: () => Promise.resolve(),
+  isLoaded: () => true,
+}));
+
 // The root layout builds its QueryClient with createQueryClient(). Use the test
 // version (no retry delay, no GC timers) and keep each one, to check that every
 // test renders with a fresh client.

@@ -7,6 +7,14 @@ import { colors, CONTENT_MAX_WIDTH } from '@/theme';
 
 jest.setTimeout(60000);
 
+// Fonts never really load in Jest: report them as loaded so the app renders (see font-loading-test).
+jest.mock('expo-font', () => ({
+  ...jest.requireActual('expo-font'),
+  useFonts: () => [true, null],
+  loadAsync: () => Promise.resolve(),
+  isLoaded: () => true,
+}));
+
 jest.mock('react-native/Libraries/Utilities/useColorScheme', () => ({
   __esModule: true,
   default: jest.fn(() => 'light'),
