@@ -132,7 +132,7 @@ A household's own default category and location for a **built-in** catalog item.
 | Column | Type | Notes |
 |---|---|---|
 | `household_id` | uuid FK → households, cascade, not null | PK part 1 |
-| `catalog_item_id` | uuid FK → catalog_items, cascade, not null | PK part 2. Must be a built-in item (the API checks this); custom items keep their defaults on their own row |
+| `catalog_item_id` | uuid FK → catalog_items, cascade, not null | PK part 2. Must be a built-in item (the API checks this, and so does RLS; see [Access control](#access-control)); custom items keep their defaults on their own row |
 | `category_id` | smallint FK → categories | `NULL` = use the built-in default |
 | `location_id` | smallint FK → locations | `NULL` = use the built-in default |
 | `updated_by` | uuid FK → users, on delete set null | |
@@ -203,6 +203,11 @@ Stops the nightly job from sending the same alert twice.
 
   `households` has no `household_id` column, so it is scoped by its own `id` the same way.
 - `catalog_items`: the same policy, OR `household_id IS NULL` (built-ins are readable by everyone, writable by no one through the app role).
+- Foreign-key checks ignore RLS, so on their own they would let a member of household A write a row in A that points at household B's custom item. B could then no longer delete that item (or household B), and the foreign-key error would tell A whether an item ID exists. The API checks the item before writing; the `WITH CHECK` of two policies is the second check behind it (#73):
+  - `pantry_entries`: `catalog_item_id` must be a built-in item (`household_id IS NULL`) or a custom item of the entry's own household. Not "any item the user can see": a member of A and C can see C's custom items but cannot put one in A's pantry.
+  - `household_item_defaults`: `catalog_item_id` must be a built-in item; custom items keep their defaults on their own row.
+
+  A missing item and another household's item both fail with the same RLS error (`42501`), so the error does not show whether an ID exists. The `USING` clauses are unchanged, so these checks apply only to new and updated rows.
 - `users`, `push_tokens` and `expiry_notifications` have no RLS (they hold no household data) and are scoped by the API: every query filters by the caller's user ID.
 - Owner-only actions (create or revoke invites, remove a member, rename or delete the household) are checked in the API, with a stricter RLS policy as a second check. Transfer ownership is also owner-only, but it goes through `transfer_ownership` (below) because RLS would block it.
 - `shelfkin_app` cannot insert into `households` or `household_members`, or update `household_members`, directly. Three narrow privileged (`SECURITY DEFINER`) functions do this instead. Each reads the caller from `app.user_id`, fails if it is not set, has a fixed `search_path`, and `shelfkin_app` has `EXECUTE` on it and nothing more:
