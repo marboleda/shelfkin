@@ -6,6 +6,9 @@ Shelfkin is an app for managing a household pantry. It has an Expo / React Nativ
 
 - `app/` contains the Expo and React Native front-end code.
 - `api/` contains the Go backend code.
+    -`api/db/migrations/` contains the database migrations
+- `infra/` contains the Terraform code for the production GCP and Firebase project.
+- `openapi/` contains the API contract that the Go server interface and the app's types are generated from.
 
 ## Orchestration
 
