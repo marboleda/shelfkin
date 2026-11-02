@@ -13,7 +13,17 @@ import { DIR_TARGETS, GenerateError, ROOT, SPEC, TARGETS, findStale, formatStale
 const GO_FILE = 'api/internal/openapi/openapi.gen.go';
 const TS_FILE = 'app/src/api/schema.ts';
 const DB_DIR = 'api/internal/db';
-const DB_FILES = ['db.go', 'health.sql.go', 'models.go'].map((name) => `${DB_DIR}/${name}`);
+// sqlc writes db.go, models.go and one <name>.sql.go per query file, and the
+// generator lists them sorted.
+const DB_NAMES = [
+  'db.go',
+  'models.go',
+  ...fs
+    .readdirSync(path.join(ROOT, 'api', 'db', 'queries'))
+    .filter((name) => name.endsWith('.sql'))
+    .map((name) => `${name}.go`),
+].sort();
+const DB_FILES = DB_NAMES.map((name) => `${DB_DIR}/${name}`);
 const ALL_FILES = [GO_FILE, TS_FILE, ...DB_FILES];
 const specText = fs.readFileSync(SPEC, 'utf8');
 
@@ -150,14 +160,14 @@ describe('generate', () => {
       assert.match(db, /^package db$/m);
       assert.equal(db.includes('\r'), false);
     }
-    assert.match(read(root, DB_FILES[1]), /func \(q \*Queries\) Ping\(ctx context\.Context\)/);
+    assert.match(read(root, `${DB_DIR}/health.sql.go`), /func \(q \*Queries\) Ping\(ctx context\.Context\)/);
   });
 
   test('removes files from the sqlc output directory that sqlc no longer generates', () => {
     const root = copyGenerated();
     fs.writeFileSync(at(root, `${DB_DIR}/old.sql.go`), 'package db\n');
     generate(SPEC, root);
-    assert.deepEqual(fs.readdirSync(at(root, DB_DIR)).sort(), ['db.go', 'health.sql.go', 'models.go']);
+    assert.deepEqual(fs.readdirSync(at(root, DB_DIR)).sort(), DB_NAMES);
   });
 
   test('is deterministic and matches the committed files', () => {
