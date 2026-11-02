@@ -53,11 +53,35 @@ func (ns NullMemberRole) Value() (driver.Value, error) {
 	return string(ns.MemberRole), nil
 }
 
+type CatalogItem struct {
+	ID                pgtype.UUID
+	HouseholdID       pgtype.UUID
+	Name              string
+	DefaultCategoryID int16
+	DefaultLocationID int16
+	ShelfLifeDays     pgtype.Int4
+	CreatedBy         pgtype.UUID
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
 type Category struct {
 	ID        int16
 	Key       string
 	Name      string
 	SortOrder int16
+}
+
+type EffectiveCatalogItem struct {
+	HouseholdID        pgtype.UUID
+	CatalogItemID      pgtype.UUID
+	Name               string
+	IsCustom           bool
+	CategoryID         int16
+	LocationID         int16
+	ShelfLifeDays      pgtype.Int4
+	CategoryOverridden bool
+	LocationOverridden bool
 }
 
 type Household struct {
@@ -76,6 +100,15 @@ type HouseholdInvite struct {
 	CreatedAt   pgtype.Timestamptz
 	ExpiresAt   pgtype.Timestamptz
 	RevokedAt   pgtype.Timestamptz
+}
+
+type HouseholdItemDefault struct {
+	HouseholdID   pgtype.UUID
+	CatalogItemID pgtype.UUID
+	CategoryID    pgtype.Int2
+	LocationID    pgtype.Int2
+	UpdatedBy     pgtype.UUID
+	UpdatedAt     pgtype.Timestamptz
 }
 
 type HouseholdMember struct {
