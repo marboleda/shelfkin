@@ -5,7 +5,6 @@ package config
 import (
 	"fmt"
 	"log/slog"
-	"net/url"
 	"strconv"
 	"strings"
 
@@ -17,9 +16,6 @@ const (
 	DatabaseURLEnv = "DATABASE_URL"
 	PortEnv        = "PORT"
 	LogLevelEnv    = "LOG_LEVEL"
-	// CORSAllowedOriginsEnv is a comma-separated list of browser origins
-	// (scheme://host[:port]) allowed to call the API.
-	CORSAllowedOriginsEnv = "CORS_ALLOWED_ORIGINS"
 )
 
 // Defaults for the optional variables.
@@ -28,10 +24,6 @@ const (
 	DefaultLogLevel = slog.LevelInfo
 )
 
-// DefaultCORSAllowedOrigins is used when CORS_ALLOWED_ORIGINS is unset: the
-// origin of the local Expo web dev server (npx expo start --web).
-var DefaultCORSAllowedOrigins = []string{"http://localhost:8081"}
-
 // Config is the API server's configuration.
 type Config struct {
 	// Pool is the parsed DATABASE_URL. Its password is in
@@ -39,10 +31,6 @@ type Config struct {
 	Pool     *pgxpool.Config
 	Port     int
 	LogLevel slog.Level
-	// CORSAllowedOrigins are the normalized origins (lowercase, no trailing
-	// slash) allowed to call the API from a browser. Never empty and never
-	// "*".
-	CORSAllowedOrigins []string
 }
 
 // Error reports one or more invalid environment variables. Its message names
@@ -67,11 +55,7 @@ var logLevels = map[string]slog.Level{
 // empty variable counts as unset. It returns an *Error naming every invalid
 // variable.
 func Load(getenv func(string) string) (*Config, error) {
-	cfg := &Config{
-		Port:               DefaultPort,
-		LogLevel:           DefaultLogLevel,
-		CORSAllowedOrigins: append([]string(nil), DefaultCORSAllowedOrigins...),
-	}
+	cfg := &Config{Port: DefaultPort, LogLevel: DefaultLogLevel}
 	var problems []string
 
 	if raw := getenv(DatabaseURLEnv); raw == "" {
@@ -102,51 +86,8 @@ func Load(getenv func(string) string) (*Config, error) {
 		}
 	}
 
-	if raw := getenv(CORSAllowedOriginsEnv); raw != "" {
-		origins, err := parseOrigins(raw)
-		if err != nil {
-			problems = append(problems, fmt.Sprintf("%s %v", CORSAllowedOriginsEnv, err))
-		} else {
-			cfg.CORSAllowedOrigins = origins
-		}
-	}
-
 	if len(problems) > 0 {
 		return nil, &Error{Problems: problems}
 	}
 	return cfg, nil
-}
-
-// parseOrigins parses a comma-separated list of origins. Blank entries are
-// skipped; at least one origin is required. Each origin must be
-// http(s)://host[:port] with no path, query or credentials, and "*" is
-// rejected because requests carry bearer tokens. Origins are lowercased and
-// a trailing slash is dropped, matching the Origin header browsers send.
-func parseOrigins(raw string) ([]string, error) {
-	var origins []string
-	seen := map[string]bool{}
-	for _, entry := range strings.Split(raw, ",") {
-		entry = strings.TrimSpace(entry)
-		if entry == "" {
-			continue
-		}
-		if strings.Contains(entry, "*") {
-			return nil, fmt.Errorf("must not contain a wildcard, got %q", entry)
-		}
-		u, err := url.Parse(entry)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
-			u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" ||
-			strings.HasSuffix(entry, "?") || strings.HasSuffix(entry, "#") {
-			return nil, fmt.Errorf("must list origins like https://example.com or http://localhost:8081, got %q", entry)
-		}
-		origin := strings.ToLower(u.Scheme + "://" + u.Host)
-		if !seen[origin] {
-			seen[origin] = true
-			origins = append(origins, origin)
-		}
-	}
-	if len(origins) == 0 {
-		return nil, fmt.Errorf("must list at least one origin")
-	}
-	return origins, nil
 }

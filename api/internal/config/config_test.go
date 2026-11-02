@@ -79,15 +79,6 @@ func TestLoadInvalid(t *testing.T) {
 		{"PORT out of range", map[string]string{DatabaseURLEnv: validURL, PortEnv: "70000"}, PortEnv},
 		{"PORT zero", map[string]string{DatabaseURLEnv: validURL, PortEnv: "0"}, PortEnv},
 		{"unknown LOG_LEVEL", map[string]string{DatabaseURLEnv: validURL, LogLevelEnv: "verbose"}, LogLevelEnv},
-		{"CORS wildcard", map[string]string{DatabaseURLEnv: validURL, CORSAllowedOriginsEnv: "*"}, CORSAllowedOriginsEnv},
-		{"CORS wildcard among origins", map[string]string{DatabaseURLEnv: validURL, CORSAllowedOriginsEnv: "https://shelfkin.web.app,*"}, CORSAllowedOriginsEnv},
-		{"CORS wildcard subdomain", map[string]string{DatabaseURLEnv: validURL, CORSAllowedOriginsEnv: "https://*.web.app"}, CORSAllowedOriginsEnv},
-		{"CORS no scheme", map[string]string{DatabaseURLEnv: validURL, CORSAllowedOriginsEnv: "shelfkin.web.app"}, CORSAllowedOriginsEnv},
-		{"CORS bad scheme", map[string]string{DatabaseURLEnv: validURL, CORSAllowedOriginsEnv: "ftp://shelfkin.web.app"}, CORSAllowedOriginsEnv},
-		{"CORS path", map[string]string{DatabaseURLEnv: validURL, CORSAllowedOriginsEnv: "https://shelfkin.web.app/app"}, CORSAllowedOriginsEnv},
-		{"CORS query", map[string]string{DatabaseURLEnv: validURL, CORSAllowedOriginsEnv: "https://shelfkin.web.app?x=1"}, CORSAllowedOriginsEnv},
-		{"CORS credentials", map[string]string{DatabaseURLEnv: validURL, CORSAllowedOriginsEnv: "https://user@shelfkin.web.app"}, CORSAllowedOriginsEnv},
-		{"CORS only commas", map[string]string{DatabaseURLEnv: validURL, CORSAllowedOriginsEnv: " , ,"}, CORSAllowedOriginsEnv},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -122,46 +113,5 @@ func TestLoadNamesEveryBadVariable(t *testing.T) {
 		if !strings.Contains(err.Error(), v) {
 			t.Errorf("error %q does not name %s", err, v)
 		}
-	}
-}
-
-func TestLoadCORSAllowedOrigins(t *testing.T) {
-	tests := []struct {
-		name string
-		raw  string
-		want []string
-	}{
-		{"unset uses the Expo web dev server", "", []string{"http://localhost:8081"}},
-		{"one origin", "https://shelfkin.web.app", []string{"https://shelfkin.web.app"}},
-		{
-			"comma-separated with spaces and blanks",
-			" https://shelfkin.web.app , ,https://shelfkin.firebaseapp.com,",
-			[]string{"https://shelfkin.web.app", "https://shelfkin.firebaseapp.com"},
-		},
-		{"port kept", "http://localhost:19006", []string{"http://localhost:19006"}},
-		{"lowercased, trailing slash dropped", "HTTPS://Shelfkin.Web.App/", []string{"https://shelfkin.web.app"}},
-		{"duplicates removed", "https://a.example,https://a.example/", []string{"https://a.example"}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg, err := Load(env(map[string]string{DatabaseURLEnv: validURL, CORSAllowedOriginsEnv: tt.raw}))
-			if err != nil {
-				t.Fatalf("Load: %v", err)
-			}
-			if strings.Join(cfg.CORSAllowedOrigins, " ") != strings.Join(tt.want, " ") {
-				t.Errorf("CORSAllowedOrigins = %q, want %q", cfg.CORSAllowedOrigins, tt.want)
-			}
-		})
-	}
-}
-
-func TestDefaultCORSOriginsNotShared(t *testing.T) {
-	cfg, err := Load(env(map[string]string{DatabaseURLEnv: validURL}))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	cfg.CORSAllowedOrigins[0] = "changed"
-	if DefaultCORSAllowedOrigins[0] != "http://localhost:8081" {
-		t.Errorf("changing a Config changed DefaultCORSAllowedOrigins to %q", DefaultCORSAllowedOrigins)
 	}
 }

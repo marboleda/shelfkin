@@ -1,8 +1,7 @@
 // Command api is the Shelfkin HTTP API server.
 //
-// It reads DATABASE_URL (required), PORT (default 8080), LOG_LEVEL
-// (default info) and CORS_ALLOWED_ORIGINS (default http://localhost:8081)
-// from the environment, logs JSON to stdout and shuts down
+// It reads DATABASE_URL (required), PORT (default 8080) and LOG_LEVEL
+// (default info) from the environment, logs JSON to stdout and shuts down
 // gracefully on SIGTERM or SIGINT. See the README for how to run it locally.
 package main
 
@@ -71,7 +70,7 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer, shut
 	}
 	logger.Info("listening", "port", cfg.Port)
 
-	srv := server.NewHTTPServer(server.NewHandler(server.NewAPI(pool, logger), logger, cfg.CORSAllowedOrigins), logger)
+	srv := server.NewHTTPServer(server.NewHandler(server.NewAPI(pool, logger), logger), logger)
 	err = server.Serve(ctx, srv, ln, shutdownTimeout)
 	switch {
 	case err == nil:

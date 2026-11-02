@@ -108,6 +108,22 @@ describe('theme', () => {
     expect(splash.backgroundColor).toBe(colors.light.background);
     expect(splash.dark.backgroundColor).toBe(colors.dark.background);
   });
+
+  test('the web page paints the theme background before the JS bundle runs', () => {
+    // The default `web.output: "single"` builds every page from public/index.html.
+    const fs: { readFileSync(path: string, encoding: 'utf8'): string } = jest.requireActual('fs');
+    const html = fs.readFileSync('public/index.html', 'utf8');
+    const style = html.match(/<style id="theme-background">([\s\S]*?)<\/style>/)?.[1] ?? '';
+    const [light, dark] = style.split('@media (prefers-color-scheme: dark)');
+
+    expect(style).toMatch(/color-scheme:\s*light dark/);
+    expect(light).toMatch(new RegExp(`html,\\s*body\\s*\\{\\s*background-color:\\s*${colors.light.background};`));
+    expect(dark).toMatch(new RegExp(`html,\\s*body\\s*\\{\\s*background-color:\\s*${colors.dark.background};`));
+    // Expo's default head content is kept.
+    expect(html).toContain('<style id="expo-reset">');
+    expect(html).toContain('name="viewport"');
+    expect(html).toContain('<div id="root"></div>');
+  });
 });
 
 // [foreground, background] pairs used for text: each must meet 4.5:1.
