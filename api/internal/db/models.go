@@ -11,6 +11,52 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type EventType string
+
+const (
+	EventTypeEntryCreated        EventType = "entry_created"
+	EventTypeLevelChanged        EventType = "level_changed"
+	EventTypeExpiryChanged       EventType = "expiry_changed"
+	EventTypeLocationChanged     EventType = "location_changed"
+	EventTypePurchaseDateChanged EventType = "purchase_date_changed"
+	EventTypeEntryDeleted        EventType = "entry_deleted"
+)
+
+func (e *EventType) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = EventType(s)
+	case string:
+		*e = EventType(s)
+	default:
+		return fmt.Errorf("unsupported scan type for EventType: %T", src)
+	}
+	return nil
+}
+
+type NullEventType struct {
+	EventType EventType
+	Valid     bool // Valid is true if EventType is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullEventType) Scan(value interface{}) error {
+	if value == nil {
+		ns.EventType, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.EventType.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullEventType) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.EventType), nil
+}
+
 type MemberRole string
 
 const (
@@ -53,6 +99,50 @@ func (ns NullMemberRole) Value() (driver.Value, error) {
 	return string(ns.MemberRole), nil
 }
 
+type StockLevel string
+
+const (
+	StockLevelFull StockLevel = "full"
+	StockLevelHalf StockLevel = "half"
+	StockLevelLow  StockLevel = "low"
+	StockLevelOut  StockLevel = "out"
+)
+
+func (e *StockLevel) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = StockLevel(s)
+	case string:
+		*e = StockLevel(s)
+	default:
+		return fmt.Errorf("unsupported scan type for StockLevel: %T", src)
+	}
+	return nil
+}
+
+type NullStockLevel struct {
+	StockLevel StockLevel
+	Valid      bool // Valid is true if StockLevel is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullStockLevel) Scan(value interface{}) error {
+	if value == nil {
+		ns.StockLevel, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.StockLevel.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullStockLevel) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.StockLevel), nil
+}
+
 type CatalogItem struct {
 	ID                pgtype.UUID
 	HouseholdID       pgtype.UUID
@@ -82,6 +172,13 @@ type EffectiveCatalogItem struct {
 	ShelfLifeDays      pgtype.Int4
 	CategoryOverridden bool
 	LocationOverridden bool
+}
+
+type ExpiryNotification struct {
+	EntryID   pgtype.UUID
+	UserID    pgtype.UUID
+	ExpiresOn pgtype.Date
+	SentAt    pgtype.Timestamptz
 }
 
 type Household struct {
@@ -118,11 +215,37 @@ type HouseholdMember struct {
 	JoinedAt    pgtype.Timestamptz
 }
 
+type ItemEvent struct {
+	ID            pgtype.UUID
+	HouseholdID   pgtype.UUID
+	EntryID       pgtype.UUID
+	CatalogItemID pgtype.UUID
+	ActorID       pgtype.UUID
+	Type          EventType
+	Changes       []byte
+	Snapshot      []byte
+	OccurredAt    pgtype.Timestamptz
+}
+
 type Location struct {
 	ID        int16
 	Key       string
 	Name      string
 	SortOrder int16
+}
+
+type PantryEntry struct {
+	ID            pgtype.UUID
+	HouseholdID   pgtype.UUID
+	CatalogItemID pgtype.UUID
+	LocationID    int16
+	Level         StockLevel
+	PurchasedOn   pgtype.Date
+	ExpiresOn     pgtype.Date
+	CreatedBy     pgtype.UUID
+	UpdatedBy     pgtype.UUID
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
 }
 
 type PushToken struct {
