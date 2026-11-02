@@ -208,7 +208,7 @@ func TestEntryTablesIndexes(t *testing.T) {
 func TestEntryAndEventDefaults(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 	sam := insertUser(t, pool, "fb-sam")
 	home := insertHousehold(t, pool, "Home", nil)
 	milk := mustAddItem(t, pool, nil, "Milk", catDairy, locFridge, 7)
@@ -269,7 +269,7 @@ func TestEntryAndEventDefaults(t *testing.T) {
 func TestEntryRequiredColumns(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 	home := insertHousehold(t, pool, "Home", nil)
 	milk := mustAddItem(t, pool, nil, "Milk", catDairy, locFridge, 7)
 
@@ -297,7 +297,7 @@ func TestEntryRequiredColumns(t *testing.T) {
 func TestEntryUnknownEnumValues(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 	home := insertHousehold(t, pool, "Home", nil)
 	milk := mustAddItem(t, pool, nil, "Milk", catDairy, locFridge, 7)
 
@@ -315,7 +315,7 @@ func TestEntryUnknownEnumValues(t *testing.T) {
 func TestEntryUnknownReferences(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 	home := insertHousehold(t, pool, "Home", nil)
 	milk := mustAddItem(t, pool, nil, "Milk", catDairy, locFridge, 7)
 	const missing = "00000000-0000-7000-8000-000000000000"
@@ -356,7 +356,7 @@ func TestEventForEntryThatNeverExisted(t *testing.T) {
 func TestDeletingEntryKeepsEvents(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 	home := insertHousehold(t, pool, "Home", nil)
 	milk := mustAddItem(t, pool, nil, "Milk", catDairy, locFridge, 7)
 	entry := insertEntry(t, pool, home, milk, nil)
@@ -379,7 +379,7 @@ func TestDeletingEntryKeepsEvents(t *testing.T) {
 func TestDeletingHouseholdRemovesEntriesAndEvents(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 	home := insertHousehold(t, pool, "Home", nil)
 	cabin := insertHousehold(t, pool, "Cabin", nil)
 	milk := mustAddItem(t, pool, nil, "Milk", catDairy, locFridge, 7)
@@ -443,7 +443,7 @@ func TestDeletingHouseholdWithEntriesForCustomItems(t *testing.T) {
 func TestDeletingCatalogItemWithEntriesFails(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 	home := insertHousehold(t, pool, "Home", nil)
 	milk := mustAddItem(t, pool, nil, "Milk", catDairy, locFridge, 7)
 	jam := mustAddItem(t, pool, home, "Jam", catProduce, locPantry, nil)
@@ -459,7 +459,7 @@ func TestDeletingCatalogItemWithEntriesFails(t *testing.T) {
 func TestDeletingUserClearsEntryAndEventActors(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 	sam := insertUser(t, pool, "fb-sam")
 	alex := insertUser(t, pool, "fb-alex")
 	home := insertHousehold(t, pool, "Home", sam)
@@ -537,7 +537,7 @@ func TestExpiryNotificationsKey(t *testing.T) {
 func TestEventRetryIsIgnored(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 	home := insertHousehold(t, pool, "Home", nil)
 	milk := mustAddItem(t, pool, nil, "Milk", catDairy, locFridge, 7)
 	entry := insertEntry(t, pool, home, milk, nil)
