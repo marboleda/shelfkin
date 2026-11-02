@@ -10,6 +10,9 @@ export const CONTENT_MAX_WIDTH = 720;
 /** Width of the left side nav in the wide layout. */
 export const SIDE_NAV_WIDTH = 220;
 
+/** Smallest size, in px / dp, of anything the user taps (WCAG / platform guidance). */
+export const MIN_TOUCH_TARGET = 44;
+
 export function isWideLayout(windowWidth: number): boolean {
   return windowWidth >= WIDE_LAYOUT_BREAKPOINT;
 }

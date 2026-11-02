@@ -1,9 +1,11 @@
+import Feather from '@expo/vector-icons/Feather';
 import type { BottomTabBarProps } from 'expo-router/js-tabs';
 import type { Href } from 'expo-router';
+import type { ComponentProps } from 'react';
 import { Text, View } from 'react-native';
 
 import { useIsWideLayout } from '@/hooks/use-is-wide-layout';
-import { SIDE_NAV_WIDTH, useTheme, useThemedStyles, type Theme } from '@/theme';
+import { MIN_TOUCH_TARGET, SIDE_NAV_WIDTH, useTheme, useThemedStyles, type Theme } from '@/theme';
 
 import { PressableLink } from './pressable-link';
 import { APP_NAME } from './screen';
@@ -11,13 +13,15 @@ import { APP_NAME } from './screen';
 type NavItem = {
   label: string;
   href: Href;
+  /** Feather glyph shown above the label in the bottom tab bar. */
+  icon: ComponentProps<typeof Feather>['name'];
   /** Route names (in the `(app)` tabs layout) that count as this section. */
   routes: string[];
 };
 
 export const NAV_ITEMS: NavItem[] = [
-  { label: 'Pantry', href: '/', routes: ['index', 'add', 'entries/[id]'] },
-  { label: 'Settings', href: '/settings', routes: ['settings'] },
+  { label: 'Pantry', href: '/', icon: 'package', routes: ['index', 'add', 'entries/[id]'] },
+  { label: 'Settings', href: '/settings', icon: 'settings', routes: ['settings'] },
 ];
 
 /**
@@ -41,8 +45,12 @@ type NavProps = {
   insets: BottomTabBarProps['insets'];
 };
 
+/** Size of the tab bar icons, in px / dp. */
+const TAB_ICON_SIZE = 22;
+
 export function BottomTabBar({ activeLabel, insets }: NavProps) {
   const styles = useThemedStyles(createStyles);
+  const { colors } = useTheme();
   return (
     <View
       testID="bottom-tab-bar"
@@ -65,9 +73,24 @@ export function BottomTabBar({ activeLabel, insets }: NavProps) {
             role="tab"
             aria-selected={active}
             accessibilityState={{ selected: active }}
+            aria-label={item.label}
             style={styles.tabItem}
           >
-            <View style={[styles.tabIndicator, active && styles.tabIndicatorActive]} />
+            <View
+              testID={`tab-icon-pill-${item.label}`}
+              style={[styles.tabIconPill, active && styles.tabIconPillActive]}
+            >
+              {/* Decorative: the tab is announced by its label alone. */}
+              <Feather
+                testID={`tab-icon-${item.label}`}
+                name={item.icon}
+                size={TAB_ICON_SIZE}
+                color={active ? colors.primary : colors.mutedText}
+                aria-hidden
+                accessible={false}
+                importantForAccessibility="no-hide-descendants"
+              />
+            </View>
             <Text style={[styles.navLabel, active && styles.navLabelActive]}>{item.label}</Text>
           </PressableLink>
         );
@@ -102,6 +125,7 @@ export function SideNav({ activeLabel, insets }: NavProps) {
             role="tab"
             aria-selected={active}
             accessibilityState={{ selected: active }}
+            aria-label={item.label}
             style={[styles.sideItem, active && styles.sideItemActive]}
           >
             <Text style={[styles.navLabel, active && styles.navLabelActive]}>{item.label}</Text>
@@ -123,19 +147,23 @@ function createStyles(theme: Theme) {
     tabItem: {
       flex: 1,
       alignItems: 'center' as const,
-      paddingBottom: theme.spacing.md,
-      minHeight: 52,
+      justifyContent: 'center' as const,
+      gap: theme.spacing.xs,
+      paddingTop: theme.spacing.sm,
+      paddingBottom: theme.spacing.sm,
+      // At least a 44 x 44 touch target.
+      minWidth: MIN_TOUCH_TARGET,
+      minHeight: MIN_TOUCH_TARGET,
     },
-    tabIndicator: {
-      alignSelf: 'stretch' as const,
-      height: 3,
-      marginBottom: theme.spacing.sm,
-      marginHorizontal: theme.spacing.xl,
-      borderBottomLeftRadius: theme.radii.sm,
-      borderBottomRightRadius: theme.radii.sm,
+    tabIconPill: {
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+      paddingHorizontal: theme.spacing.lg,
+      paddingVertical: theme.spacing.xs,
+      borderRadius: theme.radii.pill,
     },
-    tabIndicatorActive: {
-      backgroundColor: theme.colors.primary,
+    tabIconPillActive: {
+      backgroundColor: theme.colors.primarySubtle,
     },
     sideNav: {
       width: SIDE_NAV_WIDTH,
@@ -152,6 +180,8 @@ function createStyles(theme: Theme) {
       marginBottom: theme.spacing.lg,
     },
     sideItem: {
+      minHeight: MIN_TOUCH_TARGET,
+      justifyContent: 'center' as const,
       paddingVertical: theme.spacing.sm,
       paddingHorizontal: theme.spacing.md,
       borderRadius: theme.radii.md,
