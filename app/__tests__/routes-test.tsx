@@ -4,6 +4,14 @@ import { Dimensions } from 'react-native';
 
 jest.setTimeout(60000);
 
+// Fonts never really load in Jest: report them as loaded so the app renders (see font-loading-test).
+jest.mock('expo-font', () => ({
+  ...jest.requireActual('expo-font'),
+  useFonts: () => [true, null],
+  loadAsync: () => Promise.resolve(),
+  isLoaded: () => true,
+}));
+
 // Render the real routes in src/app, including the root and (app) layouts.
 const APP_DIR = './src/app';
 

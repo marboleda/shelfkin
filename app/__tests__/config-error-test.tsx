@@ -2,6 +2,14 @@ import { renderRouter, screen } from 'expo-router/testing-library';
 
 jest.setTimeout(60000);
 
+// Fonts never really load in Jest: report them as loaded so the app renders (see font-loading-test).
+jest.mock('expo-font', () => ({
+  ...jest.requireActual('expo-font'),
+  useFonts: () => [true, null],
+  loadAsync: () => Promise.resolve(),
+  isLoaded: () => true,
+}));
+
 // A production build with no EXPO_PUBLIC_API_URL.
 jest.mock('@/api/config', () => {
   const actual = jest.requireActual('@/api/config');

@@ -2,9 +2,17 @@ import { renderHook } from '@testing-library/react-native';
 import { renderRouter, screen } from 'expo-router/testing-library';
 import { StyleSheet, useColorScheme } from 'react-native';
 
-import { colors, getTheme, useTheme } from '@/theme';
+import { colors, fontFaces, getTheme, radii, spacing, typography, useTheme } from '@/theme';
 
 jest.setTimeout(60000);
+
+// Fonts never really load in Jest: report them as loaded so the app renders (see font-loading-test).
+jest.mock('expo-font', () => ({
+  ...jest.requireActual('expo-font'),
+  useFonts: () => [true, null],
+  loadAsync: () => Promise.resolve(),
+  isLoaded: () => true,
+}));
 
 jest.mock('react-native/Libraries/Utilities/useColorScheme', () => ({
   __esModule: true,
@@ -57,34 +65,124 @@ describe('theme', () => {
     expect(result.current.colors.background).toBe(colors.dark.background);
   });
 
-  test('defines every starter colour token in both modes', () => {
-    const keys = [
-      'background',
-      'surface',
-      'text',
-      'mutedText',
-      'border',
-      'primary',
-      'danger',
-      'expiringSoon',
-    ];
-    for (const scheme of ['light', 'dark'] as const) {
-      for (const key of keys) {
-        expect(colors[scheme]).toHaveProperty(key, expect.stringMatching(/^#[0-9A-F]{6}$/i));
-      }
-    }
+  test('has exactly the designed colour tokens, in both modes', () => {
+    expect(colors.light).toEqual({
+      background: '#F7F6F2',
+      surface: '#FFFFFF',
+      text: '#1C1B19',
+      mutedText: '#5F5C55',
+      border: '#DDD9CF',
+      primary: '#2F6B4F',
+      onPrimary: '#FFFFFF',
+      primarySubtle: '#E3EFE8',
+      danger: '#B3261E',
+      dangerSubtle: '#F9E1DE',
+      expiringSoon: '#8A4B00',
+      expiringSubtle: '#FBEBD9',
+      levelLow: '#C27A12',
+      levelEmpty: '#E4E0D6',
+    });
+    expect(colors.dark).toEqual({
+      background: '#141513',
+      surface: '#1E201D',
+      text: '#ECEAE4',
+      mutedText: '#A6A39B',
+      border: '#363830',
+      primary: '#7BC5A0',
+      onPrimary: '#0F2A1D',
+      primarySubtle: '#23382C',
+      danger: '#F2B8B5',
+      dangerSubtle: '#3A1F1D',
+      expiringSoon: '#F5B74A',
+      expiringSubtle: '#3A2A14',
+      levelLow: '#E0A04A',
+      levelEmpty: '#3A3C35',
+    });
   });
 
-  test.each(['light', 'dark'] as const)('body and muted text meet 4.5:1 on the background (%s)', (scheme) => {
-    const c = colors[scheme];
-    expect(contrast(c.text, c.background)).toBeGreaterThanOrEqual(4.5);
-    expect(contrast(c.mutedText, c.background)).toBeGreaterThanOrEqual(4.5);
-    // Nav labels and rows sit on `surface`.
-    expect(contrast(c.text, c.surface)).toBeGreaterThanOrEqual(4.5);
-    expect(contrast(c.mutedText, c.surface)).toBeGreaterThanOrEqual(4.5);
-    expect(contrast(c.primary, c.primarySubtle)).toBeGreaterThanOrEqual(4.5);
-    expect(contrast(c.onPrimary, c.primary)).toBeGreaterThanOrEqual(4.5);
+  test('the splash screen background in app.json matches the theme background', () => {
+    const appJson = jest.requireActual('../app.json');
+    const splash = appJson.expo.plugins.find(
+      (plugin: unknown) => Array.isArray(plugin) && plugin[0] === 'expo-splash-screen',
+    )[1];
+    expect(splash.backgroundColor).toBe(colors.light.background);
+    expect(splash.dark.backgroundColor).toBe(colors.dark.background);
   });
+});
+
+// [foreground, background] pairs used for text: each must meet 4.5:1.
+// `levelLow` and `levelEmpty` are graphics only and are deliberately not listed.
+const TEXT_PAIRS = [
+  ['text', 'background'],
+  ['text', 'surface'],
+  ['mutedText', 'background'],
+  ['mutedText', 'surface'],
+  ['primary', 'background'],
+  ['primary', 'surface'],
+  ['primary', 'primarySubtle'],
+  ['mutedText', 'primarySubtle'],
+  ['onPrimary', 'primary'],
+  ['danger', 'background'],
+  ['danger', 'surface'],
+  ['danger', 'dangerSubtle'],
+  ['expiringSoon', 'background'],
+  ['expiringSoon', 'surface'],
+  ['expiringSoon', 'expiringSubtle'],
+] as const;
+
+describe.each(['light', 'dark'] as const)('contrast in %s mode', (scheme) => {
+  test.each(TEXT_PAIRS)('%s on %s is at least 4.5:1', (fg, bg) => {
+    const c = colors[scheme];
+    expect(contrast(c[fg], c[bg])).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+describe('type, radii and spacing', () => {
+  test('the type scale matches the designs', () => {
+    const scale = Object.fromEntries(
+      Object.entries(typography).map(([name, style]) => [
+        name,
+        [style.fontSize, style.lineHeight, style.fontWeight],
+      ]),
+    );
+    expect(scale).toEqual({
+      heading: [28, 34, '700'],
+      title: [20, 26, '700'],
+      body: [16, 24, '400'],
+      label: [15, 20, '600'],
+      caption: [13, 18, '400'],
+      overline: [13, 18, '700'],
+    });
+    expect(typography.overline).toMatchObject({ textTransform: 'uppercase', letterSpacing: 0.6 });
+  });
+
+  test.each(Object.keys(typography) as (keyof typeof typography)[])(
+    '%s names the Figtree face for its weight',
+    (name) => {
+      const style = typography[name];
+      // On web the face is followed by a system-font fallback stack.
+      const face = style.fontFamily.split(',')[0].trim();
+      expect(face).toBe(fontFaces[style.fontWeight]);
+      expect(face).toMatch(new RegExp(`^Figtree_${style.fontWeight}[A-Za-z]+$`));
+    },
+  );
+
+  test('heading, title and overline use the 700 face; body the 400 and label the 600 face', () => {
+    for (const name of ['heading', 'title', 'overline'] as const) {
+      expect(typography[name].fontFamily).toBe('Figtree_700Bold');
+    }
+    expect(typography.body.fontFamily).toBe('Figtree_400Regular');
+    expect(typography.caption.fontFamily).toBe('Figtree_400Regular');
+    expect(typography.label.fontFamily).toBe('Figtree_600SemiBold');
+  });
+
+  test('radii include card and spacing is unchanged', () => {
+    expect(radii).toEqual({ sm: 6, md: 10, card: 12, lg: 16, pill: 999 });
+    expect(spacing).toEqual({ xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 });
+  });
+});
+
+describe('theme on screen', () => {
 
   test('in dark mode the screen and heading use dark background and light text', async () => {
     mockUseColorScheme.mockReturnValue('dark');
@@ -92,6 +190,7 @@ describe('theme', () => {
 
     const heading = screen.getByRole('heading', { name: 'Pantry' });
     expect(StyleSheet.flatten(heading.props.style).color).toBe(colors.dark.text);
+    expect(StyleSheet.flatten(heading.props.style).fontFamily).toBe('Figtree_700Bold');
     expect(screen.getByTestId('bottom-tab-bar')).toHaveStyle({ backgroundColor: colors.dark.surface });
     // Themed styles must survive <Link asChild> (a style function on the child is dropped).
     expect(screen.getByTestId('add-item-button')).toHaveStyle({ backgroundColor: colors.dark.primary });
