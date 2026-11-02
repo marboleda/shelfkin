@@ -4,7 +4,7 @@
 
 Product decisions are in [plan.md](plan.md) and the schema is in [data-model.md](data-model.md). The repository layout (set up in task 1) is: `api/` for the Go API, `app/` for the Expo app (web, iOS, Android), `api/db/migrations/` for SQL migrations, and `openapi/` for the API spec. Every task should leave the full test suite passing.
 
-All tasks except task 23 have moved to GitHub issues, where they are tracked. Task numbers after 22 differ from issue numbers.
+All tasks except task 23 (screen designs, now done) have moved to GitHub issues, where they are tracked. Task numbers after 22 differ from issue numbers.
 
 | Task | Issue | Title |
 |---|---|---|
@@ -52,8 +52,9 @@ All tasks except task 23 have moved to GitHub issues, where they are tracked. Ta
 
 ## Not tracked in GitHub
 
-Screen designs are handled separately.
+Screen designs were handled separately and are done.
 
 ### 23. Screen designs
+Status: Done. The designs, tokens and notes are recorded in [designs.md](designs.md), and the tokens are applied to the app theme by [#44](https://github.com/marboleda/shelfkin/issues/44).
 Goal: Agreed wireframes and a visual direction for every v1 screen.
 Description: Design the sign-in, onboarding (create or join household), pantry list (grouped rows, location/category toggle, filters, expiry highlighting), add item, entry detail/edit, household settings and notification settings screens for phone and desktop widths. Define a small set of design tokens (colors, type scale, spacing) that is clean and simple but pleasant. Record the result in `docs/` (images or links plus notes).
