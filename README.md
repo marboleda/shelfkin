@@ -70,6 +70,7 @@ The API server is `api/main.go`. It reads its configuration from environment var
 | `DATABASE_URL` | Yes | None | Postgres connection string, as a URL (`postgres://user:password@host:port/db?sslmode=...`) or `key=value` pairs. If it sets no `connect_timeout`, each new connection gives up after 5s |
 | `PORT` | No | `8080` | Port to listen on, 1 to 65535. Cloud Run sets it |
 | `LOG_LEVEL` | No | `info` | `debug`, `info`, `warn` or `error` |
+| `CORS_ALLOWED_ORIGINS` | No | `http://localhost:8081` (the Expo web dev server) | Comma-separated browser origins allowed to call the API, each `http(s)://host[:port]` with no path, for example `https://shelfkin.web.app,https://shelfkin.firebaseapp.com`. Setting it replaces the default. `*` and wildcards are rejected |
 
 An empty variable counts as unset. If a variable is missing or invalid, the server logs one line naming it and exits with code 1. The database password is never logged. Every occurrence of the password in a log line is replaced with `[REDACTED]`; with the local credentials, where the password is the same as the user name, `shelfkin` is redacted wherever it appears.
 
@@ -93,6 +94,20 @@ $env:DATABASE_URL = 'postgres://shelfkin:shelfkin@localhost:5432/shelfkin?sslmod
 ```
 
 Change `5432` if you set `SHELFKIN_DB_PORT`. Check it with `curl http://localhost:8080/health`, which returns `{"status":"ok"}`, or 503 with code `database_unavailable` if the database does not answer within 2s. The server starts even when the database is down. Logs are JSON lines on stdout: a `listening` line with the port, one `request` line per request (method, path, status, `duration_ms`), and a `stopped` line after shutdown. Ctrl+C (or SIGTERM) stops it gracefully: it stops accepting connections, gives in-flight requests up to 9s to finish, closes the database pool and exits 0.
+
+### CORS
+
+The web app is served from a different origin than the API, so the API sends CORS headers. For a request whose `Origin` is in `CORS_ALLOWED_ORIGINS`, every response (including 4xx and 5xx errors, so the app can read the error body) carries `Access-Control-Allow-Origin` set to that origin and `Vary: Origin`. A preflight (`OPTIONS` with `Access-Control-Request-Method`) from an allowed origin gets 204, allowing the methods `GET`, `POST`, `PATCH` and `DELETE` and the headers `Authorization` and `Content-Type`, cached for 10 minutes. Requests from any other origin are still served but get no CORS headers, so the browser does not let the page read the response. `*` is never sent, because requests carry a bearer token; `Access-Control-Allow-Credentials` is not sent either, since auth does not use cookies.
+
+Locally the default allows `npx expo start --web` on `http://localhost:8081`. If you run Expo web on another port or open it as `http://127.0.0.1:8081`, set `CORS_ALLOWED_ORIGINS` to that origin (setting it replaces the default, so list `http://localhost:8081` too if you still need it).
+
+In production set it to both Firebase Hosting origins of the web app:
+
+```
+CORS_ALLOWED_ORIGINS=https://<hosting_site_id>.web.app,https://<hosting_site_id>.firebaseapp.com
+```
+
+which is `https://shelfkin.web.app,https://shelfkin.firebaseapp.com` for the site ID in [Infrastructure](#infrastructure). Terraform sets this on the `shelfkin-api` Cloud Run service (`infra/run.tf`). Add any custom domain here if one is added later.
 
 ## API spec and generated code
 
