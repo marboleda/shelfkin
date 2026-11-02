@@ -31,6 +31,18 @@ const (
 	locSpiceRack = 4
 )
 
+// newEmptyCatalogDB returns a fresh, fully migrated database with the seeded
+// built-in catalog (#8) removed, so these schema tests control every
+// catalog_items row. The seed itself is tested in catalog_seed_test.go.
+func newEmptyCatalogDB(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	pool := dbtest.New(t)
+	if _, err := pool.Exec(t.Context(), `DELETE FROM catalog_items WHERE household_id IS NULL`); err != nil {
+		t.Fatalf("removing seeded built-in items: %v", err)
+	}
+	return pool
+}
+
 func addItem(pool *pgxpool.Pool, t *testing.T, householdID, name any, category, location int, shelfLife any) (string, error) {
 	var id string
 	err := pool.QueryRow(t.Context(),
@@ -109,7 +121,7 @@ func int32p(v int32) *int32 { return &v }
 
 func TestCatalogTablesColumns(t *testing.T) {
 	t.Parallel()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 
 	tests := map[string][]column{
 		"catalog_items": {
@@ -152,7 +164,7 @@ func TestCatalogTablesColumns(t *testing.T) {
 
 func TestCatalogTablesConstraints(t *testing.T) {
 	t.Parallel()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 
 	rows, err := pool.Query(t.Context(), `
 		SELECT conrelid::regclass::text, pg_get_constraintdef(oid)
@@ -193,7 +205,7 @@ func TestCatalogTablesConstraints(t *testing.T) {
 func TestCatalogIndexesAndExtension(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 
 	rows, err := pool.Query(ctx, `
 		SELECT pg_get_indexdef(indexrelid)
@@ -235,7 +247,7 @@ func TestCatalogIndexesAndExtension(t *testing.T) {
 func TestCatalogItemDefaults(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 
 	id := mustAddItem(t, pool, nil, "Flour", catBaking, locPantry, nil)
 	var version int
@@ -270,7 +282,7 @@ func TestCatalogItemDefaults(t *testing.T) {
 
 func TestCatalogBuiltInNamesUniqueIgnoringCase(t *testing.T) {
 	t.Parallel()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 
 	mustAddItem(t, pool, nil, "Milk", catDairy, locFridge, 7)
 	_, err := addItem(pool, t, nil, "milk", catDairy, locFridge, 7)
@@ -279,7 +291,7 @@ func TestCatalogBuiltInNamesUniqueIgnoringCase(t *testing.T) {
 
 func TestCatalogCustomNamesUniqueIgnoringCasePerHousehold(t *testing.T) {
 	t.Parallel()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 	home := insertHousehold(t, pool, "Home", nil)
 
 	mustAddItem(t, pool, home, "Oat milk", catDairy, locFridge, nil)
@@ -289,7 +301,7 @@ func TestCatalogCustomNamesUniqueIgnoringCasePerHousehold(t *testing.T) {
 
 func TestCatalogCustomNameInTwoHouseholds(t *testing.T) {
 	t.Parallel()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 	home := insertHousehold(t, pool, "Home", nil)
 	cabin := insertHousehold(t, pool, "Cabin", nil)
 
@@ -301,7 +313,7 @@ func TestCatalogCustomNameInTwoHouseholds(t *testing.T) {
 // it (#18).
 func TestCatalogCustomNameMatchingBuiltInAllowedByDatabase(t *testing.T) {
 	t.Parallel()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 	home := insertHousehold(t, pool, "Home", nil)
 
 	mustAddItem(t, pool, nil, "Milk", catDairy, locFridge, 7)
@@ -311,7 +323,7 @@ func TestCatalogCustomNameMatchingBuiltInAllowedByDatabase(t *testing.T) {
 func TestCatalogUnknownReferences(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 
 	_, err := addItem(pool, t, nil, "Mystery", 999, locPantry, nil)
 	wantSQLState(t, err, sqlStateForeignKey, "unknown category")
@@ -333,7 +345,7 @@ func TestCatalogUnknownReferences(t *testing.T) {
 
 func TestCatalogRequiredColumns(t *testing.T) {
 	t.Parallel()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 
 	_, err := addItem(pool, t, nil, nil, catBaking, locPantry, nil)
 	wantSQLState(t, err, sqlStateNotNull, "null name")
@@ -346,7 +358,7 @@ func TestCatalogRequiredColumns(t *testing.T) {
 func TestDeletingOverrideUserSetsNull(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 	sam := insertUser(t, pool, "fb-sam")
 	home := insertHousehold(t, pool, "Home", nil)
 	flour := mustAddItem(t, pool, nil, "Flour", catBaking, locPantry, nil)
@@ -365,7 +377,7 @@ func TestDeletingOverrideUserSetsNull(t *testing.T) {
 
 func TestEffectiveCatalogFallback(t *testing.T) {
 	t.Parallel()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 	a := insertHousehold(t, pool, "A", nil)
 	b := insertHousehold(t, pool, "B", nil)
 	milk := mustAddItem(t, pool, nil, "Milk", catDairy, locFridge, 7)
@@ -402,7 +414,7 @@ func TestEffectiveCatalogFallback(t *testing.T) {
 
 func TestEffectiveCatalogCustomItems(t *testing.T) {
 	t.Parallel()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 	a := insertHousehold(t, pool, "A", nil)
 	b := insertHousehold(t, pool, "B", nil)
 	mustAddItem(t, pool, nil, "Salt", catBaking, locSpiceRack, nil)
@@ -432,7 +444,7 @@ func TestEffectiveCatalogCustomItems(t *testing.T) {
 func TestDeletingHouseholdRemovesCatalogRows(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 	a := insertHousehold(t, pool, "A", nil)
 	b := insertHousehold(t, pool, "B", nil)
 	milk := mustAddItem(t, pool, nil, "Milk", catDairy, locFridge, 7)
@@ -471,7 +483,7 @@ func TestDeletingHouseholdRemovesCatalogRows(t *testing.T) {
 func TestDeletingBuiltInItemRemovesOverrides(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 	a := insertHousehold(t, pool, "A", nil)
 	milk := mustAddItem(t, pool, nil, "Milk", catDairy, locFridge, 7)
 	setOverride(t, pool, a, milk, catProduce, nil)
@@ -509,7 +521,7 @@ func (n planNode) walk(f func(planNode)) {
 func TestEffectiveCatalogPlanFiltersHouseholdFirst(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pool := dbtest.New(t)
+	pool := newEmptyCatalogDB(t)
 
 	// 50 households, 30 built-ins, 3 custom items and 5 overrides each.
 	builtIns := make([]string, 30)
