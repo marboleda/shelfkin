@@ -11,9 +11,11 @@
 
 import createClient, { type Client } from 'openapi-fetch';
 
+import { endSession } from '@/auth/session';
+
 import { apiConfig, normalizeBaseUrl } from './config';
 import { ApiError, errorFromResponse } from './errors';
-import { getRequestHeaders, type RequestHeaders } from './headers';
+import { getRequestHeaders, type RequestHeaderOptions, type RequestHeaders } from './headers';
 import type { paths } from './schema';
 
 /** A request that gets no response in this time fails as a `network` error. */
@@ -24,18 +26,24 @@ export type ApiClient = Client<paths>;
 type ApiClientOptions = {
   baseUrl: string;
   /** Headers added to every request. Defaults to `getRequestHeaders` in headers.ts. */
-  getHeaders?: () => RequestHeaders | Promise<RequestHeaders>;
+  getHeaders?: (options?: RequestHeaderOptions) => RequestHeaders | Promise<RequestHeaders>;
+  /**
+   * Called when a request with an `Authorization` header gets a 401 even after
+   * retrying with a freshly refreshed token. Defaults to `endSession` (sign out).
+   */
+  onUnauthorized?: () => void | Promise<void>;
   timeoutMs?: number;
 };
 
 export function createApiClient({
   baseUrl,
   getHeaders = getRequestHeaders,
+  onUnauthorized = endSession,
   timeoutMs = REQUEST_TIMEOUT_MS,
 }: ApiClientOptions): ApiClient {
   const client = createClient<paths>({
     baseUrl: normalizeBaseUrl(baseUrl),
-    fetch: (req) => fetchWithTimeout(req, timeoutMs),
+    fetch: (req) => fetchWithAuthRetry(req, { getHeaders, onUnauthorized, timeoutMs }),
   });
   client.use({
     async onRequest({ request }) {
@@ -47,6 +55,48 @@ export function createApiClient({
     },
   });
   return client;
+}
+
+/**
+ * Sends the request. When a signed-in request gets a 401, the token may have
+ * just been revoked or expired: get a new token, retry once, and if the API
+ * still says 401, call `onUnauthorized` (which signs the user out).
+ */
+async function fetchWithAuthRetry(
+  request: Request,
+  {
+    getHeaders,
+    onUnauthorized,
+    timeoutMs,
+  }: Required<Pick<ApiClientOptions, 'getHeaders' | 'onUnauthorized' | 'timeoutMs'>>,
+): Promise<Response> {
+  // Clone before sending: sending reads the body, and the retry needs it again.
+  const retry = request.headers.has('Authorization') ? request.clone() : null;
+  const response = await fetchWithTimeout(request, timeoutMs);
+  if (response.status !== 401 || !retry) return response;
+
+  let headers: RequestHeaders;
+  try {
+    headers = await getHeaders({ forceRefresh: true });
+  } catch {
+    return response;
+  }
+  if (!headers.Authorization) {
+    // Signed out meanwhile: nothing to retry with.
+    return response;
+  }
+  for (const [name, value] of Object.entries(headers)) {
+    retry.headers.set(name, value);
+  }
+  const retried = await fetchWithTimeout(retry, timeoutMs);
+  if (retried.status === 401) {
+    // Not awaited: a before-sign-out task may itself call the API, and waiting
+    // here for the sign-out it is part of would never finish.
+    Promise.resolve()
+      .then(onUnauthorized)
+      .catch(() => {});
+  }
+  return retried;
 }
 
 /** Statuses whose responses cannot have a body. */

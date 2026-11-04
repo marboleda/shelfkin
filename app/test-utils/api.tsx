@@ -2,6 +2,7 @@
 // reaches a real server, and an unhandled request fails the test.
 
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query';
+import type { RequestHandler } from 'msw';
 import { setupServer } from 'msw/node';
 import type { ReactNode } from 'react';
 
@@ -15,9 +16,13 @@ export function apiUrl(path: string): string {
   return `${API_URL}${path}`;
 }
 
-/** Starts an MSW server for the test file and resets its handlers after each test. */
-export function setupApiServer() {
-  const server = setupServer();
+/**
+ * Starts an MSW server for the test file and resets its handlers after each
+ * test. `handlers` stay in place for every test (see `signedInApiHandlers` in
+ * test-utils/auth.ts); `server.use()` adds more for one test.
+ */
+export function setupApiServer(...handlers: RequestHandler[]) {
+  const server = setupServer(...handlers);
   beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));
   afterEach(() => server.resetHandlers());
   afterAll(() => server.close());
