@@ -1,0 +1,23 @@
+# Keep the build context to the Go sources the image needs (see Dockerfile).
+
+# Build and test output
+bin/
+*.exe
+*.test
+*.out
+coverage.*
+
+# Local env files and secrets
+.env
+.env.*
+
+# Editors, OS, VCS
+.git
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Not needed inside the image
+Dockerfile
+.dockerignore

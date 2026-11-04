@@ -331,6 +331,109 @@ This sets the new password on the Cloud SQL user and replaces the secret version
 
 Cloud SQL has deletion protection on, so `terraform destroy` fails until it is turned off. Set both `deletion_protection = false` and `settings.deletion_protection_enabled = false` in `infra/database.tf`, run `terraform apply`, then `terraform destroy`. This deletes the database and its backups. A deleted Workload Identity pool keeps its ID reserved for 30 days. The state bucket, the project and its billing link are not managed by Terraform.
 
+## Deploying the API
+
+`.github/workflows/deploy-api.yml` builds the API image, runs the migrations on Cloud SQL and deploys `shelfkin-api` to Cloud Run. It authenticates with Workload Identity Federation as `github-deployer`; it uses the Actions variables from [Outputs to GitHub Actions and EAS variables](#outputs-to-github-actions-and-eas-variables) (`GCP_PROJECT_ID`, `GCP_REGION`, `GCP_WIF_PROVIDER`, `GCP_DEPLOYER_SA`, `API_URL`) and no secrets.
+
+### What triggers a deploy
+
+- **Automatically**, when the `CI` workflow succeeds for a push to `main`. It deploys the exact commit CI tested. A failed CI run, a pull request (including from a fork) or any other branch deploys nothing.
+- **By hand**: Actions > Deploy API > Run workflow, on `main` (or `gh workflow run deploy-api.yml --ref main`). It deploys the commit `main` points to. Other branches are refused.
+
+Only one deploy runs at a time and a running one is never cancelled, so a migration is never stopped half way. If several commits land while a deploy runs, only the newest waits; and a run whose commit is no longer the tip of `main` (for example when CI runs finish out of order) skips itself, since the newer commit deploys on its own.
+
+### What a deploy does
+
+1. Builds `api/Dockerfile` and pushes it to Artifact Registry as `<region>-docker.pkg.dev/<project>/shelfkin/api:<full commit SHA>`.
+2. Points the `shelfkin-migrate` job at the new image and runs `migrate up` with `--wait`, logged in as `shelfkin_migrator`. After the migrations it grants `shelfkin_app` to `shelfkin_api` (see [Database roles](#database-roles-in-production)); this changes nothing once done. If anything fails, the workflow stops and the API is **not** deployed.
+3. Deploys `shelfkin-api` with the new image. Only the image changes: env vars, secrets, scaling and the startup probe stay as Terraform set them. If the new revision fails its startup probe (`GET /health`), Cloud Run keeps serving the previous revision and the workflow fails. Traffic is then sent to the latest revision, which also undoes an earlier rollback.
+4. Smoke checks: `GET <API_URL>/health` must return 200 with `{"status":"ok"}` and `GET <API_URL>/me` without a token must return 401 in the `Error` format. Either failing fails the workflow (the new revision is already serving then; roll back below if needed).
+
+The job and the migrate binary are chosen per execution (`gcloud run jobs execute --args=/usr/local/bin/migrate,up --update-env-vars=API_DB_ROLE=shelfkin_api`), so the job's definition stays as Terraform made it apart from its image, which Terraform ignores.
+
+### Where to watch it
+
+- The run in GitHub Actions (Actions > Deploy API). Its summary shows the commit SHA, the image digest and the Cloud Run revision.
+- Migration output: Cloud Run > Jobs > `shelfkin-migrate` > Executions, or `gcloud run jobs executions list --job shelfkin-migrate --region "$REGION"` and the execution's logs.
+- The service: Cloud Run > `shelfkin-api` > Revisions and Logs, or `gcloud run services describe shelfkin-api --region "$REGION"`.
+
+Viewing needs Viewer, Cloud Run Viewer and Logs Viewer on the project.
+
+### Rolling back
+
+Send traffic back to the previous revision:
+
+```sh
+gcloud run revisions list --service shelfkin-api --region "$REGION"   # find the last good one
+gcloud run services update-traffic shelfkin-api --region "$REGION" --to-revisions=<revision>=100
+```
+
+The next deploy sends traffic to its new revision again.
+
+**Migrations are forward-only and are never rolled back**, by a deploy or by hand. Rolling back the API leaves the newer schema in place, so every migration must keep the previous release working: add first (new tables, nullable or defaulted columns), and remove or rename only in a later release, once nothing uses the old shape.
+
+### Running the migrate job by hand
+
+Always through the job, so migrations run as `shelfkin_migrator`. Never run migrations by hand as `postgres` or another admin user: `shelfkin_migrator` must own every table and the `SECURITY DEFINER` helpers (#10), which only work when they run as the owner of `household_members`.
+
+```sh
+# Show every migration and whether it is applied
+gcloud run jobs execute shelfkin-migrate --region "$REGION" --wait --args=/usr/local/bin/migrate,status
+```
+
+The output is in the execution's logs.
+
+### Database roles in production
+
+The API and the expiry job log in as `shelfkin_api`, which must be able to do **less** than `shelfkin_app` on its own: `dbtx` runs `SET LOCAL ROLE shelfkin_app`, and SQL in that transaction could run `RESET ROLE`. After every `migrate up`, the grant step (`api/cmd/migrate/grant.go`, enabled by `API_DB_ROLE`):
+
+- grants `shelfkin_app` to `shelfkin_api` `WITH INHERIT FALSE, SET TRUE` if it is not granted yet (or fixes the options), so `shelfkin_api` has `shelfkin_app`'s privileges only after `SET ROLE` and none after `RESET ROLE`. This needs `shelfkin_migrator` to have `ADMIN` on `shelfkin_app`, which it has because the #10 migration created the role as that user;
+- tries to revoke any other role membership and the `CREATEDB`, `CREATEROLE` and `BYPASSRLS` attributes;
+- then **fails** (and the API is not deployed) if `shelfkin_api` is a superuser, has any of those attributes, is a member of any role but `shelfkin_app`, or owns or was granted anything in the database.
+
+Cloud SQL creates built-in users with `CREATEDB` and `CREATEROLE` and as members of `cloudsqlsuperuser`, and `shelfkin_migrator` is probably not allowed to undo that. If the first deploy fails with "shelfkin_api can do more than shelfkin_app", do this once as an admin and rerun the deploy:
+
+```sh
+# Set a password for the built-in postgres user (only needed once)
+gcloud sql users set-password postgres --instance shelfkin --prompt-for-password
+
+# Connect through the Cloud SQL Auth Proxy (the instance accepts no direct connections)
+cloud-sql-proxy "$(terraform -chdir=infra output -raw cloudsql_connection_name)" --port 5433 &
+psql "host=127.0.0.1 port=5433 user=postgres dbname=shelfkin"
+```
+
+```sql
+REVOKE cloudsqlsuperuser FROM shelfkin_api;
+ALTER ROLE shelfkin_api NOCREATEDB NOCREATEROLE;
+```
+
+Do not create or change any table as `postgres`.
+
+### Production checks after the first deploy
+
+Run these once, connected as above, and record the results on the deploy issue:
+
+```sql
+-- Only shelfkin_app
+SELECT r.rolname FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid
+WHERE m.member = 'shelfkin_api'::regrole;
+
+-- All false
+SELECT rolsuper, rolcreatedb, rolcreaterole, rolbypassrls FROM pg_roles WHERE rolname = 'shelfkin_api';
+
+-- Every table is owned by shelfkin_migrator, none by shelfkin_api (or \dt)
+SELECT tableowner, count(*) FROM pg_tables WHERE schemaname = 'public' GROUP BY tableowner;
+
+-- Both helpers and household_members owned by shelfkin_migrator
+SELECT proname, pg_get_userbyid(proowner) FROM pg_proc WHERE proname LIKE 'app_user_%';
+SELECT tableowner FROM pg_tables WHERE tablename = 'household_members';
+
+-- f: no FORCE ROW LEVEL SECURITY
+SELECT relforcerowsecurity FROM pg_class WHERE relname = 'household_members';
+```
+
+Then, logged in as `shelfkin_api` (its password is in the `api-database-url` secret), `BEGIN; SET LOCAL ROLE shelfkin_app; RESET ROLE; SELECT FROM household_members;` and the same with `users` must both fail with `permission denied` (42501). Also check that the migrate job's `status` command shows every migration applied, and that the `api-database-url` secret names `shelfkin_api` (the API's log shows no `shelfkin_migrator`).
+
 ## Docs
 
 - [Product plan](docs/plan.md)
