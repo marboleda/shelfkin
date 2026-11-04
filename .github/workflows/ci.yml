@@ -37,11 +37,20 @@ jobs:
           --health-retries 30
     env:
       TEST_DATABASE_URL: postgres://shelfkin:shelfkin@localhost:5432/shelfkin?sslmode=disable
+      # The auth emulator integration tests fail (never skip) without it.
+      TEST_AUTH_EMULATOR_HOST: localhost:9099
     defaults:
       run:
         working-directory: api
     steps:
       - uses: actions/checkout@v7
+
+      # The Firebase Auth emulator, from the same compose.yaml service as
+      # local development. Service containers cannot build an image, so it
+      # is started as a step; --wait returns once its healthcheck passes.
+      - name: Start the Firebase Auth emulator
+        working-directory: .
+        run: docker compose up --detach --wait auth
 
       - name: Set up Go
         uses: actions/setup-go@v7
