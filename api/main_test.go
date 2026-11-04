@@ -84,4 +84,3 @@ func TestRunConfigErrors(t *testing.T) {
 		})
 	}
 }
-

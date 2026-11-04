@@ -8,6 +8,7 @@ require (
 	github.com/oapi-codegen/runtime v1.8.0
 	github.com/pressly/goose/v3 v3.29.0
 	google.golang.org/api v0.279.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -114,7 +115,6 @@ require (
 	google.golang.org/grpc v1.84.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 tool (
