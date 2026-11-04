@@ -1,7 +1,8 @@
 // Route guards for the layouts. Screens never check auth themselves.
 
-import { Redirect, useGlobalSearchParams, usePathname } from 'expo-router';
-import type { ReactNode } from 'react';
+import { Redirect, useGlobalSearchParams, usePathname, useRouter } from 'expo-router';
+import { useEffect, type ReactNode } from 'react';
+import { View } from 'react-native';
 
 import { REDIRECT_PARAM, redirectTarget, signInHref } from './redirect';
 import { useAuth } from './session';
@@ -22,12 +23,28 @@ export function SignedInOnly({ children }: { children: ReactNode }) {
   return <Redirect href={auth.signedOutInSession ? '/sign-in' : signInHref(pathname)} />;
 }
 
-/** Renders /sign-in and /sign-up only for a signed-out user. A signed-in user goes on to the app. */
+/**
+ * Renders /sign-in and /sign-up only for a signed-out user. A signed-in user
+ * goes on to the route in the `redirect` parameter, or Pantry.
+ *
+ * Navigates from an effect rather than rendering `<Redirect>` in place of the
+ * screens: once the guest navigator unmounts, the `redirect` parameter is gone
+ * and the user would always land on Pantry.
+ */
 export function SignedOutOnly({ children }: { children: ReactNode }) {
   const auth = useAuth();
+  const router = useRouter();
   const params = useGlobalSearchParams<{ [REDIRECT_PARAM]?: string }>();
+  const signedIn = auth.status === 'signedIn';
+  const target = redirectTarget(params[REDIRECT_PARAM]);
 
-  if (auth.status === 'signedIn') return <Redirect href={redirectTarget(params[REDIRECT_PARAM])} />;
+  useEffect(() => {
+    if (signedIn) router.replace(target);
+    // Only when the user becomes signed in; `target` is read at that moment.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signedIn]);
+
   if (auth.status === 'loading') return null;
-  return children;
+  // Hidden, not unmounted, while the navigation above happens.
+  return <View style={{ flex: 1, display: signedIn ? 'none' : 'flex' }}>{children}</View>;
 }
