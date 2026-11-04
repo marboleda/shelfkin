@@ -109,6 +109,38 @@ CORS_ALLOWED_ORIGINS=https://<hosting_site_id>.web.app,https://<hosting_site_id>
 
 which is `https://shelfkin.web.app,https://shelfkin.firebaseapp.com` for the site ID in [Infrastructure](#infrastructure). Terraform sets this on the `shelfkin-api` Cloud Run service (`infra/run.tf`). Add any custom domain here if one is added later.
 
+## Expiry notification job
+
+`api/cmd/expiry-job` sends expiry push notifications. It runs once and exits, and is meant to run hourly as a Cloud Run job (#40). Each run handles every user with `push_enabled` and at least one push token whose local hour (from `users.timezone`, or UTC if that cannot be loaded) is 9, and sends them one push per household listing the items there that are not `out` and expire within 3 days (already expired ones included), via the [Expo Push API](https://docs.expo.dev/push-notifications/sending-notifications/). Each entry is announced to each user once per expiry date (recorded in `expiry_notifications`), so running it twice in the same hour sends nothing the second time. Each run also deletes `expiry_notifications` rows whose expiry date is more than 30 days ago.
+
+It reads `DATABASE_URL` and `LOG_LEVEL` like the API server (see [Running the API](#running-the-api)), plus:
+
+| Variable | Required | Default | What it is |
+|---|---|---|---|
+| `EXPO_PUSH_URL` | No | `https://exp.host/--/api/v2/push/send` | Expo's push endpoint. Override it to point at a fake server |
+| `EXPO_ACCESS_TOKEN` | No | None | Sent as a bearer token when set (Expo's enhanced push security). Never logged |
+
+Flags:
+
+| Flag | What it does |
+|---|---|
+| `--now 2026-10-27T13:00:00Z` | Run as of this time (RFC 3339) instead of now, to test or replay a run. 13:00 UTC in late October is 9:00 in Toronto |
+| `--dry-run` | Log each push that would be sent (user, household, title, body) and how many old rows would be deleted. Sends nothing and writes nothing |
+
+To try it against the local compose database without sending anything, in bash:
+
+```sh
+DATABASE_URL='postgres://shelfkin:shelfkin@localhost:5432/shelfkin?sslmode=disable' go -C api run ./cmd/expiry-job --dry-run --now 2026-10-27T13:00:00Z
+```
+
+or in PowerShell:
+
+```powershell
+$env:DATABASE_URL = 'postgres://shelfkin:shelfkin@localhost:5432/shelfkin?sslmode=disable'; go -C api run ./cmd/expiry-job --dry-run --now 2026-10-27T13:00:00Z
+```
+
+Without `--dry-run` it sends real pushes to the tokens in the database. Logs are JSON lines on stdout and never contain push tokens; outside dry runs they contain no item names either. Every run ends with one `expiry job finished` line with `users_processed`, `pushes_sent` (messages Expo accepted, one per household per device) and `failures` (users whose processing failed). The process exits 1 if any user failed, and 0 otherwise. A failure for one user (a database error, an Expo error after 3 retries of HTTP 429 or 5xx, or every token rejected) does not stop the others; that user's entries are not recorded and are tried again at their next 9am. Tokens Expo reports as `DeviceNotRegistered` are deleted. All database access runs as `shelfkin_app` through `api/internal/dbtx`, as the user being processed, so row-level security applies.
+
 ## API spec and generated code
 
 The API contract lives in one file, [`openapi/openapi.yaml`](openapi/openapi.yaml). Its `info.description` lists the shared conventions (IDs, timestamps, dates, error format, auth). Generated code:
