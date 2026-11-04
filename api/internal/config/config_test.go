@@ -124,7 +124,7 @@ func TestLoadInvalid(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg, err := Load(env(tt.vars))
+			cfg, err := LoadAPI(env(tt.vars))
 			if err == nil {
 				t.Fatalf("Load succeeded with %+v, want error", cfg)
 			}
@@ -147,7 +147,7 @@ func TestLoadInvalid(t *testing.T) {
 }
 
 func TestLoadNamesEveryBadVariable(t *testing.T) {
-	_, err := Load(env(map[string]string{PortEnv: "x", LogLevelEnv: "loud", FirebaseProjectIDEnv: ""}))
+	_, err := LoadAPI(env(map[string]string{PortEnv: "x", LogLevelEnv: "loud", FirebaseProjectIDEnv: ""}))
 	if err == nil {
 		t.Fatal("Load succeeded, want error")
 	}
@@ -196,5 +196,22 @@ func TestDefaultCORSOriginsNotShared(t *testing.T) {
 	cfg.CORSAllowedOrigins[0] = "changed"
 	if DefaultCORSAllowedOrigins[0] != "http://localhost:8081" {
 		t.Errorf("changing a Config changed DefaultCORSAllowedOrigins to %q", DefaultCORSAllowedOrigins)
+	}
+}
+
+// TestLoadFirebaseProjectOptional: only the API server (LoadAPI) needs
+// FIREBASE_PROJECT_ID; other programs sharing Load, such as the expiry job,
+// do not verify tokens.
+func TestLoadFirebaseProjectOptional(t *testing.T) {
+	vars := map[string]string{DatabaseURLEnv: validURL, FirebaseProjectIDEnv: ""}
+	cfg, err := Load(env(vars))
+	if err != nil {
+		t.Fatalf("Load without FIREBASE_PROJECT_ID: %v", err)
+	}
+	if cfg.FirebaseProjectID != "" {
+		t.Errorf("FirebaseProjectID = %q, want empty", cfg.FirebaseProjectID)
+	}
+	if _, err := LoadAPI(env(vars)); err == nil || !strings.Contains(err.Error(), FirebaseProjectIDEnv) {
+		t.Errorf("LoadAPI without FIREBASE_PROJECT_ID: err = %v, want it to name %s", err, FirebaseProjectIDEnv)
 	}
 }

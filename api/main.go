@@ -45,7 +45,7 @@ func main() {
 // run starts the server and blocks until ctx is cancelled (a shutdown
 // signal) and the server has stopped. It returns the process exit code.
 func run(ctx context.Context, getenv func(string) string, stdout io.Writer, shutdownTimeout time.Duration) int {
-	cfg, err := config.Load(getenv)
+	cfg, err := config.LoadAPI(getenv)
 	if err != nil {
 		// Config errors never contain the database password (see config.Error).
 		logging.New(stdout, slog.LevelInfo).Error(err.Error())

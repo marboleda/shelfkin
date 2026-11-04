@@ -74,10 +74,23 @@ var logLevels = map[string]slog.Level{
 	"error": slog.LevelError,
 }
 
-// Load reads the configuration using getenv (os.Getenv in production). An
-// empty variable counts as unset. It returns an *Error naming every invalid
+// LoadAPI reads the API server's configuration: everything Load reads, with
+// FIREBASE_PROJECT_ID required. It returns an *Error naming every invalid
 // variable.
+func LoadAPI(getenv func(string) string) (*Config, error) {
+	return load(getenv, true)
+}
+
+// Load reads the configuration using getenv (os.Getenv in production). An
+// empty variable counts as unset. FIREBASE_PROJECT_ID is optional here
+// (programs other than the API server, such as the expiry job, do not verify
+// tokens); the API server uses LoadAPI. It returns an *Error naming every
+// invalid variable.
 func Load(getenv func(string) string) (*Config, error) {
+	return load(getenv, false)
+}
+
+func load(getenv func(string) string, requireFirebase bool) (*Config, error) {
 	cfg := &Config{
 		Port:               DefaultPort,
 		LogLevel:           DefaultLogLevel,
@@ -95,10 +108,9 @@ func Load(getenv func(string) string) (*Config, error) {
 		cfg.Pool = pool
 	}
 
-	if raw := getenv(FirebaseProjectIDEnv); raw == "" {
+	cfg.FirebaseProjectID = getenv(FirebaseProjectIDEnv)
+	if requireFirebase && cfg.FirebaseProjectID == "" {
 		problems = append(problems, FirebaseProjectIDEnv+" is required")
-	} else {
-		cfg.FirebaseProjectID = raw
 	}
 	cfg.AuthEmulatorHost = getenv(AuthEmulatorHostEnv)
 
