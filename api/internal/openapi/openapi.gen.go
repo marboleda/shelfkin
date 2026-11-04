@@ -9,8 +9,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+
+	"github.com/oapi-codegen/runtime"
+	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
 // Defines values for HealthStatus.
@@ -37,7 +42,8 @@ type Error struct {
 type ErrorDetail struct {
 	// Code A stable, machine-readable error code, for example `bad_request`,
 	// `unauthorized`, `forbidden`, `not_found`, `method_not_allowed`,
-	// `internal` or `database_unavailable`.
+	// `internal`, `database_unavailable`, `invalid_display_name` or
+	// `invalid_timezone`.
 	//
 	//
 	// Example: not_found
@@ -57,14 +63,75 @@ type Health struct {
 // HealthStatus defines model for Health.Status.
 type HealthStatus string
 
+// Id A UUIDv7 identifier.
+//
+// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+type Id = openapi_types.UUID
+
+// UpdateMe Fields of the signed-in user to change. Omitted fields are unchanged.
+type UpdateMe struct {
+	// DisplayName Trimmed, then must be 1 to 50 characters.
+	//
+	// Example: Sam
+	DisplayName *string `json:"displayName,omitempty"`
+
+	// Timezone An IANA time zone name such as `America/Toronto`. `Local` is not accepted.
+	//
+	// Example: America/Toronto
+	Timezone *string `json:"timezone,omitempty"`
+}
+
+// User A Shelfkin user. Created on the user's first authenticated request:
+// `displayName` comes from the Firebase token's `name` claim, else the part
+// of the email before `@`, else `Shelfkin user`; `timezone` starts as `UTC`.
+// Later sign-ins update `email` from the token but never `displayName`.
+type User struct {
+	// DisplayName Shown to other household members, for example in "Set to Low by Sam". 1 to 50 characters.
+	//
+	// Example: Sam
+	DisplayName string `json:"displayName"`
+
+	// Email The email of the Firebase account, or null if it has none.
+	//
+	// Example: sam@example.com
+	Email *string `json:"email"`
+
+	// Id A UUIDv7 identifier.
+	//
+	// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+	Id Id `json:"id"`
+
+	// PushEnabled Whether the user has opted in to push notifications.
+	//
+	// Example: false
+	PushEnabled bool `json:"pushEnabled"`
+
+	// Timezone IANA time zone name, used to send expiry reminders at a sensible local time.
+	//
+	// Example: America/Toronto
+	Timezone string `json:"timezone"`
+}
+
 // InternalError The error format every endpoint uses.
 type InternalError = Error
+
+// Unauthorized The error format every endpoint uses.
+type Unauthorized = Error
+
+// PatchMeJSONRequestBody defines body for PatchMe for application/json ContentType.
+type PatchMeJSONRequestBody = UpdateMe
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// GetHealth Check that the API and its dependencies are up
 	// (GET /health)
 	GetHealth(w http.ResponseWriter, r *http.Request)
+	// GetMe Get the signed-in user's profile
+	// (GET /me)
+	GetMe(w http.ResponseWriter, r *http.Request)
+	// PatchMe Update the signed-in user's profile
+	// (PATCH /me)
+	PatchMe(w http.ResponseWriter, r *http.Request)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -81,6 +148,34 @@ func (siw *ServerInterfaceWrapper) GetHealth(w http.ResponseWriter, r *http.Requ
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetHealth(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetMe operation middleware
+func (siw *ServerInterfaceWrapper) GetMe(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetMe(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PatchMe operation middleware
+func (siw *ServerInterfaceWrapper) PatchMe(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PatchMe(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -211,11 +306,15 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	}
 
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/health", wrapper.GetHealth)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/me", wrapper.GetMe)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/me", wrapper.PatchMe)
 
 	return m
 }
 
 type InternalErrorJSONResponse Error
+
+type UnauthorizedJSONResponse Error
 
 type GetHealthRequestObject struct {
 }
@@ -266,11 +365,130 @@ func (response GetHealth503JSONResponse) VisitGetHealthResponse(w http.ResponseW
 	return err
 }
 
+type GetMeRequestObject struct {
+}
+
+type GetMeResponseObject interface {
+	VisitGetMeResponse(w http.ResponseWriter) error
+}
+
+type GetMe200JSONResponse User
+
+func (response GetMe200JSONResponse) VisitGetMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMe401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetMe401JSONResponse) VisitGetMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMe500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetMe500JSONResponse) VisitGetMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PatchMeRequestObject struct {
+	Body *PatchMeJSONRequestBody
+}
+
+type PatchMeResponseObject interface {
+	VisitPatchMeResponse(w http.ResponseWriter) error
+}
+
+type PatchMe200JSONResponse User
+
+func (response PatchMe200JSONResponse) VisitPatchMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PatchMe400JSONResponse Error
+
+func (response PatchMe400JSONResponse) VisitPatchMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PatchMe401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response PatchMe401JSONResponse) VisitPatchMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PatchMe500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response PatchMe500JSONResponse) VisitPatchMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// GetHealth Check that the API and its dependencies are up
 	// (GET /health)
 	GetHealth(ctx context.Context, request GetHealthRequestObject) (GetHealthResponseObject, error)
+	// GetMe Get the signed-in user's profile
+	// (GET /me)
+	GetMe(ctx context.Context, request GetMeRequestObject) (GetMeResponseObject, error)
+	// PatchMe Update the signed-in user's profile
+	// (PATCH /me)
+	PatchMe(ctx context.Context, request PatchMeRequestObject) (PatchMeResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -329,6 +547,64 @@ func (sh *strictHandler) GetHealth(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetHealthResponseObject); ok {
 		if err := validResponse.VisitGetHealthResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetMe operation middleware
+func (sh *strictHandler) GetMe(w http.ResponseWriter, r *http.Request) {
+	var request GetMeRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetMe(ctx, request.(GetMeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetMe")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetMeResponseObject); ok {
+		if err := validResponse.VisitGetMeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PatchMe operation middleware
+func (sh *strictHandler) PatchMe(w http.ResponseWriter, r *http.Request) {
+	var request PatchMeRequestObject
+
+	var body PatchMeJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		if !errors.Is(err, io.EOF) {
+			sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+			return
+		}
+	} else {
+		request.Body = &body
+	}
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PatchMe(ctx, request.(PatchMeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PatchMe")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PatchMeResponseObject); ok {
+		if err := validResponse.VisitPatchMeResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

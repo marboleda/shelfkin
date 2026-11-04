@@ -20,6 +20,12 @@ const (
 	// CORSAllowedOriginsEnv is a comma-separated list of browser origins
 	// (scheme://host[:port]) allowed to call the API.
 	CORSAllowedOriginsEnv = "CORS_ALLOWED_ORIGINS"
+	// FirebaseProjectIDEnv is the Firebase project whose ID tokens the API
+	// accepts.
+	FirebaseProjectIDEnv = "FIREBASE_PROJECT_ID"
+	// AuthEmulatorHostEnv (host:port) makes the API accept unsigned tokens
+	// from the Firebase Auth emulator. Never set it in production.
+	AuthEmulatorHostEnv = "FIREBASE_AUTH_EMULATOR_HOST"
 )
 
 // Defaults for the optional variables.
@@ -43,6 +49,11 @@ type Config struct {
 	// slash) allowed to call the API from a browser. Never empty and never
 	// "*".
 	CORSAllowedOrigins []string
+	// FirebaseProjectID is the project ID tokens must be issued for.
+	FirebaseProjectID string
+	// AuthEmulatorHost is FIREBASE_AUTH_EMULATOR_HOST, or "" when tokens
+	// must come from real Firebase.
+	AuthEmulatorHost string
 }
 
 // Error reports one or more invalid environment variables. Its message names
@@ -83,6 +94,13 @@ func Load(getenv func(string) string) (*Config, error) {
 	} else {
 		cfg.Pool = pool
 	}
+
+	if raw := getenv(FirebaseProjectIDEnv); raw == "" {
+		problems = append(problems, FirebaseProjectIDEnv+" is required")
+	} else {
+		cfg.FirebaseProjectID = raw
+	}
+	cfg.AuthEmulatorHost = getenv(AuthEmulatorHostEnv)
 
 	if raw := getenv(PortEnv); raw != "" {
 		port, err := strconv.Atoi(raw)

@@ -84,7 +84,7 @@ func assertNoCORS(t *testing.T, resp *http.Response) {
 
 func TestCORSAllowedOrigin(t *testing.T) {
 	logger, _ := newLogger()
-	url := serve(t, NewHandler(fakeAPI{okHealth}, logger, testOrigins))
+	url := serve(t, NewHandler(fakeAPI{okHealth}, denyAll, logger, testOrigins))
 	for _, origin := range testOrigins {
 		t.Run(origin, func(t *testing.T) {
 			resp, body := doWithHeaders(t, http.MethodGet, url+"/health", map[string]string{
@@ -104,7 +104,7 @@ func TestCORSAllowedOrigin(t *testing.T) {
 
 func TestCORSDisallowedOrigin(t *testing.T) {
 	logger, _ := newLogger()
-	url := serve(t, NewHandler(fakeAPI{okHealth}, logger, testOrigins))
+	url := serve(t, NewHandler(fakeAPI{okHealth}, denyAll, logger, testOrigins))
 	for _, origin := range []string{
 		"https://evil.example",
 		"https://shelfkin.web.app.evil.example",
@@ -131,7 +131,7 @@ func TestCORSDisallowedOrigin(t *testing.T) {
 
 func TestCORSNoOrigin(t *testing.T) {
 	logger, _ := newLogger()
-	url := serve(t, NewHandler(fakeAPI{okHealth}, logger, testOrigins))
+	url := serve(t, NewHandler(fakeAPI{okHealth}, denyAll, logger, testOrigins))
 	resp, _ := do(t, http.MethodGet, url+"/health")
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
@@ -141,7 +141,7 @@ func TestCORSNoOrigin(t *testing.T) {
 
 func TestCORSPreflightAllowedOrigin(t *testing.T) {
 	logger, logs := newLogger()
-	url := serve(t, NewHandler(fakeAPI{okHealth}, logger, testOrigins))
+	url := serve(t, NewHandler(fakeAPI{okHealth}, denyAll, logger, testOrigins))
 	// /health is GET-only and /households does not exist yet: a preflight is
 	// answered before routing, for any path.
 	for _, tc := range []struct{ path, method string }{
@@ -200,7 +200,7 @@ func TestCORSPreflightAllowedOrigin(t *testing.T) {
 
 func TestCORSPreflightDisallowedOrigin(t *testing.T) {
 	logger, _ := newLogger()
-	url := serve(t, NewHandler(fakeAPI{okHealth}, logger, testOrigins))
+	url := serve(t, NewHandler(fakeAPI{okHealth}, denyAll, logger, testOrigins))
 	resp, body := doWithHeaders(t, http.MethodOptions, url+"/health", map[string]string{
 		"Origin":                         "https://evil.example",
 		"Access-Control-Request-Method":  http.MethodGet,
@@ -213,7 +213,7 @@ func TestCORSPreflightDisallowedOrigin(t *testing.T) {
 
 func TestCORSPlainOptionsIsNotAPreflight(t *testing.T) {
 	logger, _ := newLogger()
-	url := serve(t, NewHandler(fakeAPI{okHealth}, logger, testOrigins))
+	url := serve(t, NewHandler(fakeAPI{okHealth}, denyAll, logger, testOrigins))
 	// No Access-Control-Request-Method: an ordinary OPTIONS request.
 	resp, body := doWithHeaders(t, http.MethodOptions, url+"/health", map[string]string{"Origin": allowedOrigin})
 	assertError(t, resp, body, http.StatusMethodNotAllowed, CodeMethodNotAllowed)
@@ -246,7 +246,7 @@ func TestCORSHeadersOnErrorResponses(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			url := serve(t, NewHandler(tt.ssi, logger, testOrigins))
+			url := serve(t, NewHandler(tt.ssi, denyAll, logger, testOrigins))
 			resp, body := doWithHeaders(t, tt.method, url+tt.path, map[string]string{"Origin": allowedOrigin})
 			assertError(t, resp, body, tt.status, tt.code)
 			assertAllowsOrigin(t, resp, allowedOrigin)
@@ -278,7 +278,7 @@ func TestCORSOnHandWrittenErrors(t *testing.T) {
 
 func TestCORSNoOriginsAllowed(t *testing.T) {
 	logger, _ := newLogger()
-	url := serve(t, NewHandler(fakeAPI{okHealth}, logger, nil))
+	url := serve(t, NewHandler(fakeAPI{okHealth}, denyAll, logger, nil))
 	resp, _ := doWithHeaders(t, http.MethodGet, url+"/health", map[string]string{"Origin": allowedOrigin})
 	assertNoCORS(t, resp)
 }

@@ -28,10 +28,11 @@ const (
 const ShutdownTimeout = 9 * time.Second
 
 // NewHandler returns the full HTTP handler: the routes generated from the
-// OpenAPI spec for ssi, wrapped in request logging, CORS for
-// allowedOrigins, panic recovery and Error-format 404 and 405 responses. No
-// routes are registered by hand.
-func NewHandler(ssi openapi.StrictServerInterface, logger *slog.Logger, allowedOrigins []string) http.Handler {
+// OpenAPI spec for ssi, each behind authentication with authn unless it is
+// in PublicRoutes, wrapped in request logging, CORS for allowedOrigins,
+// panic recovery and Error-format 404 and 405 responses. No routes are
+// registered by hand.
+func NewHandler(ssi openapi.StrictServerInterface, authn Authenticator, logger *slog.Logger, allowedOrigins []string) http.Handler {
 	badRequest := func(w http.ResponseWriter, _ *http.Request, err error) {
 		writeError(w, http.StatusBadRequest, CodeBadRequest, err.Error())
 	}
@@ -47,6 +48,7 @@ func NewHandler(ssi openapi.StrictServerInterface, logger *slog.Logger, allowedO
 	openapi.HandlerWithOptions(strict, openapi.StdHTTPServerOptions{
 		BaseRouter:       mux,
 		ErrorHandlerFunc: badRequest,
+		Middlewares:      []openapi.MiddlewareFunc{requireAuth(authn, logger)},
 	})
 
 	var h http.Handler = jsonFallbacks(mux)

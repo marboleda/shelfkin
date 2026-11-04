@@ -12,8 +12,20 @@ const (
 	validURL = "postgres://shelfkin:" + secret + "@localhost:5432/shelfkin?sslmode=disable"
 )
 
+const testProject = "demo-test"
+
+// env returns a getenv for vars. FIREBASE_PROJECT_ID is testProject unless
+// vars sets it (to "" to leave it unset).
 func env(vars map[string]string) func(string) string {
-	return func(k string) string { return vars[k] }
+	return func(k string) string {
+		if v, ok := vars[k]; ok {
+			return v
+		}
+		if k == FirebaseProjectIDEnv {
+			return testProject
+		}
+		return ""
+	}
 }
 
 func TestLoadDefaults(t *testing.T) {
@@ -29,6 +41,26 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.Pool == nil || cfg.Pool.ConnConfig.Host != "localhost" || cfg.Pool.ConnConfig.Database != "shelfkin" {
 		t.Errorf("Pool config not parsed from DATABASE_URL: %+v", cfg.Pool)
+	}
+	if cfg.FirebaseProjectID != testProject {
+		t.Errorf("FirebaseProjectID = %q, want %q", cfg.FirebaseProjectID, testProject)
+	}
+	if cfg.AuthEmulatorHost != "" {
+		t.Errorf("AuthEmulatorHost = %q, want empty when unset", cfg.AuthEmulatorHost)
+	}
+}
+
+func TestLoadFirebase(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		DatabaseURLEnv:       validURL,
+		FirebaseProjectIDEnv: "demo-shelfkin",
+		AuthEmulatorHostEnv:  "localhost:9099",
+	}))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.FirebaseProjectID != "demo-shelfkin" || cfg.AuthEmulatorHost != "localhost:9099" {
+		t.Errorf("got project %q emulator %q, want demo-shelfkin and localhost:9099", cfg.FirebaseProjectID, cfg.AuthEmulatorHost)
 	}
 }
 
@@ -71,6 +103,7 @@ func TestLoadInvalid(t *testing.T) {
 		wantVar string
 	}{
 		{"missing DATABASE_URL", map[string]string{}, DatabaseURLEnv},
+		{"missing FIREBASE_PROJECT_ID", map[string]string{DatabaseURLEnv: validURL, FirebaseProjectIDEnv: ""}, FirebaseProjectIDEnv},
 		{"unparseable DATABASE_URL: bad port", map[string]string{DatabaseURLEnv: "postgres://shelfkin:" + secret + "@localhost:notaport/shelfkin"}, DatabaseURLEnv},
 		{"unparseable DATABASE_URL: bad scheme-less URL", map[string]string{DatabaseURLEnv: "postgres://shelfkin:" + secret + "@[::1/shelfkin"}, DatabaseURLEnv},
 		{"unparseable DATABASE_URL: bad sslmode", map[string]string{DatabaseURLEnv: validURL + "&sslmode=bogus-" + secret}, DatabaseURLEnv},
@@ -114,11 +147,11 @@ func TestLoadInvalid(t *testing.T) {
 }
 
 func TestLoadNamesEveryBadVariable(t *testing.T) {
-	_, err := Load(env(map[string]string{PortEnv: "x", LogLevelEnv: "loud"}))
+	_, err := Load(env(map[string]string{PortEnv: "x", LogLevelEnv: "loud", FirebaseProjectIDEnv: ""}))
 	if err == nil {
 		t.Fatal("Load succeeded, want error")
 	}
-	for _, v := range []string{DatabaseURLEnv, PortEnv, LogLevelEnv} {
+	for _, v := range []string{DatabaseURLEnv, FirebaseProjectIDEnv, PortEnv, LogLevelEnv} {
 		if !strings.Contains(err.Error(), v) {
 			t.Errorf("error %q does not name %s", err, v)
 		}

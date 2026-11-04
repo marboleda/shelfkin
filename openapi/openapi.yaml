@@ -54,6 +54,60 @@ paths:
                 error:
                   code: database_unavailable
                   message: The database is unavailable.
+  /me:
+    get:
+      operationId: getMe
+      summary: Get the signed-in user's profile
+      description: |
+        Returns the caller's Shelfkin user. The first authenticated request from
+        a Firebase user creates it (see `User`).
+      responses:
+        '200':
+          description: The caller's profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      operationId: patchMe
+      summary: Update the signed-in user's profile
+      description: |
+        Updates `displayName` and/or `timezone`. Omitted fields are unchanged; an
+        empty body or `{}` changes nothing and returns the current profile.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMe'
+      responses:
+        '200':
+          description: The updated profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: |
+            The body is not valid JSON (code `bad_request`), `displayName` is not 1
+            to 50 characters after trimming (code `invalid_display_name`), or
+            `timezone` is not an IANA time zone name (code `invalid_timezone`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: invalid_timezone
+                  message: timezone must be an IANA time zone name such as America/Toronto.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
 components:
   securitySchemes:
     firebaseAuth:
@@ -95,7 +149,8 @@ components:
           description: |
             A stable, machine-readable error code, for example `bad_request`,
             `unauthorized`, `forbidden`, `not_found`, `method_not_allowed`,
-            `internal` or `database_unavailable`.
+            `internal`, `database_unavailable`, `invalid_display_name` or
+            `invalid_timezone`.
           type: string
           example: not_found
         message:
@@ -111,6 +166,51 @@ components:
           type: string
           enum:
             - ok
+    User:
+      description: |
+        A Shelfkin user. Created on the user's first authenticated request:
+        `displayName` comes from the Firebase token's `name` claim, else the part
+        of the email before `@`, else `Shelfkin user`; `timezone` starts as `UTC`.
+        Later sign-ins update `email` from the token but never `displayName`.
+      type: object
+      required:
+        - id
+        - displayName
+        - email
+        - timezone
+        - pushEnabled
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        displayName:
+          description: Shown to other household members, for example in "Set to Low by Sam". 1 to 50 characters.
+          type: string
+          example: Sam
+        email:
+          description: The email of the Firebase account, or null if it has none.
+          type: string
+          nullable: true
+          example: sam@example.com
+        timezone:
+          description: IANA time zone name, used to send expiry reminders at a sensible local time.
+          type: string
+          example: America/Toronto
+        pushEnabled:
+          description: Whether the user has opted in to push notifications.
+          type: boolean
+          example: false
+    UpdateMe:
+      description: Fields of the signed-in user to change. Omitted fields are unchanged.
+      type: object
+      properties:
+        displayName:
+          description: Trimmed, then must be 1 to 50 characters.
+          type: string
+          example: Sam
+        timezone:
+          description: An IANA time zone name such as `America/Toronto`. `Local` is not accepted.
+          type: string
+          example: America/Toronto
   responses:
     BadRequest:
       description: The request is malformed or fails validation.

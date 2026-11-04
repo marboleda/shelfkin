@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/marboleda/shelfkin/api/internal/db"
+	"github.com/marboleda/shelfkin/api/internal/dbtx"
 	"github.com/marboleda/shelfkin/api/internal/openapi"
 )
 
@@ -20,14 +21,24 @@ const CodeDatabaseUnavailable = "database_unavailable"
 // API implements the endpoints of the OpenAPI spec.
 type API struct {
 	queries *db.Queries
-	logger  *slog.Logger
+	// db opens the transactions of authenticated endpoints, through
+	// dbtx.WithUser.
+	db     dbtx.Beginner
+	logger *slog.Logger
+}
+
+// Pool is the database connection an API needs: plain queries (GET /health)
+// and transactions (everything else). *pgxpool.Pool satisfies it.
+type Pool interface {
+	db.DBTX
+	dbtx.Beginner
 }
 
 var _ openapi.StrictServerInterface = (*API)(nil)
 
-// NewAPI returns the API backed by conn, normally a *pgxpool.Pool.
-func NewAPI(conn db.DBTX, logger *slog.Logger) *API {
-	return &API{queries: db.New(conn), logger: logger}
+// NewAPI returns the API backed by pool, normally a *pgxpool.Pool.
+func NewAPI(pool Pool, logger *slog.Logger) *API {
+	return &API{queries: db.New(pool), db: pool, logger: logger}
 }
 
 // GetHealth reports whether the database answers a query within
