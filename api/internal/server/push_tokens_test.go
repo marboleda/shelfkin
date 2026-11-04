@@ -171,12 +171,6 @@ func (s *meServer) tokenRows(t *testing.T) map[string]tokenRow {
 	return m
 }
 
-// userID returns the caller's users.id through GET /me.
-func (s *meServer) userID(t *testing.T, caller string) string {
-	t.Helper()
-	return s.user(t, http.MethodGet, caller, "")["id"].(string)
-}
-
 const (
 	phoneToken  = "ExponentPushToken[phone-aaaaaaaaaaaaaaaa]"
 	tabletToken = "ExpoPushToken[tablet-bbbbbbbbbbbbbbbb]"
