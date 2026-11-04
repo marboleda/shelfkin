@@ -5,7 +5,8 @@
 //	go run ./cmd/migrate [up|down|status]
 //
 // It connects using DATABASE_URL, or the local compose database when that is
-// unset. From the repository root, use `npm run db:migrate` and
+// unset. When API_DB_ROLE is set, `up` also grants shelfkin_app to that login
+// role (see grantAppRole); the deploy workflow sets it to shelfkin_api. From the repository root, use `npm run db:migrate` and
 // `npm run db:status`.
 package main
 
@@ -27,7 +28,8 @@ import (
 
 const usage = `usage: migrate [up|down|status]
 
-  up      apply all pending migrations (default)
+  up      apply all pending migrations (default), then, when API_DB_ROLE is
+          set, grant shelfkin_app to that login role
   down    roll back the most recent migration
   status  list migrations and whether they are applied
 
@@ -35,15 +37,16 @@ Connects using DATABASE_URL, or the local compose database when it is unset.`
 
 func main() {
 	ctx := context.Background()
-	if err := run(ctx, os.Args[1:], os.Getenv("DATABASE_URL"), os.Stdout); err != nil {
+	if err := run(ctx, os.Args[1:], os.Getenv("DATABASE_URL"), os.Getenv(APIRoleEnv), os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "migrate:", err)
 		os.Exit(1)
 	}
 }
 
 // run executes one migrate command against the database at databaseURL. An
-// empty databaseURL means the local compose database.
-func run(ctx context.Context, args []string, databaseURL string, out io.Writer) error {
+// empty databaseURL means the local compose database. A non-empty apiRole
+// makes `up` grant shelfkin_app to that role after migrating.
+func run(ctx context.Context, args []string, databaseURL, apiRole string, out io.Writer) error {
 	cmd := "up"
 	switch len(args) {
 	case 0:
@@ -81,6 +84,11 @@ func run(ctx context.Context, args []string, databaseURL string, out io.Writer) 
 		}
 		for _, r := range results {
 			fmt.Fprintf(out, "Applied %s (%s)\n", r.Source.Path, r.Duration.Round(time.Millisecond))
+		}
+		if apiRole != "" {
+			if err := grantAppRole(ctx, sqlDB, apiRole, out); err != nil {
+				return err
+			}
 		}
 	case "down":
 		r, err := provider.Down(ctx)
