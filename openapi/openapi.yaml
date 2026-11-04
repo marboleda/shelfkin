@@ -76,8 +76,9 @@ paths:
       operationId: patchMe
       summary: Update the signed-in user's profile
       description: |
-        Updates `displayName` and/or `timezone`. Omitted fields are unchanged; an
-        empty body or `{}` changes nothing and returns the current profile.
+        Updates `displayName`, `timezone` and/or `pushEnabled`. Omitted fields are
+        unchanged; an empty body or `{}` changes nothing and returns the current
+        profile.
       requestBody:
         required: false
         content:
@@ -104,6 +105,75 @@ paths:
                 error:
                   code: invalid_timezone
                   message: timezone must be an IANA time zone name such as America/Toronto.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /me/push-tokens:
+    post:
+      operationId: registerPushToken
+      summary: Register or refresh this device's Expo push token
+      description: |
+        Registers `token` for the caller. The app calls this on every start:
+
+        - A token the caller already has is refreshed: its `lastSeenAt` (and
+          `platform`, if it changed) is updated and no new token is added.
+        - A token that belongs to another user moves to the caller, for example
+          when two people sign in on one device in turn.
+
+        A user can have several tokens, one per device. Pushes are only sent
+        when the user's `pushEnabled` is on.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterPushToken'
+      responses:
+        '200':
+          description: The registered token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PushToken'
+        '400':
+          description: |
+            The body is missing or not valid JSON (code `bad_request`), `token` is
+            not an Expo push token of at most 255 characters (code
+            `invalid_token`), or `platform` is not `ios`, `android` or `web`
+            (code `invalid_platform`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: invalid_token
+                  message: token must be an Expo push token such as ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx].
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /me/push-tokens/{token}:
+    delete:
+      operationId: deletePushToken
+      summary: Remove this device's Expo push token
+      description: |
+        Deletes the caller's `token`, for example on sign-out, so the device
+        gets no more pushes. A token that does not exist or belongs to another
+        user is left alone and still returns 204, so callers cannot remove or
+        detect another user's device.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          description: The Expo push token, URL-encoded (it contains `[` and `]`).
+          schema:
+            type: string
+          example: ExponentPushToken%5Bxxxxxxxxxxxxxxxxxxxxxx%5D
+      responses:
+        '204':
+          description: The caller no longer has this token.
         '401':
           $ref: '#/components/responses/Unauthorized'
         '500':
@@ -196,7 +266,11 @@ components:
           type: string
           example: America/Toronto
         pushEnabled:
-          description: Whether the user has opted in to push notifications.
+          description: |
+            Whether the user has opted in to expiry push notifications. Starts as
+            `false`. The setting is per user and covers all of their devices;
+            turning it off keeps their push tokens, so turning it back on needs no
+            re-registration.
           type: boolean
           example: false
     UpdateMe:
@@ -211,6 +285,49 @@ components:
           description: An IANA time zone name such as `America/Toronto`. `Local` is not accepted.
           type: string
           example: America/Toronto
+        pushEnabled:
+          description: Turns expiry push notifications on or off for all of the user's devices.
+          type: boolean
+          example: true
+    PushPlatform:
+      description: The platform of the device a push token belongs to.
+      type: string
+      enum:
+        - ios
+        - android
+        - web
+    RegisterPushToken:
+      description: A device's Expo push token to register for the signed-in user.
+      type: object
+      required:
+        - token
+        - platform
+      properties:
+        token:
+          description: |
+            An Expo push token, `ExponentPushToken[...]` or `ExpoPushToken[...]`,
+            at most 255 characters.
+          type: string
+          maxLength: 255
+          example: ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]
+        platform:
+          $ref: '#/components/schemas/PushPlatform'
+    PushToken:
+      description: A push token registered for the signed-in user.
+      type: object
+      required:
+        - token
+        - platform
+        - lastSeenAt
+      properties:
+        token:
+          type: string
+          example: ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]
+        platform:
+          $ref: '#/components/schemas/PushPlatform'
+        lastSeenAt:
+          # When the token was last registered or refreshed.
+          $ref: '#/components/schemas/Timestamp'
   responses:
     BadRequest:
       description: The request is malformed or fails validation.
