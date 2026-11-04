@@ -39,11 +39,11 @@ The API uses PostgreSQL 18, the newest major version Cloud SQL for PostgreSQL of
 
 | Command | What it does |
 |---|---|
-| `npm run db:up` | Start Postgres and wait until it is healthy |
+| `npm run db:up` | Start Postgres and the Firebase Auth emulator (see [Auth emulator](#auth-emulator)) and wait until both are healthy |
 | `npm run db:migrate` | Apply all pending migrations (safe to run again) |
 | `npm run db:status` | List migrations and when each was applied |
-| `npm run db:down` | Stop Postgres, keeping its data |
-| `npm run db:reset` | Stop Postgres and delete its data. Run `db:up` and `db:migrate` afterwards for a clean database |
+| `npm run db:down` | Stop Postgres (keeping its data) and the auth emulator |
+| `npm run db:reset` | Stop Postgres and the auth emulator and delete Postgres's data. Run `db:up` and `db:migrate` afterwards for a clean database |
 
 Environment variables:
 
@@ -52,6 +52,8 @@ Environment variables:
 | `SHELFKIN_DB_PORT` | `db:up`, and the local fallbacks below | `5432`. Set it (e.g. `55432`) if you already run Postgres locally |
 | `DATABASE_URL` | `db:migrate`, `db:status`, and the API server (see [Running the API](#running-the-api)) | The local compose database for `db:migrate` and `db:status`. The API server has no default and requires it |
 | `TEST_DATABASE_URL` | Go tests (`api/db/dbtest`) | The local compose database |
+| `SHELFKIN_AUTH_PORT` | `db:up` (host port of the auth emulator), and the Go tests' local fallback | `9099` |
+| `TEST_AUTH_EMULATOR_HOST` | Go tests (`api/internal/auth/authtest`): the auth emulator as `host:port` | `localhost:9099`, with the port taken from `SHELFKIN_AUTH_PORT` |
 
 The local compose database is `postgres://shelfkin:shelfkin@localhost:5432/shelfkin?sslmode=disable`, with the port taken from `SHELFKIN_DB_PORT`. These credentials are for local development only and are not used anywhere else.
 
@@ -59,7 +61,7 @@ To set a variable for one session: `export SHELFKIN_DB_PORT=55432` in bash, or `
 
 New migrations go in `api/db/migrations/` and are named `YYYYMMDDHHMMSS_name.sql` (UTC timestamp), with `-- +goose Up` and `-- +goose Down` sections. If your local database already has a newer migration applied than one you just pulled, run `npm run db:reset`.
 
-Go tests that need a database call `dbtest.New(t)` from `api/db/dbtest`. It creates a database named `shelfkin_test_<random>`, applies every migration, returns a `pgxpool.Pool` and drops the database when the test ends. If Postgres is not reachable, the test fails, so run `npm run db:up` before `npm test`.
+Go tests that need a database call `dbtest.New(t)` from `api/db/dbtest`. It creates a database named `shelfkin_test_<random>`, applies every migration, returns a `pgxpool.Pool` and drops the database when the test ends. If Postgres is not reachable, the test fails, so run `npm run db:up` before `npm test`. The same goes for the auth emulator integration tests, which fail rather than skip when the emulator is not running.
 
 ## Running the API
 
@@ -68,13 +70,15 @@ The API server is `api/main.go`. It reads its configuration from environment var
 | Variable | Required | Default | What it is |
 |---|---|---|---|
 | `DATABASE_URL` | Yes | None | Postgres connection string, as a URL (`postgres://user:password@host:port/db?sslmode=...`) or `key=value` pairs. If it sets no `connect_timeout`, each new connection gives up after 5s |
+| `FIREBASE_PROJECT_ID` | Yes | None | The Firebase project whose ID tokens the API accepts. `demo-shelfkin` locally (the auth emulator's project); the production project ID in production |
+| `FIREBASE_AUTH_EMULATOR_HOST` | No | None | `host:port` of the Firebase Auth emulator, `localhost:9099` locally. When set, the API accepts the emulator's unsigned tokens and logs a warning at startup. **Never set it in production** (the #38 deploy must not pass it): anyone could then forge a token for any user |
 | `PORT` | No | `8080` | Port to listen on, 1 to 65535. Cloud Run sets it |
 | `LOG_LEVEL` | No | `info` | `debug`, `info`, `warn` or `error` |
 | `CORS_ALLOWED_ORIGINS` | No | `http://localhost:8081` (the Expo web dev server) | Comma-separated browser origins allowed to call the API, each `http(s)://host[:port]` with no path, for example `https://shelfkin.web.app,https://shelfkin.firebaseapp.com`. Setting it replaces the default. `*` and wildcards are rejected |
 
 An empty variable counts as unset. If a variable is missing or invalid, the server logs one line naming it and exits with code 1. The database password is never logged. Every occurrence of the password in a log line is replaced with `[REDACTED]`; with the local credentials, where the password is the same as the user name, `shelfkin` is redacted wherever it appears.
 
-To run it against the local compose database, from the repository root:
+To run it against the local compose database and auth emulator, from the repository root:
 
 ```sh
 npm run db:up
@@ -84,16 +88,54 @@ npm run db:migrate
 then in bash:
 
 ```sh
-DATABASE_URL='postgres://shelfkin:shelfkin@localhost:5432/shelfkin?sslmode=disable' go -C api run .
+DATABASE_URL='postgres://shelfkin:shelfkin@localhost:5432/shelfkin?sslmode=disable' \
+FIREBASE_PROJECT_ID=demo-shelfkin \
+FIREBASE_AUTH_EMULATOR_HOST=localhost:9099 \
+go -C api run .
 ```
 
 or in PowerShell:
 
 ```powershell
-$env:DATABASE_URL = 'postgres://shelfkin:shelfkin@localhost:5432/shelfkin?sslmode=disable'; go -C api run .
+$env:DATABASE_URL = 'postgres://shelfkin:shelfkin@localhost:5432/shelfkin?sslmode=disable'
+$env:FIREBASE_PROJECT_ID = 'demo-shelfkin'
+$env:FIREBASE_AUTH_EMULATOR_HOST = 'localhost:9099'
+go -C api run .
 ```
 
-Change `5432` if you set `SHELFKIN_DB_PORT`. Check it with `curl http://localhost:8080/health`, which returns `{"status":"ok"}`, or 503 with code `database_unavailable` if the database does not answer within 2s. The server starts even when the database is down. Logs are JSON lines on stdout: a `listening` line with the port, one `request` line per request (method, path, status, `duration_ms`), and a `stopped` line after shutdown. Ctrl+C (or SIGTERM) stops it gracefully: it stops accepting connections, gives in-flight requests up to 9s to finish, closes the database pool and exits 0.
+Change `5432` if you set `SHELFKIN_DB_PORT`, and `9099` if you set `SHELFKIN_AUTH_PORT`. Check it with `curl http://localhost:8080/health`, which returns `{"status":"ok"}`, or 503 with code `database_unavailable` if the database does not answer within 2s. The server starts even when the database is down. Logs are JSON lines on stdout: a `listening` line with the port, one `request` line per request (method, path, status, `duration_ms`), and a `stopped` line after shutdown. Ctrl+C (or SIGTERM) stops it gracefully: it stops accepting connections, gives in-flight requests up to 9s to finish, closes the database pool and exits 0.
+
+### Authentication
+
+Every endpoint except `GET /health` needs a Firebase ID token in an `Authorization: Bearer <token>` header. Without one, or with a token that is malformed, expired or issued for another project, the API returns 401 with code `unauthorized`. The first request from a Firebase user creates their Shelfkin user: the display name comes from the token's `name` claim, else the part of the email before `@`, else `Shelfkin user`, and the time zone starts as `UTC`. Later requests copy a changed email from the token but never overwrite the display name. `GET /me` returns the caller's profile and `PATCH /me` changes `displayName` and `timezone`.
+
+Tokens are verified with the Firebase Admin SDK, which caches Google's public keys; it does not check for revoked tokens, since ID tokens expire within an hour.
+
+### Auth emulator
+
+Locally, and in tests and CI, the API uses the [Firebase Auth emulator](https://firebase.google.com/docs/emulator-suite/connect_auth), never a real Firebase project. It runs as the `auth` service in `compose.yaml` (`firebase-tools` pinned to an exact version, built into a small Node image), so you need neither Java nor a global `firebase-tools`. `npm run db:up` starts it together with Postgres; the first run builds the image, which takes a minute. It serves the demo project `demo-shelfkin` (the `demo-` prefix means it can never reach a real project) on `localhost:9099`, or the port in `SHELFKIN_AUTH_PORT`. Its users live in memory and disappear when it stops.
+
+Create a test user and get an ID token (the emulator accepts any API key):
+
+```sh
+curl -s -X POST 'http://localhost:9099/identitytoolkit.googleapis.com/v1/accounts:signUp?key=any' \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"sam@example.com","password":"password123","displayName":"Sam","returnSecureToken":true}'
+```
+
+The response's `idToken` is valid for an hour. For a fresh one for the same user, call `accounts:signInWithPassword` with the same body (without `displayName`). Then, with the API running as above:
+
+```sh
+TOKEN='<the idToken>'
+curl -s http://localhost:8080/me -H "Authorization: Bearer $TOKEN"
+# {"displayName":"Sam","email":"sam@example.com","id":"…","pushEnabled":false,"timezone":"UTC"}
+curl -s -X PATCH http://localhost:8080/me -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"timezone":"America/Toronto"}'
+```
+
+In PowerShell, use `Invoke-RestMethod`, for example `$TOKEN = (Invoke-RestMethod -Method Post -Uri 'http://localhost:9099/identitytoolkit.googleapis.com/v1/accounts:signUp?key=any' -ContentType 'application/json' -Body '{"email":"sam@example.com","password":"password123","displayName":"Sam","returnSecureToken":true}').idToken` and then `Invoke-RestMethod http://localhost:8080/me -Headers @{ Authorization = "Bearer $TOKEN" }`.
+
+Go tests that need an authenticated caller do not need the emulator: build the server with `authtest.NewVerifier()` (`api/internal/auth/authtest`) and send `authtest.Bearer(v.Issue(auth.Token{UID: "alice", Name: "Alice"}))` as the `Authorization` header. Only the integration tests that check real token verification use the emulator.
 
 ### CORS
 

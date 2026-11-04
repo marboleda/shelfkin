@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"net"
-	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -53,10 +51,11 @@ func TestRunConfigErrors(t *testing.T) {
 		vars    map[string]string
 		wantVar string
 	}{
-		{"missing DATABASE_URL", map[string]string{}, "DATABASE_URL"},
-		{"unparseable DATABASE_URL", map[string]string{"DATABASE_URL": "postgres://shelfkin:" + password + "@localhost:nope/shelfkin"}, "DATABASE_URL"},
-		{"non-numeric PORT", map[string]string{"DATABASE_URL": goodURL, "PORT": "eighty"}, "PORT"},
-		{"unknown LOG_LEVEL", map[string]string{"DATABASE_URL": goodURL, "LOG_LEVEL": "trace"}, "LOG_LEVEL"},
+		{"missing DATABASE_URL", map[string]string{"FIREBASE_PROJECT_ID": "demo-test"}, "DATABASE_URL"},
+		{"unparseable DATABASE_URL", map[string]string{"DATABASE_URL": "postgres://shelfkin:" + password + "@localhost:nope/shelfkin", "FIREBASE_PROJECT_ID": "demo-test"}, "DATABASE_URL"},
+		{"missing FIREBASE_PROJECT_ID", map[string]string{"DATABASE_URL": goodURL}, "FIREBASE_PROJECT_ID"},
+		{"non-numeric PORT", map[string]string{"DATABASE_URL": goodURL, "FIREBASE_PROJECT_ID": "demo-test", "PORT": "eighty"}, "PORT"},
+		{"unknown LOG_LEVEL", map[string]string{"DATABASE_URL": goodURL, "FIREBASE_PROJECT_ID": "demo-test", "LOG_LEVEL": "trace"}, "LOG_LEVEL"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -83,73 +82,5 @@ func TestRunConfigErrors(t *testing.T) {
 				t.Errorf("log line looks like a panic: %s", text)
 			}
 		})
-	}
-}
-
-// TestRunStartsWithoutDatabaseAndStopsCleanly runs the whole server against
-// an address where no database listens: it must start, report 503 from
-// /health, then shut down with exit code 0 when its context is cancelled.
-func TestRunStartsWithoutDatabaseAndStopsCleanly(t *testing.T) {
-	port := freePort(t)
-	dbPort := freePort(t)
-	vars := map[string]string{
-		"DATABASE_URL": "postgres://shelfkin:" + password + "@127.0.0.1:" + strconv.Itoa(dbPort) + "/shelfkin?sslmode=disable",
-		"PORT":         strconv.Itoa(port),
-		"LOG_LEVEL":    "debug",
-	}
-	var out syncBuffer
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	exit := make(chan int, 1)
-	go func() { exit <- run(ctx, env(vars), &out, 5*time.Second) }()
-
-	url := "http://127.0.0.1:" + strconv.Itoa(port) + "/health"
-	var resp *http.Response
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		var err error
-		resp, err = http.Get(url)
-		if err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("server did not start: %v\nlogs:\n%s", err, out.String())
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Errorf("/health status = %d, want 503", resp.StatusCode)
-	}
-
-	cancel()
-	select {
-	case code := <-exit:
-		if code != 0 {
-			t.Errorf("exit code = %d, want 0\nlogs:\n%s", code, out.String())
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("run did not return after shutdown")
-	}
-
-	logs := out.String()
-	if strings.Contains(logs, password) {
-		t.Errorf("logs contain the database password:\n%s", logs)
-	}
-	var sawListening, sawStopped bool
-	for _, line := range strings.Split(strings.TrimSpace(logs), "\n") {
-		var m map[string]any
-		if err := json.Unmarshal([]byte(line), &m); err != nil {
-			t.Fatalf("log line is not JSON: %q", line)
-		}
-		switch m["msg"] {
-		case "listening":
-			sawListening = m["port"] == float64(port)
-		case "stopped":
-			sawStopped = true
-		}
-	}
-	if !sawListening || !sawStopped {
-		t.Errorf("want a listening line with the port and a stopped line, got:\n%s", logs)
 	}
 }

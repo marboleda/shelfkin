@@ -16,9 +16,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/marboleda/shelfkin/api/db/dbtest"
+	"github.com/marboleda/shelfkin/api/internal/auth"
 	"github.com/marboleda/shelfkin/api/internal/openapi"
 )
 
@@ -70,6 +72,29 @@ type fakeAPI struct {
 func (f fakeAPI) GetHealth(ctx context.Context, _ openapi.GetHealthRequestObject) (openapi.GetHealthResponseObject, error) {
 	return f.fn(ctx)
 }
+
+var errNotImplemented = errors.New("fakeAPI: not implemented")
+
+func (fakeAPI) GetMe(context.Context, openapi.GetMeRequestObject) (openapi.GetMeResponseObject, error) {
+	return nil, errNotImplemented
+}
+
+func (fakeAPI) PatchMe(context.Context, openapi.PatchMeRequestObject) (openapi.PatchMeResponseObject, error) {
+	return nil, errNotImplemented
+}
+
+// authFunc adapts a function to the Authenticator interface.
+type authFunc func(ctx context.Context, idToken string) (pgtype.UUID, error)
+
+func (f authFunc) Authenticate(ctx context.Context, idToken string) (pgtype.UUID, error) {
+	return f(ctx, idToken)
+}
+
+// denyAll rejects every token, for tests of public routes and of the
+// middleware around the router.
+var denyAll = authFunc(func(context.Context, string) (pgtype.UUID, error) {
+	return pgtype.UUID{}, auth.ErrInvalidToken
+})
 
 func okHealth(context.Context) (openapi.GetHealthResponseObject, error) {
 	return openapi.GetHealth200JSONResponse{Status: openapi.HealthStatusOk}, nil
@@ -124,7 +149,7 @@ func assertError(t *testing.T, resp *http.Response, body []byte, status int, cod
 func TestHealthOKWithDatabase(t *testing.T) {
 	pool := dbtest.New(t)
 	logger, _ := newLogger()
-	url := serve(t, NewHandler(NewAPI(pool, logger), logger, nil))
+	url := serve(t, NewHandler(NewAPI(pool, logger), denyAll, logger, nil))
 
 	// No Authorization header: /health is public.
 	resp, body := do(t, http.MethodGet, url+"/health")
@@ -207,7 +232,7 @@ func TestHealthDatabaseUnavailable(t *testing.T) {
 			}
 			t.Cleanup(pool.Close)
 			logger, logs := newLogger()
-			url := serve(t, NewHandler(NewAPI(pool, logger), logger, nil))
+			url := serve(t, NewHandler(NewAPI(pool, logger), denyAll, logger, nil))
 
 			start := time.Now()
 			resp, body := do(t, http.MethodGet, url+"/health")
@@ -226,7 +251,7 @@ func TestHealthDatabaseUnavailable(t *testing.T) {
 
 func TestHealthOtherMethods(t *testing.T) {
 	logger, _ := newLogger()
-	url := serve(t, NewHandler(fakeAPI{okHealth}, logger, nil))
+	url := serve(t, NewHandler(fakeAPI{okHealth}, denyAll, logger, nil))
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
 		t.Run(method, func(t *testing.T) {
 			resp, body := do(t, method, url+"/health")
@@ -240,7 +265,7 @@ func TestHealthOtherMethods(t *testing.T) {
 
 func TestUnknownPath(t *testing.T) {
 	logger, _ := newLogger()
-	url := serve(t, NewHandler(fakeAPI{okHealth}, logger, nil))
+	url := serve(t, NewHandler(fakeAPI{okHealth}, denyAll, logger, nil))
 	for _, path := range []string{"/", "/nope", "/healthz", "/health/extra"} {
 		t.Run(path, func(t *testing.T) {
 			resp, body := do(t, http.MethodGet, url+path)
@@ -262,7 +287,7 @@ func TestPanicReturns500AndServerSurvives(t *testing.T) {
 			panic("boom")
 		}
 		return okHealth(ctx)
-	}}, logger, nil))
+	}}, denyAll, logger, nil))
 
 	resp, body := do(t, http.MethodGet, url+"/health")
 	assertError(t, resp, body, http.StatusInternalServerError, CodeInternal)
@@ -293,14 +318,14 @@ func TestHandlerErrorReturns500(t *testing.T) {
 	logger, _ := newLogger()
 	url := serve(t, NewHandler(fakeAPI{func(context.Context) (openapi.GetHealthResponseObject, error) {
 		return nil, errors.New("something broke")
-	}}, logger, nil))
+	}}, denyAll, logger, nil))
 	resp, body := do(t, http.MethodGet, url+"/health")
 	assertError(t, resp, body, http.StatusInternalServerError, CodeInternal)
 }
 
 func TestRequestLogging(t *testing.T) {
 	logger, logs := newLogger()
-	url := serve(t, NewHandler(fakeAPI{okHealth}, logger, nil))
+	url := serve(t, NewHandler(fakeAPI{okHealth}, denyAll, logger, nil))
 	do(t, http.MethodGet, url+"/health")
 	do(t, http.MethodGet, url+"/missing")
 
@@ -356,7 +381,7 @@ func startServe(t *testing.T, shutdownTimeout time.Duration, release <-chan stru
 		entered <- struct{}{}
 		<-release
 		return okHealth(ctx)
-	}}, logger, nil)
+	}}, denyAll, logger, nil)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

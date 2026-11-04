@@ -24,6 +24,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the signed-in user's profile
+         * @description Returns the caller's Shelfkin user. The first authenticated request from
+         *     a Firebase user creates it (see `User`).
+         */
+        get: operations["getMe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update the signed-in user's profile
+         * @description Updates `displayName` and/or `timezone`. Omitted fields are unchanged; an
+         *     empty body or `{}` changes nothing and returns the current profile.
+         */
+        patch: operations["patchMe"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -54,7 +80,8 @@ export interface components {
             /**
              * @description A stable, machine-readable error code, for example `bad_request`,
              *     `unauthorized`, `forbidden`, `not_found`, `method_not_allowed`,
-             *     `internal` or `database_unavailable`.
+             *     `internal`, `database_unavailable`, `invalid_display_name` or
+             *     `invalid_timezone`.
              * @example not_found
              */
             code: string;
@@ -67,6 +94,48 @@ export interface components {
         Health: {
             /** @enum {string} */
             status: "ok";
+        };
+        /**
+         * @description A Shelfkin user. Created on the user's first authenticated request:
+         *     `displayName` comes from the Firebase token's `name` claim, else the part
+         *     of the email before `@`, else `Shelfkin user`; `timezone` starts as `UTC`.
+         *     Later sign-ins update `email` from the token but never `displayName`.
+         */
+        User: {
+            id: components["schemas"]["Id"];
+            /**
+             * @description Shown to other household members, for example in "Set to Low by Sam". 1 to 50 characters.
+             * @example Sam
+             */
+            displayName: string;
+            /**
+             * @description The email of the Firebase account, or null if it has none.
+             * @example sam@example.com
+             */
+            email: string | null;
+            /**
+             * @description IANA time zone name, used to send expiry reminders at a sensible local time.
+             * @example America/Toronto
+             */
+            timezone: string;
+            /**
+             * @description Whether the user has opted in to push notifications.
+             * @example false
+             */
+            pushEnabled: boolean;
+        };
+        /** @description Fields of the signed-in user to change. Omitted fields are unchanged. */
+        UpdateMe: {
+            /**
+             * @description Trimmed, then must be 1 to 50 characters.
+             * @example Sam
+             */
+            displayName?: string;
+            /**
+             * @description An IANA time zone name such as `America/Toronto`. `Local` is not accepted.
+             * @example America/Toronto
+             */
+            timezone?: string;
         };
     };
     responses: {
@@ -199,6 +268,75 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+        };
+    };
+    getMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's profile. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    patchMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["UpdateMe"];
+            };
+        };
+        responses: {
+            /** @description The updated profile. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            /**
+             * @description The body is not valid JSON (code `bad_request`), `displayName` is not 1
+             *     to 50 characters after trimming (code `invalid_display_name`), or
+             *     `timezone` is not an IANA time zone name (code `invalid_timezone`).
+             */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "invalid_timezone",
+                     *         "message": "timezone must be an IANA time zone name such as America/Toronto."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
         };
     };
 }

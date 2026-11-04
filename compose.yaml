@@ -24,5 +24,35 @@ services:
       retries: 30
       start_period: 5s
 
+  # Firebase Auth emulator for project demo-shelfkin (the demo- prefix means
+  # it never talks to a real Firebase project). The auth emulator is pure
+  # Node, so the image needs no Java. Bump FIREBASE_TOOLS_VERSION to upgrade;
+  # the image tag changes with it, so compose rebuilds. Users live in memory
+  # and are gone when the container stops. CI starts this same service.
+  auth:
+    build:
+      args:
+        # Keep in sync with the image tag below.
+        FIREBASE_TOOLS_VERSION: 15.34.0
+      dockerfile_inline: |
+        FROM node:24.22.0-alpine3.24
+        ARG FIREBASE_TOOLS_VERSION
+        ENV FIREBASE_CLI_DISABLE_UPDATE_CHECK=true
+        RUN npm install --global --no-fund --no-audit firebase-tools@$${FIREBASE_TOOLS_VERSION} \
+         && mkdir /emulator \
+         && printf '{"emulators":{"auth":{"host":"0.0.0.0","port":9099},"ui":{"enabled":false}}}\n' > /emulator/firebase.json
+        WORKDIR /emulator
+        EXPOSE 9099
+        CMD ["firebase", "emulators:start", "--only", "auth", "--project", "demo-shelfkin"]
+    image: shelfkin-auth-emulator:firebase-tools-15.34.0
+    ports:
+      - "${SHELFKIN_AUTH_PORT:-9099}:9099"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9099/ || exit 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+      start_period: 10s
+
 volumes:
   db-data:

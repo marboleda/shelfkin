@@ -20,6 +20,12 @@ const (
 	// CORSAllowedOriginsEnv is a comma-separated list of browser origins
 	// (scheme://host[:port]) allowed to call the API.
 	CORSAllowedOriginsEnv = "CORS_ALLOWED_ORIGINS"
+	// FirebaseProjectIDEnv is the Firebase project whose ID tokens the API
+	// accepts.
+	FirebaseProjectIDEnv = "FIREBASE_PROJECT_ID"
+	// AuthEmulatorHostEnv (host:port) makes the API accept unsigned tokens
+	// from the Firebase Auth emulator. Never set it in production.
+	AuthEmulatorHostEnv = "FIREBASE_AUTH_EMULATOR_HOST"
 )
 
 // Defaults for the optional variables.
@@ -43,6 +49,11 @@ type Config struct {
 	// slash) allowed to call the API from a browser. Never empty and never
 	// "*".
 	CORSAllowedOrigins []string
+	// FirebaseProjectID is the project ID tokens must be issued for.
+	FirebaseProjectID string
+	// AuthEmulatorHost is FIREBASE_AUTH_EMULATOR_HOST, or "" when tokens
+	// must come from real Firebase.
+	AuthEmulatorHost string
 }
 
 // Error reports one or more invalid environment variables. Its message names
@@ -63,10 +74,23 @@ var logLevels = map[string]slog.Level{
 	"error": slog.LevelError,
 }
 
-// Load reads the configuration using getenv (os.Getenv in production). An
-// empty variable counts as unset. It returns an *Error naming every invalid
+// LoadAPI reads the API server's configuration: everything Load reads, with
+// FIREBASE_PROJECT_ID required. It returns an *Error naming every invalid
 // variable.
+func LoadAPI(getenv func(string) string) (*Config, error) {
+	return load(getenv, true)
+}
+
+// Load reads the configuration using getenv (os.Getenv in production). An
+// empty variable counts as unset. FIREBASE_PROJECT_ID is optional here
+// (programs other than the API server, such as the expiry job, do not verify
+// tokens); the API server uses LoadAPI. It returns an *Error naming every
+// invalid variable.
 func Load(getenv func(string) string) (*Config, error) {
+	return load(getenv, false)
+}
+
+func load(getenv func(string) string, requireFirebase bool) (*Config, error) {
 	cfg := &Config{
 		Port:               DefaultPort,
 		LogLevel:           DefaultLogLevel,
@@ -83,6 +107,12 @@ func Load(getenv func(string) string) (*Config, error) {
 	} else {
 		cfg.Pool = pool
 	}
+
+	cfg.FirebaseProjectID = getenv(FirebaseProjectIDEnv)
+	if requireFirebase && cfg.FirebaseProjectID == "" {
+		problems = append(problems, FirebaseProjectIDEnv+" is required")
+	}
+	cfg.AuthEmulatorHost = getenv(AuthEmulatorHostEnv)
 
 	if raw := getenv(PortEnv); raw != "" {
 		port, err := strconv.Atoi(raw)
