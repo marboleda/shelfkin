@@ -108,7 +108,124 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
+  /households:
+    get:
+      operationId: listHouseholds
+      summary: List the households the signed-in user belongs to
+      description: |
+        Every household the caller is a member of, with the caller's role in it,
+        sorted by name (case-insensitive). A user with no households gets an
+        empty list.
+      responses:
+        '200':
+          description: The caller's households.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HouseholdList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: createHousehold
+      summary: Create a household
+      description: Creates a household with the caller as its owner.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateHousehold'
+      responses:
+        '201':
+          description: The new household. The caller's `role` is `owner`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Household'
+        '400':
+          $ref: '#/components/responses/InvalidHouseholdName'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /households/{householdId}:
+    parameters:
+      - $ref: '#/components/parameters/HouseholdId'
+    get:
+      operationId: getHousehold
+      summary: Get one of the signed-in user's households
+      responses:
+        '200':
+          description: The household, with the caller's role in it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Household'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/HouseholdNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      operationId: updateHousehold
+      summary: Rename a household
+      description: Owner only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateHousehold'
+      responses:
+        '200':
+          description: The renamed household.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Household'
+        '400':
+          $ref: '#/components/responses/InvalidHouseholdName'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/OwnerOnly'
+        '404':
+          $ref: '#/components/responses/HouseholdNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      operationId: deleteHousehold
+      summary: Delete a household
+      description: |
+        Owner only. Deletes the household together with its members, invites,
+        custom catalog items, item defaults, pantry entries and item events.
+      responses:
+        '204':
+          description: The household was deleted.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/OwnerOnly'
+        '404':
+          $ref: '#/components/responses/HouseholdNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
 components:
+  parameters:
+    HouseholdId:
+      name: householdId
+      in: path
+      required: true
+      description: The household's ID. A value that is not a UUID gets 400 (code `bad_request`).
+      schema:
+        $ref: '#/components/schemas/Id'
   securitySchemes:
     firebaseAuth:
       type: http
@@ -149,8 +266,8 @@ components:
           description: |
             A stable, machine-readable error code, for example `bad_request`,
             `unauthorized`, `forbidden`, `not_found`, `method_not_allowed`,
-            `internal`, `database_unavailable`, `invalid_display_name` or
-            `invalid_timezone`.
+            `internal`, `database_unavailable`, `invalid_display_name`,
+            `invalid_timezone`, `invalid_name` or `owner_only`.
           type: string
           example: not_found
         message:
@@ -211,6 +328,58 @@ components:
           description: An IANA time zone name such as `America/Toronto`. `Local` is not accepted.
           type: string
           example: America/Toronto
+    Household:
+      description: A household, as seen by the signed-in user.
+      type: object
+      required:
+        - id
+        - name
+        - role
+        - createdAt
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        name:
+          description: 1 to 50 characters. Not unique.
+          type: string
+          example: Home
+        role:
+          $ref: '#/components/schemas/MemberRole'
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+    MemberRole:
+      description: A member's role in a household. Each household has exactly one owner.
+      type: string
+      enum:
+        - owner
+        - member
+    HouseholdList:
+      type: object
+      required:
+        - households
+      properties:
+        households:
+          type: array
+          items:
+            $ref: '#/components/schemas/Household'
+    CreateHousehold:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          description: Trimmed, then must be 1 to 50 characters.
+          type: string
+          example: Home
+    UpdateHousehold:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          description: Trimmed, then must be 1 to 50 characters.
+          type: string
+          example: Cottage
   responses:
     BadRequest:
       description: The request is malformed or fails validation.
@@ -262,3 +431,37 @@ components:
             error:
               code: internal
               message: Something went wrong.
+    InvalidHouseholdName:
+      description: |
+        The body is not valid JSON (code `bad_request`), or `name` is not 1 to 50
+        characters after trimming (code `invalid_name`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: invalid_name
+              message: name must be 1 to 50 characters after trimming spaces.
+    OwnerOnly:
+      description: Only the household's owner can do this (code `owner_only`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: owner_only
+              message: Only the household owner can do this.
+    HouseholdNotFound:
+      description: |
+        The household does not exist or the caller is not a member of it
+        (code `not_found`); the two cases are indistinguishable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: not_found
+              message: Household not found.
