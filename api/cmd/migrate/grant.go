@@ -214,6 +214,6 @@ func checkAPIRole(ctx context.Context, conn *sql.Conn, apiRole string) error {
 	}
 	return fmt.Errorf("%s can do more than %s: it %s.\n"+
 		"Migrations were applied, but the API must not be deployed like this. "+
-		"An admin must fix it once (README, \"Deploying the API\", one-time database setup), then rerun the deploy.",
+		"An admin must fix it once (README, \"Deploying the API\" > \"One-time admin step\"), then run the Deploy API workflow by hand.",
 		apiRole, appRole, strings.Join(problems, ", "))
 }

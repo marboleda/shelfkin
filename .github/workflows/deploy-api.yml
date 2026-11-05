@@ -48,22 +48,29 @@ jobs:
       # the run was started.
       #
       # CI runs for two quick merges can finish out of order. When main has
-      # moved on since this commit, its newer commit has (or will have) its
-      # own deploy, so this run deploys nothing rather than going backwards.
+      # moved on since this commit, its newer commit deploys when its own CI
+      # passes, so this run deploys nothing rather than going backwards: it
+      # builds nothing, never authenticates to Google and does not fail.
+      # (If the newer commit's CI fails, see "Deploying the API" in the
+      # README.) A manual run deploys the commit it was started on.
       - name: Pick the commit
         id: sha
         env:
           SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          main="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" != workflow_run ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          main="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
           if [ "$main" = "$SHA" ]; then
             echo "deploy=true" >> "$GITHUB_OUTPUT"
           else
             echo "deploy=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Skipping ${SHA}: main is now at ${main}, which deploys on its own."
-            echo "Skipped \`${SHA}\`: main has moved on to \`${main}\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice::Skipped deploying ${SHA}: it is no longer the tip of main (now ${main}), which deploys when its CI passes."
+            echo "Skipped deploying \`${SHA}\`: it is no longer the tip of \`main\` (now \`${main}\`), which deploys when its CI passes." >> "$GITHUB_STEP_SUMMARY"
           fi
 
   deploy:

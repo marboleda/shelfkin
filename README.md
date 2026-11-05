@@ -335,12 +335,21 @@ Cloud SQL has deletion protection on, so `terraform destroy` fails until it is t
 
 `.github/workflows/deploy-api.yml` builds the API image, runs the migrations on Cloud SQL and deploys `shelfkin-api` to Cloud Run. It authenticates with Workload Identity Federation as `github-deployer`; it uses the Actions variables from [Outputs to GitHub Actions and EAS variables](#outputs-to-github-actions-and-eas-variables) (`GCP_PROJECT_ID`, `GCP_REGION`, `GCP_WIF_PROVIDER`, `GCP_DEPLOYER_SA`, `API_URL`) and no secrets.
 
+Every migration runs as `shelfkin_migrator` through the `shelfkin-migrate` job, never by hand as `postgres` or another admin user. `shelfkin_migrator` must own every table and the `SECURITY DEFINER` helpers (#10), which only work when they run as the owner of `household_members`.
+
 ### What triggers a deploy
 
 - **Automatically**, when the `CI` workflow succeeds for a push to `main`. It deploys the exact commit CI tested. A failed CI run, a pull request (including from a fork) or any other branch deploys nothing.
 - **By hand**: Actions > Deploy API > Run workflow, on `main` (or `gh workflow run deploy-api.yml --ref main`). It deploys the commit `main` points to. Other branches are refused.
 
-Only one deploy runs at a time and a running one is never cancelled, so a migration is never stopped half way. If several commits land while a deploy runs, only the newest waits; and a run whose commit is no longer the tip of `main` (for example when CI runs finish out of order) skips itself, since the newer commit deploys on its own.
+Only one deploy runs at a time and a running one is never cancelled, so a migration is never stopped half way. If several commits land while a deploy runs, only the newest waits.
+
+CI runs can finish out of order, so an automatic deploy whose commit is no longer the tip of `main` deploys nothing: it builds nothing, does not authenticate to Google and ends without failing. The run shows a notice and a summary line naming the skipped commit. The newer commit deploys when its own CI passes.
+
+**If the newer commit's CI fails**, the older commit is not deployed either, and production stays on the last deployed revision. To get a deploy out, either:
+
+- fix or revert on `main`; its CI then deploys as usual, or
+- run the workflow by hand, but only when the latest CI run on `main` is green, because a manual run deploys the tip of `main`, not the older commit.
 
 ### What a deploy does
 
@@ -374,7 +383,7 @@ The next deploy sends traffic to its new revision again.
 
 ### Running the migrate job by hand
 
-Always through the job, so migrations run as `shelfkin_migrator`. Never run migrations by hand as `postgres` or another admin user: `shelfkin_migrator` must own every table and the `SECURITY DEFINER` helpers (#10), which only work when they run as the owner of `household_members`.
+Always through the job, so migrations run as `shelfkin_migrator` (see above), never by hand as `postgres` or another admin user.
 
 ```sh
 # Show every migration and whether it is applied
@@ -389,9 +398,13 @@ The API and the expiry job log in as `shelfkin_api`, which must be able to do **
 
 - grants `shelfkin_app` to `shelfkin_api` `WITH INHERIT FALSE, SET TRUE` if it is not granted yet (or fixes the options), so `shelfkin_api` has `shelfkin_app`'s privileges only after `SET ROLE` and none after `RESET ROLE`. This needs `shelfkin_migrator` to have `ADMIN` on `shelfkin_app`, which it has because the #10 migration created the role as that user;
 - tries to revoke any other role membership and the `CREATEDB`, `CREATEROLE` and `BYPASSRLS` attributes;
-- then **fails** (and the API is not deployed) if `shelfkin_api` is a superuser, has any of those attributes, is a member of any role but `shelfkin_app`, or owns or was granted anything in the database.
+- then **fails the migrate job** (so the API is not deployed) if `shelfkin_api` is still `SUPERUSER`, `CREATEDB`, `CREATEROLE` or `BYPASSRLS`, is a member of any role other than `shelfkin_app`, owns any relation, function, schema or type, or holds direct grants on any relation, function or schema. The error points to the one-time admin step below.
 
-Cloud SQL creates built-in users with `CREATEDB` and `CREATEROLE` and as members of `cloudsqlsuperuser`, and `shelfkin_migrator` is probably not allowed to undo that. If the first deploy fails with "shelfkin_api can do more than shelfkin_app", do this once as an admin and rerun the deploy:
+Do not weaken this check to get a deploy through.
+
+### One-time admin step (first deploy)
+
+Cloud SQL creates built-in users with `CREATEDB` and `CREATEROLE` and as members of `cloudsqlsuperuser`, and `shelfkin_migrator` cannot revoke them. So **the first deploy on a fresh Cloud SQL database is expected to fail**: it applies the migrations, then the grant step fails with "shelfkin_api can do more than shelfkin_app", before the API service is touched (it keeps its previous image). This is by design. Fix it once as an admin, as `postgres` through the Cloud SQL Auth Proxy:
 
 ```sh
 # Set a password for the built-in postgres user (only needed once)
@@ -407,13 +420,22 @@ REVOKE cloudsqlsuperuser FROM shelfkin_api;
 ALTER ROLE shelfkin_api NOCREATEDB NOCREATEROLE;
 ```
 
-Do not create or change any table as `postgres`.
+Do not create or change any table as `postgres`. Then **run the workflow by hand** (Actions > Deploy API > Run workflow on `main`, or `gh workflow run deploy-api.yml --ref main`). That run, and every later deploy, passes the grant step with no admin step.
 
 ### Production checks after the first deploy
 
-Run these once, connected as above, and record the results on the deploy issue:
+Run these once, connected as above, and record the results on the deploy issue.
+
+Every migration applied (in the execution's logs, no `Pending` rows):
+
+```sh
+gcloud run jobs execute shelfkin-migrate --region "$REGION" --wait --args=/usr/local/bin/migrate,status
+```
 
 ```sql
+-- The API connects as shelfkin_api, not shelfkin_migrator: run while the API is serving
+SELECT DISTINCT usename FROM pg_stat_activity WHERE datname = 'shelfkin' AND application_name <> 'psql';
+
 -- Only shelfkin_app
 SELECT r.rolname FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid
 WHERE m.member = 'shelfkin_api'::regrole;
@@ -421,7 +443,7 @@ WHERE m.member = 'shelfkin_api'::regrole;
 -- All false
 SELECT rolsuper, rolcreatedb, rolcreaterole, rolbypassrls FROM pg_roles WHERE rolname = 'shelfkin_api';
 
--- Every table is owned by shelfkin_migrator, none by shelfkin_api (or \dt)
+-- Every table is owned by shelfkin_migrator, none by shelfkin_api (or the owner column of \dt)
 SELECT tableowner, count(*) FROM pg_tables WHERE schemaname = 'public' GROUP BY tableowner;
 
 -- Both helpers and household_members owned by shelfkin_migrator
@@ -432,7 +454,12 @@ SELECT tableowner FROM pg_tables WHERE tablename = 'household_members';
 SELECT relforcerowsecurity FROM pg_class WHERE relname = 'household_members';
 ```
 
-Then, logged in as `shelfkin_api` (its password is in the `api-database-url` secret), `BEGIN; SET LOCAL ROLE shelfkin_app; RESET ROLE; SELECT FROM household_members;` and the same with `users` must both fail with `permission denied` (42501). Also check that the migrate job's `status` command shows every migration applied, and that the `api-database-url` secret names `shelfkin_api` (the API's log shows no `shelfkin_migrator`).
+Then connect as `shelfkin_api` (`user=shelfkin_api`; its password is in the `api-database-url` secret, which must name `shelfkin_api`). Each of these must fail with `permission denied` (42501):
+
+```sql
+BEGIN; SET LOCAL ROLE shelfkin_app; RESET ROLE; SELECT FROM household_members; ROLLBACK;
+BEGIN; SET LOCAL ROLE shelfkin_app; RESET ROLE; SELECT FROM users; ROLLBACK;
+```
 
 ## Docs
 

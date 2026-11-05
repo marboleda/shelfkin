@@ -259,7 +259,7 @@ func TestUpFailsWhenAnExtraMembershipCannotBeRevoked(t *testing.T) {
 	if err == nil {
 		t.Fatal("grant step succeeded with an extra membership left")
 	}
-	for _, want := range []string{"is a member of " + extra, "README"} {
+	for _, want := range []string{"is a member of " + extra, "One-time admin step", "workflow by hand"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("err = %q, want it to mention %q", err, want)
 		}
