@@ -287,6 +287,143 @@ paths:
           $ref: '#/components/responses/HouseholdNotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+  /households/{householdId}/members:
+    parameters:
+      - $ref: '#/components/parameters/HouseholdId'
+    get:
+      operationId: listMembers
+      summary: List a household's members
+      description: |
+        Every member of the household, owner first, then the other members by
+        the time they joined (earliest first). Any member can call this.
+      responses:
+        '200':
+          description: The household's members.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/HouseholdNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /households/{householdId}/members/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/HouseholdId'
+      - name: userId
+        in: path
+        required: true
+        description: The member's user ID. A value that is not a UUID gets 400 (code `bad_request`).
+        schema:
+          $ref: '#/components/schemas/Id'
+    delete:
+      operationId: removeMember
+      summary: Remove a member, or leave the household
+      description: |
+        - The **owner** can remove any other member.
+        - A **member** can remove only themselves, which is leaving the household.
+        - The **owner** cannot leave: they must transfer ownership to another
+          member (`POST /households/{householdId}/transfer-ownership`) or
+          delete the household first.
+
+        The removed user loses access to the household straight away. Pantry
+        entries and events they created stay, still labelled with their name.
+      responses:
+        '204':
+          description: The user is no longer a member of the household.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/OwnerOnly'
+        '404':
+          description: |
+            The household does not exist or the caller is not a member of it, or
+            `userId` is not a member of the household (code `not_found` in
+            every case).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: not_found
+                  message: Member not found.
+        '409':
+          description: |
+            The owner tried to remove themselves (code `owner_cannot_leave`), or
+            the membership changed while the request ran (code `conflict`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: owner_cannot_leave
+                  message: The owner cannot leave the household. Transfer ownership to another member or delete the household first.
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /households/{householdId}/transfer-ownership:
+    parameters:
+      - $ref: '#/components/parameters/HouseholdId'
+    post:
+      operationId: transferOwnership
+      summary: Make another member the owner
+      description: |
+        Owner only. Makes `userId`, who must already be a member, the owner and
+        the caller a member, in one step. The household always has exactly one
+        owner. Afterwards the caller can leave the household.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferOwnership'
+      responses:
+        '200':
+          description: The household's members after the transfer, new owner first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberList'
+        '400':
+          description: |
+            The body is missing or not valid JSON (code `bad_request`), `userId`
+            is not a member of the household (code `not_a_member`), or `userId`
+            is the caller (code `already_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: not_a_member
+                  message: The new owner must be a member of the household.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/OwnerOnly'
+        '404':
+          $ref: '#/components/responses/HouseholdNotFound'
+        '409':
+          description: |
+            Another change to the household's members conflicted with this one;
+            reload the members and try again (code `conflict`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: conflict
+                  message: The household's members changed while this request ran. Try again.
+        '500':
+          $ref: '#/components/responses/InternalError'
 components:
   parameters:
     HouseholdId:
@@ -497,6 +634,50 @@ components:
           description: Trimmed, then must be 1 to 50 characters.
           type: string
           example: Cottage
+    Member:
+      description: A member of a household.
+      type: object
+      required:
+        - userId
+        - displayName
+        - email
+        - role
+        - joinedAt
+      properties:
+        userId:
+          $ref: '#/components/schemas/Id'
+        displayName:
+          description: The member's display name (see `User`).
+          type: string
+          example: Sam
+        email:
+          description: The member's email, or null if their account has none.
+          type: string
+          nullable: true
+          example: sam@example.com
+        role:
+          $ref: '#/components/schemas/MemberRole'
+        joinedAt:
+          # When the user joined (or created) the household.
+          $ref: '#/components/schemas/Timestamp'
+    MemberList:
+      type: object
+      required:
+        - members
+      properties:
+        members:
+          description: The owner first, then the other members by `joinedAt`.
+          type: array
+          items:
+            $ref: '#/components/schemas/Member'
+    TransferOwnership:
+      type: object
+      required:
+        - userId
+      properties:
+        userId:
+          # The member to make the owner.
+          $ref: '#/components/schemas/Id'
   responses:
     BadRequest:
       description: The request is malformed or fails validation.
