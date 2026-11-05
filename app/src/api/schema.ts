@@ -157,6 +157,84 @@ export interface paths {
         patch: operations["updateHousehold"];
         trace?: never;
     };
+    "/households/{householdId}/catalog/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Type-ahead search of the household's catalog
+         * @description The best-matching built-in catalog items plus this household's own custom
+         *     items, for type-ahead as the user types an ingredient name. Custom items
+         *     of other households never appear. `categoryId` and `locationId` are the
+         *     household's **effective** defaults: its own override of a built-in item
+         *     if it set one, else the item's default.
+         *
+         *     Matching is case-insensitive, and `%`, `_` and `\` in `q` match literally.
+         *     Results are ranked, best first:
+         *
+         *     1. Exact name (`milk` finds `Milk`)
+         *     2. Names that start with `q` (`mil`: `Milk` before `Oat milk`)
+         *     3. Names with a word that starts with `q` (`flour` finds `All-purpose flour`)
+         *     4. Fuzzy matches by trigram word similarity (`tomatos` finds `Tomatoes`),
+         *        most similar first. Only for a `q` of 3 or more characters.
+         *
+         *     Ties go to the shorter name, then alphabetically.
+         */
+        get: operations["searchCatalog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the item categories
+         * @description Every built-in category, in display order. Needs a signed-in user but no household.
+         */
+        get: operations["listCategories"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/locations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the storage locations
+         * @description Every built-in storage location, in display order. Needs a signed-in user but no household.
+         */
+        get: operations["listLocations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -306,6 +384,82 @@ export interface components {
              * @example Cottage
              */
             name: string;
+        };
+        /** @description A built-in item category. */
+        Category: {
+            /**
+             * @description The same in every environment.
+             * @example 2
+             */
+            id: number;
+            /**
+             * @description A stable identifier that never changes, for example `dairy`.
+             * @example dairy
+             */
+            key: string;
+            /**
+             * @description Display name.
+             * @example Dairy
+             */
+            name: string;
+        };
+        CategoryList: {
+            /** @description Every category, in display order. */
+            items: components["schemas"]["Category"][];
+        };
+        /** @description A built-in storage location. */
+        Location: {
+            /**
+             * @description The same in every environment.
+             * @example 2
+             */
+            id: number;
+            /**
+             * @description A stable identifier that never changes, for example `fridge`.
+             * @example fridge
+             */
+            key: string;
+            /**
+             * @description Display name.
+             * @example Fridge
+             */
+            name: string;
+        };
+        LocationList: {
+            /** @description Every location, in display order. */
+            items: components["schemas"]["Location"][];
+        };
+        /**
+         * @description A catalog item as seen by one household: a built-in item or one of the
+         *     household's own custom items, with the household's effective defaults.
+         */
+        CatalogItem: {
+            id: components["schemas"]["Id"];
+            /** @example Milk */
+            name: string;
+            /**
+             * @description True for the household's own custom item, false for a built-in item.
+             * @example false
+             */
+            isCustom: boolean;
+            /**
+             * @description The household's default category for this item (its override, else the item's default).
+             * @example 2
+             */
+            categoryId: number;
+            /**
+             * @description The household's default location for this item (its override, else the item's default).
+             * @example 2
+             */
+            locationId: number;
+            /**
+             * @description Typical shelf life in days, used to suggest an expiry date. Null means no suggestion.
+             * @example 7
+             */
+            shelfLifeDays: number | null;
+        };
+        CatalogItemList: {
+            items: components["schemas"]["CatalogItem"][];
         };
     };
     responses: {
@@ -774,6 +928,108 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["OwnerOnly"];
             404: components["responses"]["HouseholdNotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    searchCatalog: {
+        parameters: {
+            query?: {
+                /**
+                 * @description The text typed so far. Trimmed; an empty or whitespace-only (or
+                 *     missing) `q` returns an empty list. At most 100 characters after
+                 *     trimming, else 400 (code `invalid_query`).
+                 * @example tom
+                 */
+                q?: string;
+                /** @description The most items to return, 1 to 25 (default 10), else 400 (code `invalid_limit`). */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The matching items, best first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogItemList"];
+                };
+            };
+            /**
+             * @description `householdId` is not a UUID or `limit` is not an integer (code
+             *     `bad_request`), `q` is longer than 100 characters after trimming
+             *     (code `invalid_query`), or `limit` is outside 1 to 25 (code
+             *     `invalid_limit`).
+             */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "invalid_query",
+                     *         "message": "q must be at most 100 characters after trimming spaces."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["HouseholdNotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listCategories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The categories, in display order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listLocations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The locations, in display order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocationList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
             500: components["responses"]["InternalError"];
         };
     };

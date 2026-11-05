@@ -73,6 +73,67 @@ func (e PushPlatform) Valid() bool {
 	}
 }
 
+// CatalogItem A catalog item as seen by one household: a built-in item or one of the
+// household's own custom items, with the household's effective defaults.
+type CatalogItem struct {
+	// CategoryId The household's default category for this item (its override, else the item's default).
+	//
+	// Example: 2
+	CategoryId int `json:"categoryId"`
+
+	// Id A UUIDv7 identifier.
+	//
+	// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+	Id Id `json:"id"`
+
+	// IsCustom True for the household's own custom item, false for a built-in item.
+	//
+	// Example: false
+	IsCustom bool `json:"isCustom"`
+
+	// LocationId The household's default location for this item (its override, else the item's default).
+	//
+	// Example: 2
+	LocationId int `json:"locationId"`
+
+	// Name Example: Milk
+	Name string `json:"name"`
+
+	// ShelfLifeDays Typical shelf life in days, used to suggest an expiry date. Null means no suggestion.
+	//
+	// Example: 7
+	ShelfLifeDays *int `json:"shelfLifeDays"`
+}
+
+// CatalogItemList defines model for CatalogItemList.
+type CatalogItemList struct {
+	Items []CatalogItem `json:"items"`
+}
+
+// Category A built-in item category.
+type Category struct {
+	// Id The same in every environment.
+	//
+	// Example: 2
+	Id int `json:"id"`
+
+	// Key A stable identifier that never changes, for example `dairy`.
+	//
+	// Example: dairy
+	Key string `json:"key"`
+
+	// Name Display name.
+	//
+	// Example: Dairy
+	Name string `json:"name"`
+}
+
+// CategoryList defines model for CategoryList.
+type CategoryList struct {
+	// Items Every category, in display order.
+	Items []Category `json:"items"`
+}
+
 // CreateHousehold defines model for CreateHousehold.
 type CreateHousehold struct {
 	// Name Trimmed, then must be 1 to 50 characters.
@@ -141,6 +202,30 @@ type HouseholdList struct {
 //
 // Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
 type Id = openapi_types.UUID
+
+// Location A built-in storage location.
+type Location struct {
+	// Id The same in every environment.
+	//
+	// Example: 2
+	Id int `json:"id"`
+
+	// Key A stable identifier that never changes, for example `fridge`.
+	//
+	// Example: fridge
+	Key string `json:"key"`
+
+	// Name Display name.
+	//
+	// Example: Fridge
+	Name string `json:"name"`
+}
+
+// LocationList defines model for LocationList.
+type LocationList struct {
+	// Items Every location, in display order.
+	Items []Location `json:"items"`
+}
 
 // MemberRole A member's role in a household. Each household has exactly one owner.
 type MemberRole string
@@ -264,6 +349,17 @@ type OwnerOnly = Error
 // Unauthorized The error format every endpoint uses.
 type Unauthorized = Error
 
+// SearchCatalogParams defines parameters for SearchCatalog.
+type SearchCatalogParams struct {
+	// Q The text typed so far. Trimmed; an empty or whitespace-only (or
+	// missing) `q` returns an empty list. At most 100 characters after
+	// trimming, else 400 (code `invalid_query`).
+	Q *string `form:"q,omitempty" json:"q,omitempty"`
+
+	// Limit The most items to return, 1 to 25 (default 10), else 400 (code `invalid_limit`).
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // CreateHouseholdJSONRequestBody defines body for CreateHousehold for application/json ContentType.
 type CreateHouseholdJSONRequestBody = CreateHousehold
 
@@ -278,6 +374,9 @@ type RegisterPushTokenJSONRequestBody = RegisterPushToken
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// ListCategories List the item categories
+	// (GET /categories)
+	ListCategories(w http.ResponseWriter, r *http.Request)
 	// GetHealth Check that the API and its dependencies are up
 	// (GET /health)
 	GetHealth(w http.ResponseWriter, r *http.Request)
@@ -296,6 +395,12 @@ type ServerInterface interface {
 	// UpdateHousehold Rename a household
 	// (PATCH /households/{householdId})
 	UpdateHousehold(w http.ResponseWriter, r *http.Request, householdId HouseholdId)
+	// SearchCatalog Type-ahead search of the household's catalog
+	// (GET /households/{householdId}/catalog/search)
+	SearchCatalog(w http.ResponseWriter, r *http.Request, householdId HouseholdId, params SearchCatalogParams)
+	// ListLocations List the storage locations
+	// (GET /locations)
+	ListLocations(w http.ResponseWriter, r *http.Request)
 	// GetMe Get the signed-in user's profile
 	// (GET /me)
 	GetMe(w http.ResponseWriter, r *http.Request)
@@ -318,6 +423,20 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// ListCategories operation middleware
+func (siw *ServerInterfaceWrapper) ListCategories(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListCategories(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // GetHealth operation middleware
 func (siw *ServerInterfaceWrapper) GetHealth(w http.ResponseWriter, r *http.Request) {
@@ -430,6 +549,75 @@ func (siw *ServerInterfaceWrapper) UpdateHousehold(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.UpdateHousehold(w, r, householdId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SearchCatalog operation middleware
+func (siw *ServerInterfaceWrapper) SearchCatalog(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "householdId" -------------
+	var householdId HouseholdId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "householdId", r.PathValue("householdId"), &householdId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "householdId", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SearchCatalogParams
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SearchCatalog(w, r, householdId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListLocations operation middleware
+func (siw *ServerInterfaceWrapper) ListLocations(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListLocations(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -637,6 +825,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/households/{householdId}", wrapper.DeleteHousehold)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/households/{householdId}", wrapper.GetHousehold)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/households/{householdId}", wrapper.UpdateHousehold)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/households/{householdId}/catalog/search", wrapper.SearchCatalog)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/categories", wrapper.ListCategories)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/locations", wrapper.ListLocations)
 
 	return m
 }
@@ -652,6 +843,55 @@ type InvalidHouseholdNameJSONResponse Error
 type OwnerOnlyJSONResponse Error
 
 type UnauthorizedJSONResponse Error
+
+type ListCategoriesRequestObject struct {
+}
+
+type ListCategoriesResponseObject interface {
+	VisitListCategoriesResponse(w http.ResponseWriter) error
+}
+
+type ListCategories200JSONResponse CategoryList
+
+func (response ListCategories200JSONResponse) VisitListCategoriesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListCategories401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListCategories401JSONResponse) VisitListCategoriesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListCategories500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response ListCategories500JSONResponse) VisitListCategoriesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
 
 type GetHealthRequestObject struct {
 }
@@ -1076,6 +1316,134 @@ func (response UpdateHousehold500JSONResponse) VisitUpdateHouseholdResponse(w ht
 	return err
 }
 
+type SearchCatalogRequestObject struct {
+	HouseholdId HouseholdId `json:"householdId"`
+	Params      SearchCatalogParams
+}
+
+type SearchCatalogResponseObject interface {
+	VisitSearchCatalogResponse(w http.ResponseWriter) error
+}
+
+type SearchCatalog200JSONResponse CatalogItemList
+
+func (response SearchCatalog200JSONResponse) VisitSearchCatalogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SearchCatalog400JSONResponse Error
+
+func (response SearchCatalog400JSONResponse) VisitSearchCatalogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SearchCatalog401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response SearchCatalog401JSONResponse) VisitSearchCatalogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SearchCatalog404JSONResponse struct{ HouseholdNotFoundJSONResponse }
+
+func (response SearchCatalog404JSONResponse) VisitSearchCatalogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SearchCatalog500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response SearchCatalog500JSONResponse) VisitSearchCatalogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListLocationsRequestObject struct {
+}
+
+type ListLocationsResponseObject interface {
+	VisitListLocationsResponse(w http.ResponseWriter) error
+}
+
+type ListLocations200JSONResponse LocationList
+
+func (response ListLocations200JSONResponse) VisitListLocationsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListLocations401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListLocations401JSONResponse) VisitListLocationsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListLocations500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response ListLocations500JSONResponse) VisitListLocationsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetMeRequestObject struct {
 }
 
@@ -1299,6 +1667,9 @@ func (response DeletePushToken500JSONResponse) VisitDeletePushTokenResponse(w ht
 
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
+	// ListCategories List the item categories
+	// (GET /categories)
+	ListCategories(ctx context.Context, request ListCategoriesRequestObject) (ListCategoriesResponseObject, error)
 	// GetHealth Check that the API and its dependencies are up
 	// (GET /health)
 	GetHealth(ctx context.Context, request GetHealthRequestObject) (GetHealthResponseObject, error)
@@ -1317,6 +1688,12 @@ type StrictServerInterface interface {
 	// UpdateHousehold Rename a household
 	// (PATCH /households/{householdId})
 	UpdateHousehold(ctx context.Context, request UpdateHouseholdRequestObject) (UpdateHouseholdResponseObject, error)
+	// SearchCatalog Type-ahead search of the household's catalog
+	// (GET /households/{householdId}/catalog/search)
+	SearchCatalog(ctx context.Context, request SearchCatalogRequestObject) (SearchCatalogResponseObject, error)
+	// ListLocations List the storage locations
+	// (GET /locations)
+	ListLocations(ctx context.Context, request ListLocationsRequestObject) (ListLocationsResponseObject, error)
 	// GetMe Get the signed-in user's profile
 	// (GET /me)
 	GetMe(ctx context.Context, request GetMeRequestObject) (GetMeResponseObject, error)
@@ -1368,6 +1745,30 @@ type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
 	options     StrictHTTPServerOptions
+}
+
+// ListCategories operation middleware
+func (sh *strictHandler) ListCategories(w http.ResponseWriter, r *http.Request) {
+	var request ListCategoriesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListCategories(ctx, request.(ListCategoriesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListCategories")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListCategoriesResponseObject); ok {
+		if err := validResponse.VisitListCategoriesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
 }
 
 // GetHealth operation middleware
@@ -1527,6 +1928,57 @@ func (sh *strictHandler) UpdateHousehold(w http.ResponseWriter, r *http.Request,
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(UpdateHouseholdResponseObject); ok {
 		if err := validResponse.VisitUpdateHouseholdResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SearchCatalog operation middleware
+func (sh *strictHandler) SearchCatalog(w http.ResponseWriter, r *http.Request, householdId HouseholdId, params SearchCatalogParams) {
+	var request SearchCatalogRequestObject
+
+	request.HouseholdId = householdId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SearchCatalog(ctx, request.(SearchCatalogRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SearchCatalog")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SearchCatalogResponseObject); ok {
+		if err := validResponse.VisitSearchCatalogResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListLocations operation middleware
+func (sh *strictHandler) ListLocations(w http.ResponseWriter, r *http.Request) {
+	var request ListLocationsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListLocations(ctx, request.(ListLocationsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListLocations")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListLocationsResponseObject); ok {
+		if err := validResponse.VisitListLocationsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
