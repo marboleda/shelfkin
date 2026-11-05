@@ -83,6 +83,14 @@ func (fakeAPI) PatchMe(context.Context, openapi.PatchMeRequestObject) (openapi.P
 	return nil, errNotImplemented
 }
 
+func (fakeAPI) RegisterPushToken(context.Context, openapi.RegisterPushTokenRequestObject) (openapi.RegisterPushTokenResponseObject, error) {
+	return nil, errNotImplemented
+}
+
+func (fakeAPI) DeletePushToken(context.Context, openapi.DeletePushTokenRequestObject) (openapi.DeletePushTokenResponseObject, error) {
+	return nil, errNotImplemented
+}
+
 // authFunc adapts a function to the Authenticator interface.
 type authFunc func(ctx context.Context, idToken string) (pgtype.UUID, error)
 
