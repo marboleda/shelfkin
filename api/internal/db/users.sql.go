@@ -100,14 +100,16 @@ const updateUserProfile = `-- name: UpdateUserProfile :one
 UPDATE users
 SET display_name = COALESCE($1, display_name),
     timezone     = COALESCE($2, timezone),
+    push_enabled = COALESCE($3, push_enabled),
     updated_at   = now()
-WHERE id = $3
+WHERE id = $4
 RETURNING id, display_name, email, timezone, push_enabled
 `
 
 type UpdateUserProfileParams struct {
 	DisplayName pgtype.Text
 	Timezone    pgtype.Text
+	PushEnabled pgtype.Bool
 	ID          pgtype.UUID
 }
 
@@ -121,7 +123,12 @@ type UpdateUserProfileRow struct {
 
 // A NULL argument leaves that column unchanged. updated_at is always set.
 func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (UpdateUserProfileRow, error) {
-	row := q.db.QueryRow(ctx, updateUserProfile, arg.DisplayName, arg.Timezone, arg.ID)
+	row := q.db.QueryRow(ctx, updateUserProfile,
+		arg.DisplayName,
+		arg.Timezone,
+		arg.PushEnabled,
+		arg.ID,
+	)
 	var i UpdateUserProfileRow
 	err := row.Scan(
 		&i.ID,

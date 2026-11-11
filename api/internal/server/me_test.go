@@ -204,7 +204,8 @@ func TestPatchMe(t *testing.T) {
 		{"timezone only", `{"timezone":"America/Toronto"}`, "New Name", "America/Toronto"},
 		{"both", `{"displayName":"Both","timezone":"Europe/Paris"}`, "Both", "Europe/Paris"},
 		{"nulls are omitted fields", `{"displayName":null,"timezone":null}`, "Both", "Europe/Paris"},
-		{"unknown fields are ignored", `{"pushEnabled":true}`, "Both", "Europe/Paris"},
+		// pushEnabled is a real field since #21; email is read-only.
+		{"unknown fields are ignored", `{"email":"other@example.com","favouriteColour":"blue"}`, "Both", "Europe/Paris"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

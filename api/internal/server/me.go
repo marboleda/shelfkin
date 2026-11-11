@@ -54,7 +54,7 @@ func (a *API) GetMe(ctx context.Context, _ openapi.GetMeRequestObject) (openapi.
 	return openapi.GetMe200JSONResponse(userResponse(row)), nil
 }
 
-// PatchMe updates the caller's display name and/or time zone.
+// PatchMe updates the caller's display name, time zone and/or push opt-in.
 func (a *API) PatchMe(ctx context.Context, req openapi.PatchMeRequestObject) (openapi.PatchMeResponseObject, error) {
 	userID, ok := auth.UserID(ctx)
 	if !ok {
@@ -78,12 +78,15 @@ func (a *API) PatchMe(ctx context.Context, req openapi.PatchMeRequestObject) (op
 			}
 			params.Timezone = pgtype.Text{String: *req.Body.Timezone, Valid: true}
 		}
+		if req.Body.PushEnabled != nil {
+			params.PushEnabled = pgtype.Bool{Bool: *req.Body.PushEnabled, Valid: true}
+		}
 	}
 
 	var row db.GetUserRow
 	err := dbtx.WithUser(ctx, a.db, userID, func(tx pgx.Tx) error {
 		q := db.New(tx)
-		if !params.DisplayName.Valid && !params.Timezone.Valid {
+		if !params.DisplayName.Valid && !params.Timezone.Valid && !params.PushEnabled.Valid {
 			// Nothing to change: an empty body or {}.
 			var err error
 			row, err = q.GetUser(ctx, userID)

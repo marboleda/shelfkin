@@ -52,6 +52,27 @@ func (e MemberRole) Valid() bool {
 	}
 }
 
+// Defines values for PushPlatform.
+const (
+	PushPlatformAndroid PushPlatform = "android"
+	PushPlatformIos     PushPlatform = "ios"
+	PushPlatformWeb     PushPlatform = "web"
+)
+
+// Valid indicates whether the value is a known member of the PushPlatform enum.
+func (e PushPlatform) Valid() bool {
+	switch e {
+	case PushPlatformAndroid:
+		return true
+	case PushPlatformIos:
+		return true
+	case PushPlatformWeb:
+		return true
+	default:
+		return false
+	}
+}
+
 // CreateHousehold defines model for CreateHousehold.
 type CreateHousehold struct {
 	// Name Trimmed, then must be 1 to 50 characters.
@@ -124,6 +145,36 @@ type Id = openapi_types.UUID
 // MemberRole A member's role in a household. Each household has exactly one owner.
 type MemberRole string
 
+// PushPlatform The platform of the device a push token belongs to.
+type PushPlatform string
+
+// PushToken A push token registered for the signed-in user.
+type PushToken struct {
+	// LastSeenAt A point in time, as an RFC 3339 string in UTC.
+	//
+	// Example: 2026-01-31T18:04:05Z
+	LastSeenAt Timestamp `json:"lastSeenAt"`
+
+	// Platform The platform of the device a push token belongs to.
+	Platform PushPlatform `json:"platform"`
+
+	// Token Example: ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]
+	Token string `json:"token"`
+}
+
+// RegisterPushToken A device's Expo push token to register for the signed-in user.
+type RegisterPushToken struct {
+	// Platform The platform of the device a push token belongs to.
+	Platform PushPlatform `json:"platform"`
+
+	// Token An Expo push token, `ExponentPushToken[...]` or `ExpoPushToken[...]`,
+	// at most 255 characters.
+	//
+	//
+	// Example: ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]
+	Token string `json:"token"`
+}
+
 // Timestamp A point in time, as an RFC 3339 string in UTC.
 //
 // Example: 2026-01-31T18:04:05Z
@@ -143,6 +194,11 @@ type UpdateMe struct {
 	//
 	// Example: Sam
 	DisplayName *string `json:"displayName,omitempty"`
+
+	// PushEnabled Turns expiry push notifications on or off for all of the user's devices.
+	//
+	// Example: true
+	PushEnabled *bool `json:"pushEnabled,omitempty"`
 
 	// Timezone An IANA time zone name such as `America/Toronto`. `Local` is not accepted.
 	//
@@ -170,7 +226,11 @@ type User struct {
 	// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
 	Id Id `json:"id"`
 
-	// PushEnabled Whether the user has opted in to push notifications.
+	// PushEnabled Whether the user has opted in to expiry push notifications. Starts as
+	// `false`. The setting is per user and covers all of their devices;
+	// turning it off keeps their push tokens, so turning it back on needs no
+	// re-registration.
+	//
 	//
 	// Example: false
 	PushEnabled bool `json:"pushEnabled"`
@@ -213,6 +273,9 @@ type UpdateHouseholdJSONRequestBody = UpdateHousehold
 // PatchMeJSONRequestBody defines body for PatchMe for application/json ContentType.
 type PatchMeJSONRequestBody = UpdateMe
 
+// RegisterPushTokenJSONRequestBody defines body for RegisterPushToken for application/json ContentType.
+type RegisterPushTokenJSONRequestBody = RegisterPushToken
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// GetHealth Check that the API and its dependencies are up
@@ -239,6 +302,12 @@ type ServerInterface interface {
 	// PatchMe Update the signed-in user's profile
 	// (PATCH /me)
 	PatchMe(w http.ResponseWriter, r *http.Request)
+	// RegisterPushToken Register or refresh this device's Expo push token
+	// (POST /me/push-tokens)
+	RegisterPushToken(w http.ResponseWriter, r *http.Request)
+	// DeletePushToken Remove this device's Expo push token
+	// (DELETE /me/push-tokens/{token})
+	DeletePushToken(w http.ResponseWriter, r *http.Request, token string)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -398,6 +467,46 @@ func (siw *ServerInterfaceWrapper) PatchMe(w http.ResponseWriter, r *http.Reques
 	handler.ServeHTTP(w, r)
 }
 
+// RegisterPushToken operation middleware
+func (siw *ServerInterfaceWrapper) RegisterPushToken(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RegisterPushToken(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeletePushToken operation middleware
+func (siw *ServerInterfaceWrapper) DeletePushToken(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "token" -------------
+	var token string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "token", r.PathValue("token"), &token, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "token", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeletePushToken(w, r, token)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -521,6 +630,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/health", wrapper.GetHealth)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/me", wrapper.GetMe)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/me", wrapper.PatchMe)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/me/push-tokens", wrapper.RegisterPushToken)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/me/push-tokens/{token}", wrapper.DeletePushToken)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/households", wrapper.ListHouseholds)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/households", wrapper.CreateHousehold)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/households/{householdId}", wrapper.DeleteHousehold)
@@ -1078,6 +1189,114 @@ func (response PatchMe500JSONResponse) VisitPatchMeResponse(w http.ResponseWrite
 	return err
 }
 
+type RegisterPushTokenRequestObject struct {
+	Body *RegisterPushTokenJSONRequestBody
+}
+
+type RegisterPushTokenResponseObject interface {
+	VisitRegisterPushTokenResponse(w http.ResponseWriter) error
+}
+
+type RegisterPushToken200JSONResponse PushToken
+
+func (response RegisterPushToken200JSONResponse) VisitRegisterPushTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterPushToken400JSONResponse Error
+
+func (response RegisterPushToken400JSONResponse) VisitRegisterPushTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterPushToken401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response RegisterPushToken401JSONResponse) VisitRegisterPushTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterPushToken500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response RegisterPushToken500JSONResponse) VisitRegisterPushTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeletePushTokenRequestObject struct {
+	Token string `json:"token"`
+}
+
+type DeletePushTokenResponseObject interface {
+	VisitDeletePushTokenResponse(w http.ResponseWriter) error
+}
+
+type DeletePushToken204Response struct {
+}
+
+func (response DeletePushToken204Response) VisitDeletePushTokenResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeletePushToken401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeletePushToken401JSONResponse) VisitDeletePushTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeletePushToken500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response DeletePushToken500JSONResponse) VisitDeletePushTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// GetHealth Check that the API and its dependencies are up
@@ -1104,6 +1323,12 @@ type StrictServerInterface interface {
 	// PatchMe Update the signed-in user's profile
 	// (PATCH /me)
 	PatchMe(ctx context.Context, request PatchMeRequestObject) (PatchMeResponseObject, error)
+	// RegisterPushToken Register or refresh this device's Expo push token
+	// (POST /me/push-tokens)
+	RegisterPushToken(ctx context.Context, request RegisterPushTokenRequestObject) (RegisterPushTokenResponseObject, error)
+	// DeletePushToken Remove this device's Expo push token
+	// (DELETE /me/push-tokens/{token})
+	DeletePushToken(ctx context.Context, request DeletePushTokenRequestObject) (DeletePushTokenResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -1360,6 +1585,63 @@ func (sh *strictHandler) PatchMe(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(PatchMeResponseObject); ok {
 		if err := validResponse.VisitPatchMeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RegisterPushToken operation middleware
+func (sh *strictHandler) RegisterPushToken(w http.ResponseWriter, r *http.Request) {
+	var request RegisterPushTokenRequestObject
+
+	var body RegisterPushTokenJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RegisterPushToken(ctx, request.(RegisterPushTokenRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RegisterPushToken")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RegisterPushTokenResponseObject); ok {
+		if err := validResponse.VisitRegisterPushTokenResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeletePushToken operation middleware
+func (sh *strictHandler) DeletePushToken(w http.ResponseWriter, r *http.Request, token string) {
+	var request DeletePushTokenRequestObject
+
+	request.Token = token
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeletePushToken(ctx, request.(DeletePushTokenRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeletePushToken")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeletePushTokenResponseObject); ok {
+		if err := validResponse.VisitDeletePushTokenResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

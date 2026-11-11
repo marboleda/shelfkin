@@ -44,10 +44,62 @@ export interface paths {
         head?: never;
         /**
          * Update the signed-in user's profile
-         * @description Updates `displayName` and/or `timezone`. Omitted fields are unchanged; an
-         *     empty body or `{}` changes nothing and returns the current profile.
+         * @description Updates `displayName`, `timezone` and/or `pushEnabled`. Omitted fields are
+         *     unchanged; an empty body or `{}` changes nothing and returns the current
+         *     profile.
          */
         patch: operations["patchMe"];
+        trace?: never;
+    };
+    "/me/push-tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register or refresh this device's Expo push token
+         * @description Registers `token` for the caller. The app calls this on every start:
+         *
+         *     - A token the caller already has is refreshed: its `lastSeenAt` (and
+         *       `platform`, if it changed) is updated and no new token is added.
+         *     - A token that belongs to another user moves to the caller, for example
+         *       when two people sign in on one device in turn.
+         *
+         *     A user can have several tokens, one per device. Pushes are only sent
+         *     when the user's `pushEnabled` is on.
+         */
+        post: operations["registerPushToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/push-tokens/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove this device's Expo push token
+         * @description Deletes the caller's `token`, for example on sign-out, so the device
+         *     gets no more pushes. A token that does not exist or belongs to another
+         *     user is left alone and still returns 204, so callers cannot remove or
+         *     detect another user's device.
+         */
+        delete: operations["deletePushToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/households": {
@@ -174,7 +226,10 @@ export interface components {
              */
             timezone: string;
             /**
-             * @description Whether the user has opted in to push notifications.
+             * @description Whether the user has opted in to expiry push notifications. Starts as
+             *     `false`. The setting is per user and covers all of their devices;
+             *     turning it off keeps their push tokens, so turning it back on needs no
+             *     re-registration.
              * @example false
              */
             pushEnabled: boolean;
@@ -191,6 +246,33 @@ export interface components {
              * @example America/Toronto
              */
             timezone?: string;
+            /**
+             * @description Turns expiry push notifications on or off for all of the user's devices.
+             * @example true
+             */
+            pushEnabled?: boolean;
+        };
+        /**
+         * @description The platform of the device a push token belongs to.
+         * @enum {string}
+         */
+        PushPlatform: "ios" | "android" | "web";
+        /** @description A device's Expo push token to register for the signed-in user. */
+        RegisterPushToken: {
+            /**
+             * @description An Expo push token, `ExponentPushToken[...]` or `ExpoPushToken[...]`,
+             *     at most 255 characters.
+             * @example ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]
+             */
+            token: string;
+            platform: components["schemas"]["PushPlatform"];
+        };
+        /** @description A push token registered for the signed-in user. */
+        PushToken: {
+            /** @example ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx] */
+            token: string;
+            platform: components["schemas"]["PushPlatform"];
+            lastSeenAt: components["schemas"]["Timestamp"];
         };
         /** @description A household, as seen by the signed-in user. */
         Household: {
@@ -482,6 +564,80 @@ export interface operations {
                      */
                     "application/json": components["schemas"]["Error"];
                 };
+            };
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    registerPushToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterPushToken"];
+            };
+        };
+        responses: {
+            /** @description The registered token. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushToken"];
+                };
+            };
+            /**
+             * @description The body is missing or not valid JSON (code `bad_request`), `token` is
+             *     not an Expo push token of at most 255 characters (code
+             *     `invalid_token`), or `platform` is not `ios`, `android` or `web`
+             *     (code `invalid_platform`).
+             */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "invalid_token",
+                     *         "message": "token must be an Expo push token such as ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deletePushToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The Expo push token, URL-encoded (it contains `[` and `]`).
+                 * @example ExponentPushToken%5Bxxxxxxxxxxxxxxxxxxxxxx%5D
+                 */
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller no longer has this token. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             401: components["responses"]["Unauthorized"];
             500: components["responses"]["InternalError"];

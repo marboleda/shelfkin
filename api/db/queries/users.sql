@@ -28,6 +28,7 @@ WHERE id = $1;
 UPDATE users
 SET display_name = COALESCE(sqlc.narg(display_name), display_name),
     timezone     = COALESCE(sqlc.narg(timezone), timezone),
+    push_enabled = COALESCE(sqlc.narg(push_enabled), push_enabled),
     updated_at   = now()
 WHERE id = @id
 RETURNING id, display_name, email, timezone, push_enabled;
