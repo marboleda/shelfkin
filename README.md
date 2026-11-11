@@ -74,7 +74,7 @@ The API server is `api/main.go`. It reads its configuration from environment var
 | `FIREBASE_AUTH_EMULATOR_HOST` | No | None | `host:port` of the Firebase Auth emulator, `localhost:9099` locally. When set, the API accepts the emulator's unsigned tokens and logs a warning at startup. **Never set it in production** (the #38 deploy must not pass it): anyone could then forge a token for any user |
 | `PORT` | No | `8080` | Port to listen on, 1 to 65535. Cloud Run sets it |
 | `LOG_LEVEL` | No | `info` | `debug`, `info`, `warn` or `error` |
-| `CORS_ALLOWED_ORIGINS` | No | `http://localhost:8081` (the Expo web dev server) | Comma-separated browser origins allowed to call the API, each `http(s)://host[:port]` with no path, for example `https://shelfkin.web.app,https://shelfkin.firebaseapp.com`. Setting it replaces the default. `*` and wildcards are rejected |
+| `CORS_ALLOWED_ORIGINS` | No | `http://localhost:8081` (the Expo web dev server) | Comma-separated browser origins allowed to call the API, each `http(s)://host[:port]` with no path, for example `https://shelfkin-5da75.web.app,https://shelfkin-5da75.firebaseapp.com`. Setting it replaces the default. `*` and wildcards are rejected |
 
 An empty variable counts as unset. If a variable is missing or invalid, the server logs one line naming it and exits with code 1. The database password is never logged. Every occurrence of the password in a log line is replaced with `[REDACTED]`; with the local credentials, where the password is the same as the user name, `shelfkin` is redacted wherever it appears.
 
@@ -151,7 +151,7 @@ In production set it to both Firebase Hosting origins of the web app:
 CORS_ALLOWED_ORIGINS=https://<hosting_site_id>.web.app,https://<hosting_site_id>.firebaseapp.com
 ```
 
-which is `https://shelfkin.web.app,https://shelfkin.firebaseapp.com` for the site ID in [Infrastructure](#infrastructure). Terraform sets this on the `shelfkin-api` Cloud Run service (`infra/run.tf`). Add any custom domain here if one is added later.
+which is `https://shelfkin-5da75.web.app,https://shelfkin-5da75.firebaseapp.com` for the site ID in [Infrastructure](#infrastructure). Terraform sets this on the `shelfkin-api` Cloud Run service (`infra/run.tf`). Add any custom domain here if one is added later.
 
 ## Expiry notification job
 
@@ -231,7 +231,7 @@ Fixed values:
 | What | Value |
 |---|---|
 | Region (every regional resource) | `us-central1` |
-| Firebase Hosting site ID | `shelfkin` (served at `https://shelfkin.web.app`) |
+| Firebase Hosting site ID | `shelfkin-5da75` (served at `https://shelfkin-5da75.web.app`). `shelfkin` was already taken |
 | iOS bundle identifier and Android package | `com.marboleda.shelfkin` |
 | Terraform | 1.14.3 (pinned in `infra/versions.tf`) |
 

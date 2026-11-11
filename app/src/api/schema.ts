@@ -44,10 +44,198 @@ export interface paths {
         head?: never;
         /**
          * Update the signed-in user's profile
-         * @description Updates `displayName` and/or `timezone`. Omitted fields are unchanged; an
-         *     empty body or `{}` changes nothing and returns the current profile.
+         * @description Updates `displayName`, `timezone` and/or `pushEnabled`. Omitted fields are
+         *     unchanged; an empty body or `{}` changes nothing and returns the current
+         *     profile.
          */
         patch: operations["patchMe"];
+        trace?: never;
+    };
+    "/me/push-tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register or refresh this device's Expo push token
+         * @description Registers `token` for the caller. The app calls this on every start:
+         *
+         *     - A token the caller already has is refreshed: its `lastSeenAt` (and
+         *       `platform`, if it changed) is updated and no new token is added.
+         *     - A token that belongs to another user moves to the caller, for example
+         *       when two people sign in on one device in turn.
+         *
+         *     A user can have several tokens, one per device. Pushes are only sent
+         *     when the user's `pushEnabled` is on.
+         */
+        post: operations["registerPushToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/push-tokens/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove this device's Expo push token
+         * @description Deletes the caller's `token`, for example on sign-out, so the device
+         *     gets no more pushes. A token that does not exist or belongs to another
+         *     user is left alone and still returns 204, so callers cannot remove or
+         *     detect another user's device.
+         */
+        delete: operations["deletePushToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/households": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the households the signed-in user belongs to
+         * @description Every household the caller is a member of, with the caller's role in it,
+         *     sorted by name (case-insensitive). A user with no households gets an
+         *     empty list.
+         */
+        get: operations["listHouseholds"];
+        put?: never;
+        /**
+         * Create a household
+         * @description Creates a household with the caller as its owner.
+         */
+        post: operations["createHousehold"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/households/{householdId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        /** Get one of the signed-in user's households */
+        get: operations["getHousehold"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a household
+         * @description Owner only. Deletes the household together with its members, invites,
+         *     custom catalog items, item defaults, pantry entries and item events.
+         */
+        delete: operations["deleteHousehold"];
+        options?: never;
+        head?: never;
+        /**
+         * Rename a household
+         * @description Owner only.
+         */
+        patch: operations["updateHousehold"];
+        trace?: never;
+    };
+    "/households/{householdId}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a household's members
+         * @description Every member of the household, owner first, then the other members by
+         *     the time they joined (earliest first). Any member can call this.
+         */
+        get: operations["listMembers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/households/{householdId}/members/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+                /** @description The member's user ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                userId: components["schemas"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a member, or leave the household
+         * @description - The **owner** can remove any other member.
+         *     - A **member** can remove only themselves, which is leaving the household.
+         *     - The **owner** cannot leave: they must transfer ownership to another
+         *       member (`POST /households/{householdId}/transfer-ownership`) or
+         *       delete the household first.
+         *
+         *     The removed user loses access to the household straight away. Pantry
+         *     entries and events they created stay, still labelled with their name.
+         */
+        delete: operations["removeMember"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/households/{householdId}/transfer-ownership": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Make another member the owner
+         * @description Owner only. Makes `userId`, who must already be a member, the owner and
+         *     the caller a member, in one step. The household always has exactly one
+         *     owner. Afterwards the caller can leave the household.
+         */
+        post: operations["transferOwnership"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
 }
@@ -80,8 +268,8 @@ export interface components {
             /**
              * @description A stable, machine-readable error code, for example `bad_request`,
              *     `unauthorized`, `forbidden`, `not_found`, `method_not_allowed`,
-             *     `internal`, `database_unavailable`, `invalid_display_name` or
-             *     `invalid_timezone`.
+             *     `internal`, `database_unavailable`, `invalid_display_name`,
+             *     `invalid_timezone`, `invalid_name` or `owner_only`.
              * @example not_found
              */
             code: string;
@@ -119,7 +307,10 @@ export interface components {
              */
             timezone: string;
             /**
-             * @description Whether the user has opted in to push notifications.
+             * @description Whether the user has opted in to expiry push notifications. Starts as
+             *     `false`. The setting is per user and covers all of their devices;
+             *     turning it off keeps their push tokens, so turning it back on needs no
+             *     re-registration.
              * @example false
              */
             pushEnabled: boolean;
@@ -136,6 +327,89 @@ export interface components {
              * @example America/Toronto
              */
             timezone?: string;
+            /**
+             * @description Turns expiry push notifications on or off for all of the user's devices.
+             * @example true
+             */
+            pushEnabled?: boolean;
+        };
+        /**
+         * @description The platform of the device a push token belongs to.
+         * @enum {string}
+         */
+        PushPlatform: "ios" | "android" | "web";
+        /** @description A device's Expo push token to register for the signed-in user. */
+        RegisterPushToken: {
+            /**
+             * @description An Expo push token, `ExponentPushToken[...]` or `ExpoPushToken[...]`,
+             *     at most 255 characters.
+             * @example ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]
+             */
+            token: string;
+            platform: components["schemas"]["PushPlatform"];
+        };
+        /** @description A push token registered for the signed-in user. */
+        PushToken: {
+            /** @example ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx] */
+            token: string;
+            platform: components["schemas"]["PushPlatform"];
+            lastSeenAt: components["schemas"]["Timestamp"];
+        };
+        /** @description A household, as seen by the signed-in user. */
+        Household: {
+            id: components["schemas"]["Id"];
+            /**
+             * @description 1 to 50 characters. Not unique.
+             * @example Home
+             */
+            name: string;
+            role: components["schemas"]["MemberRole"];
+            createdAt: components["schemas"]["Timestamp"];
+        };
+        /**
+         * @description A member's role in a household. Each household has exactly one owner.
+         * @enum {string}
+         */
+        MemberRole: "owner" | "member";
+        HouseholdList: {
+            households: components["schemas"]["Household"][];
+        };
+        CreateHousehold: {
+            /**
+             * @description Trimmed, then must be 1 to 50 characters.
+             * @example Home
+             */
+            name: string;
+        };
+        UpdateHousehold: {
+            /**
+             * @description Trimmed, then must be 1 to 50 characters.
+             * @example Cottage
+             */
+            name: string;
+        };
+        /** @description A member of a household. */
+        Member: {
+            userId: components["schemas"]["Id"];
+            /**
+             * @description The member's display name (see `User`).
+             * @example Sam
+             */
+            displayName: string;
+            /**
+             * @description The member's email, or null if their account has none.
+             * @example sam@example.com
+             */
+            email: string | null;
+            role: components["schemas"]["MemberRole"];
+            joinedAt: components["schemas"]["Timestamp"];
+        };
+        MemberList: {
+            /** @description The owner first, then the other members by `joinedAt`. */
+            members: components["schemas"]["Member"][];
+        };
+        TransferOwnership: {
+            userId: components["schemas"]["Id"];
         };
     };
     responses: {
@@ -224,8 +498,68 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /**
+         * @description The body is not valid JSON (code `bad_request`), or `name` is not 1 to 50
+         *     characters after trimming (code `invalid_name`).
+         */
+        InvalidHouseholdName: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "error": {
+                 *         "code": "invalid_name",
+                 *         "message": "name must be 1 to 50 characters after trimming spaces."
+                 *       }
+                 *     }
+                 */
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Only the household's owner can do this (code `owner_only`). */
+        OwnerOnly: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "error": {
+                 *         "code": "owner_only",
+                 *         "message": "Only the household owner can do this."
+                 *       }
+                 *     }
+                 */
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /**
+         * @description The household does not exist or the caller is not a member of it
+         *     (code `not_found`); the two cases are indistinguishable.
+         */
+        HouseholdNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "error": {
+                 *         "code": "not_found",
+                 *         "message": "Household not found."
+                 *       }
+                 *     }
+                 */
+                "application/json": components["schemas"]["Error"];
+            };
+        };
     };
-    parameters: never;
+    parameters: {
+        /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+        HouseholdId: components["schemas"]["Id"];
+    };
     requestBodies: never;
     headers: never;
     pathItems: never;
@@ -336,6 +670,381 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    registerPushToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterPushToken"];
+            };
+        };
+        responses: {
+            /** @description The registered token. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushToken"];
+                };
+            };
+            /**
+             * @description The body is missing or not valid JSON (code `bad_request`), `token` is
+             *     not an Expo push token of at most 255 characters (code
+             *     `invalid_token`), or `platform` is not `ios`, `android` or `web`
+             *     (code `invalid_platform`).
+             */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "invalid_token",
+                     *         "message": "token must be an Expo push token such as ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deletePushToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The Expo push token, URL-encoded (it contains `[` and `]`).
+                 * @example ExponentPushToken%5Bxxxxxxxxxxxxxxxxxxxxxx%5D
+                 */
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller no longer has this token. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listHouseholds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's households. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HouseholdList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createHousehold: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateHousehold"];
+            };
+        };
+        responses: {
+            /** @description The new household. The caller's `role` is `owner`. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Household"];
+                };
+            };
+            400: components["responses"]["InvalidHouseholdName"];
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getHousehold: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The household, with the caller's role in it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Household"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["HouseholdNotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteHousehold: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The household was deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["OwnerOnly"];
+            404: components["responses"]["HouseholdNotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateHousehold: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateHousehold"];
+            };
+        };
+        responses: {
+            /** @description The renamed household. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Household"];
+                };
+            };
+            400: components["responses"]["InvalidHouseholdName"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["OwnerOnly"];
+            404: components["responses"]["HouseholdNotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The household's members. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["HouseholdNotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    removeMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+                /** @description The member's user ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                userId: components["schemas"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user is no longer a member of the household. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["OwnerOnly"];
+            /**
+             * @description The household does not exist or the caller is not a member of it, or
+             *     `userId` is not a member of the household (code `not_found` in
+             *     every case).
+             */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "not_found",
+                     *         "message": "Member not found."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /**
+             * @description The owner tried to remove themselves (code `owner_cannot_leave`), or
+             *     the membership changed while the request ran (code `conflict`).
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "owner_cannot_leave",
+                     *         "message": "The owner cannot leave the household. Transfer ownership to another member or delete the household first."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    transferOwnership: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransferOwnership"];
+            };
+        };
+        responses: {
+            /** @description The household's members after the transfer, new owner first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberList"];
+                };
+            };
+            /**
+             * @description The body is missing or not valid JSON (code `bad_request`), `userId`
+             *     is not a member of the household (code `not_a_member`), or `userId`
+             *     is the caller (code `already_owner`).
+             */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "not_a_member",
+                     *         "message": "The new owner must be a member of the household."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["OwnerOnly"];
+            404: components["responses"]["HouseholdNotFound"];
+            /**
+             * @description Another change to the household's members conflicted with this one;
+             *     reload the members and try again (code `conflict`).
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "conflict",
+                     *         "message": "The household's members changed while this request ran. Try again."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             500: components["responses"]["InternalError"];
         };
     };

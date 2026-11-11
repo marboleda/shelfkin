@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/oapi-codegen/runtime"
 	openapi_types "github.com/oapi-codegen/runtime/types"
@@ -33,6 +34,53 @@ func (e HealthStatus) Valid() bool {
 	}
 }
 
+// Defines values for MemberRole.
+const (
+	MemberRoleMember MemberRole = "member"
+	MemberRoleOwner  MemberRole = "owner"
+)
+
+// Valid indicates whether the value is a known member of the MemberRole enum.
+func (e MemberRole) Valid() bool {
+	switch e {
+	case MemberRoleMember:
+		return true
+	case MemberRoleOwner:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PushPlatform.
+const (
+	PushPlatformAndroid PushPlatform = "android"
+	PushPlatformIos     PushPlatform = "ios"
+	PushPlatformWeb     PushPlatform = "web"
+)
+
+// Valid indicates whether the value is a known member of the PushPlatform enum.
+func (e PushPlatform) Valid() bool {
+	switch e {
+	case PushPlatformAndroid:
+		return true
+	case PushPlatformIos:
+		return true
+	case PushPlatformWeb:
+		return true
+	default:
+		return false
+	}
+}
+
+// CreateHousehold defines model for CreateHousehold.
+type CreateHousehold struct {
+	// Name Trimmed, then must be 1 to 50 characters.
+	//
+	// Example: Home
+	Name string `json:"name"`
+}
+
 // Error The error format every endpoint uses.
 type Error struct {
 	Error ErrorDetail `json:"error"`
@@ -42,8 +90,8 @@ type Error struct {
 type ErrorDetail struct {
 	// Code A stable, machine-readable error code, for example `bad_request`,
 	// `unauthorized`, `forbidden`, `not_found`, `method_not_allowed`,
-	// `internal`, `database_unavailable`, `invalid_display_name` or
-	// `invalid_timezone`.
+	// `internal`, `database_unavailable`, `invalid_display_name`,
+	// `invalid_timezone`, `invalid_name` or `owner_only`.
 	//
 	//
 	// Example: not_found
@@ -63,10 +111,122 @@ type Health struct {
 // HealthStatus defines model for Health.Status.
 type HealthStatus string
 
+// Household A household, as seen by the signed-in user.
+type Household struct {
+	// CreatedAt A point in time, as an RFC 3339 string in UTC.
+	//
+	// Example: 2026-01-31T18:04:05Z
+	CreatedAt Timestamp `json:"createdAt"`
+
+	// Id A UUIDv7 identifier.
+	//
+	// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+	Id Id `json:"id"`
+
+	// Name 1 to 50 characters. Not unique.
+	//
+	// Example: Home
+	Name string `json:"name"`
+
+	// Role A member's role in a household. Each household has exactly one owner.
+	Role MemberRole `json:"role"`
+}
+
+// HouseholdList defines model for HouseholdList.
+type HouseholdList struct {
+	Households []Household `json:"households"`
+}
+
 // Id A UUIDv7 identifier.
 //
 // Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
 type Id = openapi_types.UUID
+
+// Member A member of a household.
+type Member struct {
+	// DisplayName The member's display name (see `User`).
+	//
+	// Example: Sam
+	DisplayName string `json:"displayName"`
+
+	// Email The member's email, or null if their account has none.
+	//
+	// Example: sam@example.com
+	Email *string `json:"email"`
+
+	// JoinedAt A point in time, as an RFC 3339 string in UTC.
+	//
+	// Example: 2026-01-31T18:04:05Z
+	JoinedAt Timestamp `json:"joinedAt"`
+
+	// Role A member's role in a household. Each household has exactly one owner.
+	Role MemberRole `json:"role"`
+
+	// UserId A UUIDv7 identifier.
+	//
+	// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+	UserId Id `json:"userId"`
+}
+
+// MemberList defines model for MemberList.
+type MemberList struct {
+	// Members The owner first, then the other members by `joinedAt`.
+	Members []Member `json:"members"`
+}
+
+// MemberRole A member's role in a household. Each household has exactly one owner.
+type MemberRole string
+
+// PushPlatform The platform of the device a push token belongs to.
+type PushPlatform string
+
+// PushToken A push token registered for the signed-in user.
+type PushToken struct {
+	// LastSeenAt A point in time, as an RFC 3339 string in UTC.
+	//
+	// Example: 2026-01-31T18:04:05Z
+	LastSeenAt Timestamp `json:"lastSeenAt"`
+
+	// Platform The platform of the device a push token belongs to.
+	Platform PushPlatform `json:"platform"`
+
+	// Token Example: ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]
+	Token string `json:"token"`
+}
+
+// RegisterPushToken A device's Expo push token to register for the signed-in user.
+type RegisterPushToken struct {
+	// Platform The platform of the device a push token belongs to.
+	Platform PushPlatform `json:"platform"`
+
+	// Token An Expo push token, `ExponentPushToken[...]` or `ExpoPushToken[...]`,
+	// at most 255 characters.
+	//
+	//
+	// Example: ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]
+	Token string `json:"token"`
+}
+
+// Timestamp A point in time, as an RFC 3339 string in UTC.
+//
+// Example: 2026-01-31T18:04:05Z
+type Timestamp = time.Time
+
+// TransferOwnership defines model for TransferOwnership.
+type TransferOwnership struct {
+	// UserId A UUIDv7 identifier.
+	//
+	// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+	UserId Id `json:"userId"`
+}
+
+// UpdateHousehold defines model for UpdateHousehold.
+type UpdateHousehold struct {
+	// Name Trimmed, then must be 1 to 50 characters.
+	//
+	// Example: Cottage
+	Name string `json:"name"`
+}
 
 // UpdateMe Fields of the signed-in user to change. Omitted fields are unchanged.
 type UpdateMe struct {
@@ -74,6 +234,11 @@ type UpdateMe struct {
 	//
 	// Example: Sam
 	DisplayName *string `json:"displayName,omitempty"`
+
+	// PushEnabled Turns expiry push notifications on or off for all of the user's devices.
+	//
+	// Example: true
+	PushEnabled *bool `json:"pushEnabled,omitempty"`
 
 	// Timezone An IANA time zone name such as `America/Toronto`. `Local` is not accepted.
 	//
@@ -101,7 +266,11 @@ type User struct {
 	// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
 	Id Id `json:"id"`
 
-	// PushEnabled Whether the user has opted in to push notifications.
+	// PushEnabled Whether the user has opted in to expiry push notifications. Starts as
+	// `false`. The setting is per user and covers all of their devices;
+	// turning it off keeps their push tokens, so turning it back on needs no
+	// re-registration.
+	//
 	//
 	// Example: false
 	PushEnabled bool `json:"pushEnabled"`
@@ -112,26 +281,85 @@ type User struct {
 	Timezone string `json:"timezone"`
 }
 
+// HouseholdId A UUIDv7 identifier.
+//
+// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+type HouseholdId = Id
+
+// BadRequest The error format every endpoint uses.
+type BadRequest = Error
+
+// HouseholdNotFound The error format every endpoint uses.
+type HouseholdNotFound = Error
+
 // InternalError The error format every endpoint uses.
 type InternalError = Error
+
+// InvalidHouseholdName The error format every endpoint uses.
+type InvalidHouseholdName = Error
+
+// OwnerOnly The error format every endpoint uses.
+type OwnerOnly = Error
 
 // Unauthorized The error format every endpoint uses.
 type Unauthorized = Error
 
+// CreateHouseholdJSONRequestBody defines body for CreateHousehold for application/json ContentType.
+type CreateHouseholdJSONRequestBody = CreateHousehold
+
+// UpdateHouseholdJSONRequestBody defines body for UpdateHousehold for application/json ContentType.
+type UpdateHouseholdJSONRequestBody = UpdateHousehold
+
+// TransferOwnershipJSONRequestBody defines body for TransferOwnership for application/json ContentType.
+type TransferOwnershipJSONRequestBody = TransferOwnership
+
 // PatchMeJSONRequestBody defines body for PatchMe for application/json ContentType.
 type PatchMeJSONRequestBody = UpdateMe
+
+// RegisterPushTokenJSONRequestBody defines body for RegisterPushToken for application/json ContentType.
+type RegisterPushTokenJSONRequestBody = RegisterPushToken
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// GetHealth Check that the API and its dependencies are up
 	// (GET /health)
 	GetHealth(w http.ResponseWriter, r *http.Request)
+	// ListHouseholds List the households the signed-in user belongs to
+	// (GET /households)
+	ListHouseholds(w http.ResponseWriter, r *http.Request)
+	// CreateHousehold Create a household
+	// (POST /households)
+	CreateHousehold(w http.ResponseWriter, r *http.Request)
+	// DeleteHousehold Delete a household
+	// (DELETE /households/{householdId})
+	DeleteHousehold(w http.ResponseWriter, r *http.Request, householdId HouseholdId)
+	// GetHousehold Get one of the signed-in user's households
+	// (GET /households/{householdId})
+	GetHousehold(w http.ResponseWriter, r *http.Request, householdId HouseholdId)
+	// UpdateHousehold Rename a household
+	// (PATCH /households/{householdId})
+	UpdateHousehold(w http.ResponseWriter, r *http.Request, householdId HouseholdId)
+	// ListMembers List a household's members
+	// (GET /households/{householdId}/members)
+	ListMembers(w http.ResponseWriter, r *http.Request, householdId HouseholdId)
+	// RemoveMember Remove a member, or leave the household
+	// (DELETE /households/{householdId}/members/{userId})
+	RemoveMember(w http.ResponseWriter, r *http.Request, householdId HouseholdId, userId Id)
+	// TransferOwnership Make another member the owner
+	// (POST /households/{householdId}/transfer-ownership)
+	TransferOwnership(w http.ResponseWriter, r *http.Request, householdId HouseholdId)
 	// GetMe Get the signed-in user's profile
 	// (GET /me)
 	GetMe(w http.ResponseWriter, r *http.Request)
 	// PatchMe Update the signed-in user's profile
 	// (PATCH /me)
 	PatchMe(w http.ResponseWriter, r *http.Request)
+	// RegisterPushToken Register or refresh this device's Expo push token
+	// (POST /me/push-tokens)
+	RegisterPushToken(w http.ResponseWriter, r *http.Request)
+	// DeletePushToken Remove this device's Expo push token
+	// (DELETE /me/push-tokens/{token})
+	DeletePushToken(w http.ResponseWriter, r *http.Request, token string)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -148,6 +376,199 @@ func (siw *ServerInterfaceWrapper) GetHealth(w http.ResponseWriter, r *http.Requ
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetHealth(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListHouseholds operation middleware
+func (siw *ServerInterfaceWrapper) ListHouseholds(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListHouseholds(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateHousehold operation middleware
+func (siw *ServerInterfaceWrapper) CreateHousehold(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateHousehold(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteHousehold operation middleware
+func (siw *ServerInterfaceWrapper) DeleteHousehold(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "householdId" -------------
+	var householdId HouseholdId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "householdId", r.PathValue("householdId"), &householdId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "householdId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteHousehold(w, r, householdId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetHousehold operation middleware
+func (siw *ServerInterfaceWrapper) GetHousehold(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "householdId" -------------
+	var householdId HouseholdId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "householdId", r.PathValue("householdId"), &householdId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "householdId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetHousehold(w, r, householdId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateHousehold operation middleware
+func (siw *ServerInterfaceWrapper) UpdateHousehold(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "householdId" -------------
+	var householdId HouseholdId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "householdId", r.PathValue("householdId"), &householdId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "householdId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateHousehold(w, r, householdId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListMembers operation middleware
+func (siw *ServerInterfaceWrapper) ListMembers(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "householdId" -------------
+	var householdId HouseholdId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "householdId", r.PathValue("householdId"), &householdId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "householdId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListMembers(w, r, householdId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RemoveMember operation middleware
+func (siw *ServerInterfaceWrapper) RemoveMember(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "householdId" -------------
+	var householdId HouseholdId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "householdId", r.PathValue("householdId"), &householdId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "householdId", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "userId" -------------
+	var userId Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "userId", r.PathValue("userId"), &userId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "userId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RemoveMember(w, r, householdId, userId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// TransferOwnership operation middleware
+func (siw *ServerInterfaceWrapper) TransferOwnership(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "householdId" -------------
+	var householdId HouseholdId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "householdId", r.PathValue("householdId"), &householdId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "householdId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.TransferOwnership(w, r, householdId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -176,6 +597,46 @@ func (siw *ServerInterfaceWrapper) PatchMe(w http.ResponseWriter, r *http.Reques
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.PatchMe(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RegisterPushToken operation middleware
+func (siw *ServerInterfaceWrapper) RegisterPushToken(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RegisterPushToken(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeletePushToken operation middleware
+func (siw *ServerInterfaceWrapper) DeletePushToken(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "token" -------------
+	var token string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "token", r.PathValue("token"), &token, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "token", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeletePushToken(w, r, token)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -308,11 +769,29 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/health", wrapper.GetHealth)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/me", wrapper.GetMe)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/me", wrapper.PatchMe)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/me/push-tokens", wrapper.RegisterPushToken)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/me/push-tokens/{token}", wrapper.DeletePushToken)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/households", wrapper.ListHouseholds)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/households", wrapper.CreateHousehold)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/households/{householdId}", wrapper.DeleteHousehold)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/households/{householdId}", wrapper.GetHousehold)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/households/{householdId}", wrapper.UpdateHousehold)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/households/{householdId}/members", wrapper.ListMembers)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/households/{householdId}/members/{userId}", wrapper.RemoveMember)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/households/{householdId}/transfer-ownership", wrapper.TransferOwnership)
 
 	return m
 }
 
+type BadRequestJSONResponse Error
+
+type HouseholdNotFoundJSONResponse Error
+
 type InternalErrorJSONResponse Error
+
+type InvalidHouseholdNameJSONResponse Error
+
+type OwnerOnlyJSONResponse Error
 
 type UnauthorizedJSONResponse Error
 
@@ -361,6 +840,666 @@ func (response GetHealth503JSONResponse) VisitGetHealthResponse(w http.ResponseW
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListHouseholdsRequestObject struct {
+}
+
+type ListHouseholdsResponseObject interface {
+	VisitListHouseholdsResponse(w http.ResponseWriter) error
+}
+
+type ListHouseholds200JSONResponse HouseholdList
+
+func (response ListHouseholds200JSONResponse) VisitListHouseholdsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListHouseholds401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListHouseholds401JSONResponse) VisitListHouseholdsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListHouseholds500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response ListHouseholds500JSONResponse) VisitListHouseholdsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateHouseholdRequestObject struct {
+	Body *CreateHouseholdJSONRequestBody
+}
+
+type CreateHouseholdResponseObject interface {
+	VisitCreateHouseholdResponse(w http.ResponseWriter) error
+}
+
+type CreateHousehold201JSONResponse Household
+
+func (response CreateHousehold201JSONResponse) VisitCreateHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateHousehold400JSONResponse struct {
+	InvalidHouseholdNameJSONResponse
+}
+
+func (response CreateHousehold400JSONResponse) VisitCreateHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateHousehold401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response CreateHousehold401JSONResponse) VisitCreateHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateHousehold500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response CreateHousehold500JSONResponse) VisitCreateHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteHouseholdRequestObject struct {
+	HouseholdId HouseholdId `json:"householdId"`
+}
+
+type DeleteHouseholdResponseObject interface {
+	VisitDeleteHouseholdResponse(w http.ResponseWriter) error
+}
+
+type DeleteHousehold204Response struct {
+}
+
+func (response DeleteHousehold204Response) VisitDeleteHouseholdResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteHousehold400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response DeleteHousehold400JSONResponse) VisitDeleteHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteHousehold401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteHousehold401JSONResponse) VisitDeleteHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteHousehold403JSONResponse struct{ OwnerOnlyJSONResponse }
+
+func (response DeleteHousehold403JSONResponse) VisitDeleteHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteHousehold404JSONResponse struct{ HouseholdNotFoundJSONResponse }
+
+func (response DeleteHousehold404JSONResponse) VisitDeleteHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteHousehold500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response DeleteHousehold500JSONResponse) VisitDeleteHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetHouseholdRequestObject struct {
+	HouseholdId HouseholdId `json:"householdId"`
+}
+
+type GetHouseholdResponseObject interface {
+	VisitGetHouseholdResponse(w http.ResponseWriter) error
+}
+
+type GetHousehold200JSONResponse Household
+
+func (response GetHousehold200JSONResponse) VisitGetHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetHousehold400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response GetHousehold400JSONResponse) VisitGetHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetHousehold401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetHousehold401JSONResponse) VisitGetHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetHousehold404JSONResponse struct{ HouseholdNotFoundJSONResponse }
+
+func (response GetHousehold404JSONResponse) VisitGetHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetHousehold500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetHousehold500JSONResponse) VisitGetHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateHouseholdRequestObject struct {
+	HouseholdId HouseholdId `json:"householdId"`
+	Body        *UpdateHouseholdJSONRequestBody
+}
+
+type UpdateHouseholdResponseObject interface {
+	VisitUpdateHouseholdResponse(w http.ResponseWriter) error
+}
+
+type UpdateHousehold200JSONResponse Household
+
+func (response UpdateHousehold200JSONResponse) VisitUpdateHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateHousehold400JSONResponse struct {
+	InvalidHouseholdNameJSONResponse
+}
+
+func (response UpdateHousehold400JSONResponse) VisitUpdateHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateHousehold401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response UpdateHousehold401JSONResponse) VisitUpdateHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateHousehold403JSONResponse struct{ OwnerOnlyJSONResponse }
+
+func (response UpdateHousehold403JSONResponse) VisitUpdateHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateHousehold404JSONResponse struct{ HouseholdNotFoundJSONResponse }
+
+func (response UpdateHousehold404JSONResponse) VisitUpdateHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateHousehold500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response UpdateHousehold500JSONResponse) VisitUpdateHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListMembersRequestObject struct {
+	HouseholdId HouseholdId `json:"householdId"`
+}
+
+type ListMembersResponseObject interface {
+	VisitListMembersResponse(w http.ResponseWriter) error
+}
+
+type ListMembers200JSONResponse MemberList
+
+func (response ListMembers200JSONResponse) VisitListMembersResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListMembers400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListMembers400JSONResponse) VisitListMembersResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListMembers401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListMembers401JSONResponse) VisitListMembersResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListMembers404JSONResponse struct{ HouseholdNotFoundJSONResponse }
+
+func (response ListMembers404JSONResponse) VisitListMembersResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListMembers500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response ListMembers500JSONResponse) VisitListMembersResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveMemberRequestObject struct {
+	HouseholdId HouseholdId `json:"householdId"`
+	UserId      Id          `json:"userId"`
+}
+
+type RemoveMemberResponseObject interface {
+	VisitRemoveMemberResponse(w http.ResponseWriter) error
+}
+
+type RemoveMember204Response struct {
+}
+
+func (response RemoveMember204Response) VisitRemoveMemberResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type RemoveMember400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response RemoveMember400JSONResponse) VisitRemoveMemberResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveMember401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response RemoveMember401JSONResponse) VisitRemoveMemberResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveMember403JSONResponse struct{ OwnerOnlyJSONResponse }
+
+func (response RemoveMember403JSONResponse) VisitRemoveMemberResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveMember404JSONResponse Error
+
+func (response RemoveMember404JSONResponse) VisitRemoveMemberResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveMember409JSONResponse Error
+
+func (response RemoveMember409JSONResponse) VisitRemoveMemberResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveMember500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response RemoveMember500JSONResponse) VisitRemoveMemberResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TransferOwnershipRequestObject struct {
+	HouseholdId HouseholdId `json:"householdId"`
+	Body        *TransferOwnershipJSONRequestBody
+}
+
+type TransferOwnershipResponseObject interface {
+	VisitTransferOwnershipResponse(w http.ResponseWriter) error
+}
+
+type TransferOwnership200JSONResponse MemberList
+
+func (response TransferOwnership200JSONResponse) VisitTransferOwnershipResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TransferOwnership400JSONResponse Error
+
+func (response TransferOwnership400JSONResponse) VisitTransferOwnershipResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TransferOwnership401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response TransferOwnership401JSONResponse) VisitTransferOwnershipResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TransferOwnership403JSONResponse struct{ OwnerOnlyJSONResponse }
+
+func (response TransferOwnership403JSONResponse) VisitTransferOwnershipResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TransferOwnership404JSONResponse struct{ HouseholdNotFoundJSONResponse }
+
+func (response TransferOwnership404JSONResponse) VisitTransferOwnershipResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TransferOwnership409JSONResponse Error
+
+func (response TransferOwnership409JSONResponse) VisitTransferOwnershipResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TransferOwnership500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response TransferOwnership500JSONResponse) VisitTransferOwnershipResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -478,17 +1617,155 @@ func (response PatchMe500JSONResponse) VisitPatchMeResponse(w http.ResponseWrite
 	return err
 }
 
+type RegisterPushTokenRequestObject struct {
+	Body *RegisterPushTokenJSONRequestBody
+}
+
+type RegisterPushTokenResponseObject interface {
+	VisitRegisterPushTokenResponse(w http.ResponseWriter) error
+}
+
+type RegisterPushToken200JSONResponse PushToken
+
+func (response RegisterPushToken200JSONResponse) VisitRegisterPushTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterPushToken400JSONResponse Error
+
+func (response RegisterPushToken400JSONResponse) VisitRegisterPushTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterPushToken401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response RegisterPushToken401JSONResponse) VisitRegisterPushTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterPushToken500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response RegisterPushToken500JSONResponse) VisitRegisterPushTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeletePushTokenRequestObject struct {
+	Token string `json:"token"`
+}
+
+type DeletePushTokenResponseObject interface {
+	VisitDeletePushTokenResponse(w http.ResponseWriter) error
+}
+
+type DeletePushToken204Response struct {
+}
+
+func (response DeletePushToken204Response) VisitDeletePushTokenResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeletePushToken401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeletePushToken401JSONResponse) VisitDeletePushTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeletePushToken500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response DeletePushToken500JSONResponse) VisitDeletePushTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// GetHealth Check that the API and its dependencies are up
 	// (GET /health)
 	GetHealth(ctx context.Context, request GetHealthRequestObject) (GetHealthResponseObject, error)
+	// ListHouseholds List the households the signed-in user belongs to
+	// (GET /households)
+	ListHouseholds(ctx context.Context, request ListHouseholdsRequestObject) (ListHouseholdsResponseObject, error)
+	// CreateHousehold Create a household
+	// (POST /households)
+	CreateHousehold(ctx context.Context, request CreateHouseholdRequestObject) (CreateHouseholdResponseObject, error)
+	// DeleteHousehold Delete a household
+	// (DELETE /households/{householdId})
+	DeleteHousehold(ctx context.Context, request DeleteHouseholdRequestObject) (DeleteHouseholdResponseObject, error)
+	// GetHousehold Get one of the signed-in user's households
+	// (GET /households/{householdId})
+	GetHousehold(ctx context.Context, request GetHouseholdRequestObject) (GetHouseholdResponseObject, error)
+	// UpdateHousehold Rename a household
+	// (PATCH /households/{householdId})
+	UpdateHousehold(ctx context.Context, request UpdateHouseholdRequestObject) (UpdateHouseholdResponseObject, error)
+	// ListMembers List a household's members
+	// (GET /households/{householdId}/members)
+	ListMembers(ctx context.Context, request ListMembersRequestObject) (ListMembersResponseObject, error)
+	// RemoveMember Remove a member, or leave the household
+	// (DELETE /households/{householdId}/members/{userId})
+	RemoveMember(ctx context.Context, request RemoveMemberRequestObject) (RemoveMemberResponseObject, error)
+	// TransferOwnership Make another member the owner
+	// (POST /households/{householdId}/transfer-ownership)
+	TransferOwnership(ctx context.Context, request TransferOwnershipRequestObject) (TransferOwnershipResponseObject, error)
 	// GetMe Get the signed-in user's profile
 	// (GET /me)
 	GetMe(ctx context.Context, request GetMeRequestObject) (GetMeResponseObject, error)
 	// PatchMe Update the signed-in user's profile
 	// (PATCH /me)
 	PatchMe(ctx context.Context, request PatchMeRequestObject) (PatchMeResponseObject, error)
+	// RegisterPushToken Register or refresh this device's Expo push token
+	// (POST /me/push-tokens)
+	RegisterPushToken(ctx context.Context, request RegisterPushTokenRequestObject) (RegisterPushTokenResponseObject, error)
+	// DeletePushToken Remove this device's Expo push token
+	// (DELETE /me/push-tokens/{token})
+	DeletePushToken(ctx context.Context, request DeletePushTokenRequestObject) (DeletePushTokenResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -554,6 +1831,232 @@ func (sh *strictHandler) GetHealth(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ListHouseholds operation middleware
+func (sh *strictHandler) ListHouseholds(w http.ResponseWriter, r *http.Request) {
+	var request ListHouseholdsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListHouseholds(ctx, request.(ListHouseholdsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListHouseholds")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListHouseholdsResponseObject); ok {
+		if err := validResponse.VisitListHouseholdsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateHousehold operation middleware
+func (sh *strictHandler) CreateHousehold(w http.ResponseWriter, r *http.Request) {
+	var request CreateHouseholdRequestObject
+
+	var body CreateHouseholdJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateHousehold(ctx, request.(CreateHouseholdRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateHousehold")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateHouseholdResponseObject); ok {
+		if err := validResponse.VisitCreateHouseholdResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteHousehold operation middleware
+func (sh *strictHandler) DeleteHousehold(w http.ResponseWriter, r *http.Request, householdId HouseholdId) {
+	var request DeleteHouseholdRequestObject
+
+	request.HouseholdId = householdId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteHousehold(ctx, request.(DeleteHouseholdRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteHousehold")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteHouseholdResponseObject); ok {
+		if err := validResponse.VisitDeleteHouseholdResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetHousehold operation middleware
+func (sh *strictHandler) GetHousehold(w http.ResponseWriter, r *http.Request, householdId HouseholdId) {
+	var request GetHouseholdRequestObject
+
+	request.HouseholdId = householdId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetHousehold(ctx, request.(GetHouseholdRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetHousehold")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetHouseholdResponseObject); ok {
+		if err := validResponse.VisitGetHouseholdResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateHousehold operation middleware
+func (sh *strictHandler) UpdateHousehold(w http.ResponseWriter, r *http.Request, householdId HouseholdId) {
+	var request UpdateHouseholdRequestObject
+
+	request.HouseholdId = householdId
+
+	var body UpdateHouseholdJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateHousehold(ctx, request.(UpdateHouseholdRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateHousehold")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateHouseholdResponseObject); ok {
+		if err := validResponse.VisitUpdateHouseholdResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListMembers operation middleware
+func (sh *strictHandler) ListMembers(w http.ResponseWriter, r *http.Request, householdId HouseholdId) {
+	var request ListMembersRequestObject
+
+	request.HouseholdId = householdId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListMembers(ctx, request.(ListMembersRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListMembers")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListMembersResponseObject); ok {
+		if err := validResponse.VisitListMembersResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RemoveMember operation middleware
+func (sh *strictHandler) RemoveMember(w http.ResponseWriter, r *http.Request, householdId HouseholdId, userId Id) {
+	var request RemoveMemberRequestObject
+
+	request.HouseholdId = householdId
+	request.UserId = userId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RemoveMember(ctx, request.(RemoveMemberRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RemoveMember")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RemoveMemberResponseObject); ok {
+		if err := validResponse.VisitRemoveMemberResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// TransferOwnership operation middleware
+func (sh *strictHandler) TransferOwnership(w http.ResponseWriter, r *http.Request, householdId HouseholdId) {
+	var request TransferOwnershipRequestObject
+
+	request.HouseholdId = householdId
+
+	var body TransferOwnershipJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.TransferOwnership(ctx, request.(TransferOwnershipRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "TransferOwnership")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(TransferOwnershipResponseObject); ok {
+		if err := validResponse.VisitTransferOwnershipResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetMe operation middleware
 func (sh *strictHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	var request GetMeRequestObject
@@ -605,6 +2108,63 @@ func (sh *strictHandler) PatchMe(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(PatchMeResponseObject); ok {
 		if err := validResponse.VisitPatchMeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RegisterPushToken operation middleware
+func (sh *strictHandler) RegisterPushToken(w http.ResponseWriter, r *http.Request) {
+	var request RegisterPushTokenRequestObject
+
+	var body RegisterPushTokenJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RegisterPushToken(ctx, request.(RegisterPushTokenRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RegisterPushToken")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RegisterPushTokenResponseObject); ok {
+		if err := validResponse.VisitRegisterPushTokenResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeletePushToken operation middleware
+func (sh *strictHandler) DeletePushToken(w http.ResponseWriter, r *http.Request, token string) {
+	var request DeletePushTokenRequestObject
+
+	request.Token = token
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeletePushToken(ctx, request.(DeletePushTokenRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeletePushToken")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeletePushTokenResponseObject); ok {
+		if err := validResponse.VisitDeletePushTokenResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

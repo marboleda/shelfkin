@@ -76,8 +76,9 @@ paths:
       operationId: patchMe
       summary: Update the signed-in user's profile
       description: |
-        Updates `displayName` and/or `timezone`. Omitted fields are unchanged; an
-        empty body or `{}` changes nothing and returns the current profile.
+        Updates `displayName`, `timezone` and/or `pushEnabled`. Omitted fields are
+        unchanged; an empty body or `{}` changes nothing and returns the current
+        profile.
       requestBody:
         required: false
         content:
@@ -108,7 +109,330 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
+  /me/push-tokens:
+    post:
+      operationId: registerPushToken
+      summary: Register or refresh this device's Expo push token
+      description: |
+        Registers `token` for the caller. The app calls this on every start:
+
+        - A token the caller already has is refreshed: its `lastSeenAt` (and
+          `platform`, if it changed) is updated and no new token is added.
+        - A token that belongs to another user moves to the caller, for example
+          when two people sign in on one device in turn.
+
+        A user can have several tokens, one per device. Pushes are only sent
+        when the user's `pushEnabled` is on.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterPushToken'
+      responses:
+        '200':
+          description: The registered token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PushToken'
+        '400':
+          description: |
+            The body is missing or not valid JSON (code `bad_request`), `token` is
+            not an Expo push token of at most 255 characters (code
+            `invalid_token`), or `platform` is not `ios`, `android` or `web`
+            (code `invalid_platform`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: invalid_token
+                  message: token must be an Expo push token such as ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx].
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /me/push-tokens/{token}:
+    delete:
+      operationId: deletePushToken
+      summary: Remove this device's Expo push token
+      description: |
+        Deletes the caller's `token`, for example on sign-out, so the device
+        gets no more pushes. A token that does not exist or belongs to another
+        user is left alone and still returns 204, so callers cannot remove or
+        detect another user's device.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          description: The Expo push token, URL-encoded (it contains `[` and `]`).
+          schema:
+            type: string
+          example: ExponentPushToken%5Bxxxxxxxxxxxxxxxxxxxxxx%5D
+      responses:
+        '204':
+          description: The caller no longer has this token.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /households:
+    get:
+      operationId: listHouseholds
+      summary: List the households the signed-in user belongs to
+      description: |
+        Every household the caller is a member of, with the caller's role in it,
+        sorted by name (case-insensitive). A user with no households gets an
+        empty list.
+      responses:
+        '200':
+          description: The caller's households.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HouseholdList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: createHousehold
+      summary: Create a household
+      description: Creates a household with the caller as its owner.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateHousehold'
+      responses:
+        '201':
+          description: The new household. The caller's `role` is `owner`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Household'
+        '400':
+          $ref: '#/components/responses/InvalidHouseholdName'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /households/{householdId}:
+    parameters:
+      - $ref: '#/components/parameters/HouseholdId'
+    get:
+      operationId: getHousehold
+      summary: Get one of the signed-in user's households
+      responses:
+        '200':
+          description: The household, with the caller's role in it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Household'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/HouseholdNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      operationId: updateHousehold
+      summary: Rename a household
+      description: Owner only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateHousehold'
+      responses:
+        '200':
+          description: The renamed household.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Household'
+        '400':
+          $ref: '#/components/responses/InvalidHouseholdName'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/OwnerOnly'
+        '404':
+          $ref: '#/components/responses/HouseholdNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      operationId: deleteHousehold
+      summary: Delete a household
+      description: |
+        Owner only. Deletes the household together with its members, invites,
+        custom catalog items, item defaults, pantry entries and item events.
+      responses:
+        '204':
+          description: The household was deleted.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/OwnerOnly'
+        '404':
+          $ref: '#/components/responses/HouseholdNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /households/{householdId}/members:
+    parameters:
+      - $ref: '#/components/parameters/HouseholdId'
+    get:
+      operationId: listMembers
+      summary: List a household's members
+      description: |
+        Every member of the household, owner first, then the other members by
+        the time they joined (earliest first). Any member can call this.
+      responses:
+        '200':
+          description: The household's members.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/HouseholdNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /households/{householdId}/members/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/HouseholdId'
+      - name: userId
+        in: path
+        required: true
+        description: The member's user ID. A value that is not a UUID gets 400 (code `bad_request`).
+        schema:
+          $ref: '#/components/schemas/Id'
+    delete:
+      operationId: removeMember
+      summary: Remove a member, or leave the household
+      description: |
+        - The **owner** can remove any other member.
+        - A **member** can remove only themselves, which is leaving the household.
+        - The **owner** cannot leave: they must transfer ownership to another
+          member (`POST /households/{householdId}/transfer-ownership`) or
+          delete the household first.
+
+        The removed user loses access to the household straight away. Pantry
+        entries and events they created stay, still labelled with their name.
+      responses:
+        '204':
+          description: The user is no longer a member of the household.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/OwnerOnly'
+        '404':
+          description: |
+            The household does not exist or the caller is not a member of it, or
+            `userId` is not a member of the household (code `not_found` in
+            every case).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: not_found
+                  message: Member not found.
+        '409':
+          description: |
+            The owner tried to remove themselves (code `owner_cannot_leave`), or
+            the membership changed while the request ran (code `conflict`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: owner_cannot_leave
+                  message: The owner cannot leave the household. Transfer ownership to another member or delete the household first.
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /households/{householdId}/transfer-ownership:
+    parameters:
+      - $ref: '#/components/parameters/HouseholdId'
+    post:
+      operationId: transferOwnership
+      summary: Make another member the owner
+      description: |
+        Owner only. Makes `userId`, who must already be a member, the owner and
+        the caller a member, in one step. The household always has exactly one
+        owner. Afterwards the caller can leave the household.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferOwnership'
+      responses:
+        '200':
+          description: The household's members after the transfer, new owner first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberList'
+        '400':
+          description: |
+            The body is missing or not valid JSON (code `bad_request`), `userId`
+            is not a member of the household (code `not_a_member`), or `userId`
+            is the caller (code `already_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: not_a_member
+                  message: The new owner must be a member of the household.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/OwnerOnly'
+        '404':
+          $ref: '#/components/responses/HouseholdNotFound'
+        '409':
+          description: |
+            Another change to the household's members conflicted with this one;
+            reload the members and try again (code `conflict`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: conflict
+                  message: The household's members changed while this request ran. Try again.
+        '500':
+          $ref: '#/components/responses/InternalError'
 components:
+  parameters:
+    HouseholdId:
+      name: householdId
+      in: path
+      required: true
+      description: The household's ID. A value that is not a UUID gets 400 (code `bad_request`).
+      schema:
+        $ref: '#/components/schemas/Id'
   securitySchemes:
     firebaseAuth:
       type: http
@@ -149,8 +473,8 @@ components:
           description: |
             A stable, machine-readable error code, for example `bad_request`,
             `unauthorized`, `forbidden`, `not_found`, `method_not_allowed`,
-            `internal`, `database_unavailable`, `invalid_display_name` or
-            `invalid_timezone`.
+            `internal`, `database_unavailable`, `invalid_display_name`,
+            `invalid_timezone`, `invalid_name` or `owner_only`.
           type: string
           example: not_found
         message:
@@ -196,7 +520,11 @@ components:
           type: string
           example: America/Toronto
         pushEnabled:
-          description: Whether the user has opted in to push notifications.
+          description: |
+            Whether the user has opted in to expiry push notifications. Starts as
+            `false`. The setting is per user and covers all of their devices;
+            turning it off keeps their push tokens, so turning it back on needs no
+            re-registration.
           type: boolean
           example: false
     UpdateMe:
@@ -211,6 +539,145 @@ components:
           description: An IANA time zone name such as `America/Toronto`. `Local` is not accepted.
           type: string
           example: America/Toronto
+        pushEnabled:
+          description: Turns expiry push notifications on or off for all of the user's devices.
+          type: boolean
+          example: true
+    PushPlatform:
+      description: The platform of the device a push token belongs to.
+      type: string
+      enum:
+        - ios
+        - android
+        - web
+    RegisterPushToken:
+      description: A device's Expo push token to register for the signed-in user.
+      type: object
+      required:
+        - token
+        - platform
+      properties:
+        token:
+          description: |
+            An Expo push token, `ExponentPushToken[...]` or `ExpoPushToken[...]`,
+            at most 255 characters.
+          type: string
+          maxLength: 255
+          example: ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]
+        platform:
+          $ref: '#/components/schemas/PushPlatform'
+    PushToken:
+      description: A push token registered for the signed-in user.
+      type: object
+      required:
+        - token
+        - platform
+        - lastSeenAt
+      properties:
+        token:
+          type: string
+          example: ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]
+        platform:
+          $ref: '#/components/schemas/PushPlatform'
+        lastSeenAt:
+          # When the token was last registered or refreshed.
+          $ref: '#/components/schemas/Timestamp'
+    Household:
+      description: A household, as seen by the signed-in user.
+      type: object
+      required:
+        - id
+        - name
+        - role
+        - createdAt
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        name:
+          description: 1 to 50 characters. Not unique.
+          type: string
+          example: Home
+        role:
+          $ref: '#/components/schemas/MemberRole'
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+    MemberRole:
+      description: A member's role in a household. Each household has exactly one owner.
+      type: string
+      enum:
+        - owner
+        - member
+    HouseholdList:
+      type: object
+      required:
+        - households
+      properties:
+        households:
+          type: array
+          items:
+            $ref: '#/components/schemas/Household'
+    CreateHousehold:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          description: Trimmed, then must be 1 to 50 characters.
+          type: string
+          example: Home
+    UpdateHousehold:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          description: Trimmed, then must be 1 to 50 characters.
+          type: string
+          example: Cottage
+    Member:
+      description: A member of a household.
+      type: object
+      required:
+        - userId
+        - displayName
+        - email
+        - role
+        - joinedAt
+      properties:
+        userId:
+          $ref: '#/components/schemas/Id'
+        displayName:
+          description: The member's display name (see `User`).
+          type: string
+          example: Sam
+        email:
+          description: The member's email, or null if their account has none.
+          type: string
+          nullable: true
+          example: sam@example.com
+        role:
+          $ref: '#/components/schemas/MemberRole'
+        joinedAt:
+          # When the user joined (or created) the household.
+          $ref: '#/components/schemas/Timestamp'
+    MemberList:
+      type: object
+      required:
+        - members
+      properties:
+        members:
+          description: The owner first, then the other members by `joinedAt`.
+          type: array
+          items:
+            $ref: '#/components/schemas/Member'
+    TransferOwnership:
+      type: object
+      required:
+        - userId
+      properties:
+        userId:
+          # The member to make the owner.
+          $ref: '#/components/schemas/Id'
   responses:
     BadRequest:
       description: The request is malformed or fails validation.
@@ -262,3 +729,37 @@ components:
             error:
               code: internal
               message: Something went wrong.
+    InvalidHouseholdName:
+      description: |
+        The body is not valid JSON (code `bad_request`), or `name` is not 1 to 50
+        characters after trimming (code `invalid_name`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: invalid_name
+              message: name must be 1 to 50 characters after trimming spaces.
+    OwnerOnly:
+      description: Only the household's owner can do this (code `owner_only`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: owner_only
+              message: Only the household owner can do this.
+    HouseholdNotFound:
+      description: |
+        The household does not exist or the caller is not a member of it
+        (code `not_found`); the two cases are indistinguishable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: not_found
+              message: Household not found.
