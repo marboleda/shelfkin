@@ -157,6 +157,87 @@ export interface paths {
         patch: operations["updateHousehold"];
         trace?: never;
     };
+    "/households/{householdId}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a household's members
+         * @description Every member of the household, owner first, then the other members by
+         *     the time they joined (earliest first). Any member can call this.
+         */
+        get: operations["listMembers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/households/{householdId}/members/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+                /** @description The member's user ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                userId: components["schemas"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a member, or leave the household
+         * @description - The **owner** can remove any other member.
+         *     - A **member** can remove only themselves, which is leaving the household.
+         *     - The **owner** cannot leave: they must transfer ownership to another
+         *       member (`POST /households/{householdId}/transfer-ownership`) or
+         *       delete the household first.
+         *
+         *     The removed user loses access to the household straight away. Pantry
+         *     entries and events they created stay, still labelled with their name.
+         */
+        delete: operations["removeMember"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/households/{householdId}/transfer-ownership": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Make another member the owner
+         * @description Owner only. Makes `userId`, who must already be a member, the owner and
+         *     the caller a member, in one step. The household always has exactly one
+         *     owner. Afterwards the caller can leave the household.
+         */
+        post: operations["transferOwnership"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/households/{householdId}/catalog/search": {
         parameters: {
             query?: never;
@@ -384,6 +465,29 @@ export interface components {
              * @example Cottage
              */
             name: string;
+        };
+        /** @description A member of a household. */
+        Member: {
+            userId: components["schemas"]["Id"];
+            /**
+             * @description The member's display name (see `User`).
+             * @example Sam
+             */
+            displayName: string;
+            /**
+             * @description The member's email, or null if their account has none.
+             * @example sam@example.com
+             */
+            email: string | null;
+            role: components["schemas"]["MemberRole"];
+            joinedAt: components["schemas"]["Timestamp"];
+        };
+        MemberList: {
+            /** @description The owner first, then the other members by `joinedAt`. */
+            members: components["schemas"]["Member"][];
+        };
+        TransferOwnership: {
+            userId: components["schemas"]["Id"];
         };
         /** @description A built-in item category. */
         Category: {
@@ -928,6 +1032,173 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["OwnerOnly"];
             404: components["responses"]["HouseholdNotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The household's members. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["HouseholdNotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    removeMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+                /** @description The member's user ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                userId: components["schemas"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user is no longer a member of the household. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["OwnerOnly"];
+            /**
+             * @description The household does not exist or the caller is not a member of it, or
+             *     `userId` is not a member of the household (code `not_found` in
+             *     every case).
+             */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "not_found",
+                     *         "message": "Member not found."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /**
+             * @description The owner tried to remove themselves (code `owner_cannot_leave`), or
+             *     the membership changed while the request ran (code `conflict`).
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "owner_cannot_leave",
+                     *         "message": "The owner cannot leave the household. Transfer ownership to another member or delete the household first."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    transferOwnership: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransferOwnership"];
+            };
+        };
+        responses: {
+            /** @description The household's members after the transfer, new owner first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberList"];
+                };
+            };
+            /**
+             * @description The body is missing or not valid JSON (code `bad_request`), `userId`
+             *     is not a member of the household (code `not_a_member`), or `userId`
+             *     is the caller (code `already_owner`).
+             */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "not_a_member",
+                     *         "message": "The new owner must be a member of the household."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["OwnerOnly"];
+            404: components["responses"]["HouseholdNotFound"];
+            /**
+             * @description Another change to the household's members conflicted with this one;
+             *     reload the members and try again (code `conflict`).
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "conflict",
+                     *         "message": "The household's members changed while this request ran. Try again."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             500: components["responses"]["InternalError"];
         };
     };
