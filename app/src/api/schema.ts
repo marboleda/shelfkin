@@ -238,6 +238,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/households/{householdId}/invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a household's active invites
+         * @description Owner only. The household's invites that are neither revoked nor
+         *     expired, newest first. A household with none returns an empty list.
+         */
+        get: operations["listInvites"];
+        put?: never;
+        /**
+         * Create an invite code
+         * @description Owner only. Creates a new invite code for the household, valid for 7
+         *     days. Anyone signed in can use it, any number of times, to join the
+         *     household as a member until it expires or is revoked. A household can
+         *     have several active invites; creating one does not revoke the others.
+         *     No request body.
+         */
+        post: operations["createInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/households/{householdId}/invites/{inviteId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+                /** @description The invite's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                inviteId: components["schemas"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke an invite code
+         * @description Owner only. The code stops working straight away; members who already
+         *     joined with it stay. Revoking an invite that is already revoked, or
+         *     has expired, also succeeds.
+         */
+        delete: operations["revokeInvite"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/invites/join": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Join a household with an invite code
+         * @description Adds the caller to the invite's household as a member. The code is
+         *     normalised first: whitespace and dashes are removed and letters are
+         *     upper-cased, so `abcd-efgh` matches `ABCDEFGH`.
+         *
+         *     A caller who is already a member of the household (including its
+         *     owner) gets 200 with `alreadyMember: true` and their current role,
+         *     even if the code has expired or been revoked. Error responses never
+         *     say anything about the household.
+         */
+        post: operations["joinInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -410,6 +496,44 @@ export interface components {
         };
         TransferOwnership: {
             userId: components["schemas"]["Id"];
+        };
+        /** @description An invite code for a household, as seen by its owner. */
+        Invite: {
+            id: components["schemas"]["Id"];
+            /**
+             * @description 8 characters from `ABCDEFGHJKMNPQRSTUVWXYZ23456789` (no `I`, `L`,
+             *     `O`, `0` or `1`). Apps may show it as `ABCD-EFGH`.
+             * @example K7MQ3XPA
+             */
+            code: string;
+            /**
+             * Format: uri
+             * @description The invite link, `<APP_BASE_URL>/join/<code>`.
+             * @example https://shelfkin.web.app/join/K7MQ3XPA
+             */
+            url: string;
+            expiresAt: components["schemas"]["Timestamp"];
+            createdAt: components["schemas"]["Timestamp"];
+        };
+        InviteList: {
+            /** @description Active invites, newest first. */
+            invites: components["schemas"]["Invite"][];
+        };
+        JoinInviteRequest: {
+            /**
+             * @description The invite code. Whitespace and dashes are ignored and letters may
+             *     be lower-case.
+             * @example k7mq-3xpa
+             */
+            code: string;
+        };
+        JoinInviteResult: {
+            household: components["schemas"]["Household"];
+            /**
+             * @description True if the caller was already a member, so nothing changed.
+             * @example false
+             */
+            alreadyMember: boolean;
         };
     };
     responses: {
@@ -1039,6 +1163,174 @@ export interface operations {
                      *       "error": {
                      *         "code": "conflict",
                      *         "message": "The household's members changed while this request ran. Try again."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listInvites: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The household's active invites, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InviteList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["OwnerOnly"];
+            404: components["responses"]["HouseholdNotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new invite. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invite"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["OwnerOnly"];
+            404: components["responses"]["HouseholdNotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    revokeInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+                /** @description The invite's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                inviteId: components["schemas"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The invite is revoked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["OwnerOnly"];
+            /**
+             * @description The household does not exist or the caller is not a member of it,
+             *     or `inviteId` is not an invite of this household (code `not_found`
+             *     in every case).
+             */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "not_found",
+                     *         "message": "Invite not found."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    joinInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JoinInviteRequest"];
+            };
+        };
+        responses: {
+            /** @description The caller is a member of the household. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JoinInviteResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            /** @description No invite has this code (code `invite_not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "invite_not_found",
+                     *         "message": "This invite code is not valid."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /**
+             * @description The invite was revoked (code `invite_revoked`) or has expired (code
+             *     `invite_expired`). A code that is both gets `invite_revoked`.
+             */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "invite_expired",
+                     *         "message": "This invite code has expired."
                      *       }
                      *     }
                      */
