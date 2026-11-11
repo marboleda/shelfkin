@@ -25,6 +25,9 @@ type API struct {
 	// dbtx.WithUser.
 	db     dbtx.Beginner
 	logger *slog.Logger
+	// now is the clock for dates the server picks, such as an entry's
+	// default purchase date. Tests replace it.
+	now func() time.Time
 }
 
 // Pool is the database connection an API needs: plain queries (GET /health)
@@ -38,7 +41,7 @@ var _ openapi.StrictServerInterface = (*API)(nil)
 
 // NewAPI returns the API backed by pool, normally a *pgxpool.Pool.
 func NewAPI(pool Pool, logger *slog.Logger) *API {
-	return &API{queries: db.New(pool), db: pool, logger: logger}
+	return &API{queries: db.New(pool), db: pool, logger: logger, now: time.Now}
 }
 
 // GetHealth reports whether the database answers a query within
