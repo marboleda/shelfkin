@@ -3,8 +3,16 @@ import { renderRouter, screen } from 'expo-router/testing-library';
 import { StyleSheet, useColorScheme } from 'react-native';
 
 import { colors, fontFaces, getTheme, radii, spacing, typography, useTheme } from '@/theme';
+import { setupApiServer } from '../test-utils/api';
+import { signedInApiHandlers, signInTestUser } from '../test-utils/auth';
 
 jest.setTimeout(60000);
+
+// These tests render the signed-in app: sign the test user in and answer its API calls.
+setupApiServer(...signedInApiHandlers());
+beforeEach(() => {
+  signInTestUser();
+});
 
 // Fonts never really load in Jest: report them as loaded so the app renders (see font-loading-test).
 jest.mock('expo-font', () => ({

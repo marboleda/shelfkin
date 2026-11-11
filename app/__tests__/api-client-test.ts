@@ -60,7 +60,7 @@ describe('request headers', () => {
     expect(seen).toBe('yes');
   });
 
-  test('the default hook adds no Authorization header yet', async () => {
+  test('signed out, the default hook adds no Authorization header', async () => {
     let auth: string | null = 'unset';
     server.use(
       http.get(apiUrl('/health'), ({ request }) => {
