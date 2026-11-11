@@ -31,7 +31,8 @@
             "backgroundColor": "#141513"
           }
         }
-      ]
+      ],
+      "expo-localization"
     ],
     "scheme": "shelfkin",
     "experiments": {

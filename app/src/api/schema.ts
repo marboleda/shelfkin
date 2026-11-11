@@ -157,6 +157,166 @@ export interface paths {
         patch: operations["updateHousehold"];
         trace?: never;
     };
+    "/households/{householdId}/entries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add a pantry entry
+         * @description Adds one entry (one purchase) to the household's pantry and records an
+         *     `entry_created` event in the same transaction.
+         *
+         *     The client generates `id` and `eventId`, so a retried request is
+         *     applied once: repeating it with the same `id` and `eventId` returns
+         *     200 with the existing entry and writes nothing.
+         *
+         *     Defaults for omitted fields:
+         *     - `locationId`: the item's default location for this household.
+         *     - `level`: `full`.
+         *     - `purchasedOn`: today in the caller's `timezone` (see `User`).
+         *     - `expiresOn`: `purchasedOn` plus the item's shelf life, or no expiry
+         *       if the item has none. Send `null` for no expiry.
+         *
+         *     An expiry date before the purchase date, and a purchase date in the
+         *     future, are accepted.
+         */
+        post: operations["createEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/households/{householdId}/entries/{entryId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+                /** @description The pantry entry's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                entryId: components["parameters"]["EntryId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a pantry entry
+         * @description Deletes the entry and records an `entry_deleted` event in the same
+         *     transaction. Repeating the request with the same `eventId` after it
+         *     succeeded returns 204 again.
+         */
+        delete: operations["deleteEntry"];
+        options?: never;
+        head?: never;
+        /**
+         * Change one field of a pantry entry
+         * @description Changes exactly one of `level`, `locationId`, `purchasedOn` or
+         *     `expiresOn`, and records one `level_changed`, `location_changed`,
+         *     `purchase_date_changed` or `expiry_changed` event in the same
+         *     transaction. `expiresOn: null` clears the expiry. Changing
+         *     `purchasedOn` does not change `expiresOn`.
+         *
+         *     Setting a field to the value it already has changes nothing and
+         *     records no event. Repeating a request with the same `eventId` returns
+         *     the entry as it is now and does not apply the change again. When two
+         *     members change the same entry at the same time, both changes are
+         *     applied in turn (the last one wins) and both are recorded.
+         */
+        patch: operations["updateEntry"];
+        trace?: never;
+    };
+    "/households/{householdId}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a household's members
+         * @description Every member of the household, owner first, then the other members by
+         *     the time they joined (earliest first). Any member can call this.
+         */
+        get: operations["listMembers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/households/{householdId}/members/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+                /** @description The member's user ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                userId: components["schemas"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a member, or leave the household
+         * @description - The **owner** can remove any other member.
+         *     - A **member** can remove only themselves, which is leaving the household.
+         *     - The **owner** cannot leave: they must transfer ownership to another
+         *       member (`POST /households/{householdId}/transfer-ownership`) or
+         *       delete the household first.
+         *
+         *     The removed user loses access to the household straight away. Pantry
+         *     entries and events they created stay, still labelled with their name.
+         */
+        delete: operations["removeMember"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/households/{householdId}/transfer-ownership": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Make another member the owner
+         * @description Owner only. Makes `userId`, who must already be a member, the owner and
+         *     the caller a member, in one step. The household always has exactly one
+         *     owner. Afterwards the caller can leave the household.
+         */
+        post: operations["transferOwnership"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -307,6 +467,106 @@ export interface components {
              */
             name: string;
         };
+        /**
+         * @description How much of an entry is left. `out` entries stay in the pantry until deleted.
+         * @enum {string}
+         */
+        StockLevel: "full" | "half" | "low" | "out";
+        /** @description One purchase of a catalog item in a household's pantry, for example "Milk (Oct 20)". */
+        PantryEntry: {
+            id: components["schemas"]["Id"];
+            catalogItemId: components["schemas"]["Id"];
+            /**
+             * @description The ID of the location the entry is stored in.
+             * @example 2
+             */
+            locationId: number;
+            level: components["schemas"]["StockLevel"];
+            purchasedOn: components["schemas"]["Date"];
+            /**
+             * Format: date
+             * @description The expiry date, or null if the entry has none.
+             * @example 2026-02-14
+             */
+            expiresOn: string | null;
+            createdAt: components["schemas"]["Timestamp"];
+            /**
+             * Format: date-time
+             * @description When the entry last changed. A change that sets a field to the
+             *     value it already has does not count.
+             * @example 2026-01-31T18:04:05Z
+             */
+            updatedAt: string;
+        };
+        CreateEntry: {
+            /**
+             * @description The new entry's ID, a UUIDv7 generated by the client. It is a plain
+             *     string so that any value that is not a UUIDv7 gets code `invalid_id`.
+             * @example 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+             */
+            id: string;
+            /**
+             * @description The ID of the `entry_created` event, a UUIDv7 generated by the client.
+             * @example 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a81
+             */
+            eventId: string;
+            catalogItemId: components["schemas"]["Id"];
+            /**
+             * @description Defaults to the item's default location for this household.
+             * @example 2
+             */
+            locationId?: number;
+            level?: components["schemas"]["StockLevel"];
+            purchasedOn?: components["schemas"]["Date"];
+            /**
+             * Format: date
+             * @description Omitted: `purchasedOn` plus the item's shelf life, or no expiry if
+             *     the item has none. `null`: no expiry.
+             * @example 2026-02-14
+             */
+            expiresOn?: string | null;
+        };
+        /** @description `eventId` and exactly one of the other fields. */
+        UpdateEntry: {
+            /**
+             * @description The ID of the change event, a UUIDv7 generated by the client.
+             * @example 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a81
+             */
+            eventId: string;
+            level?: components["schemas"]["StockLevel"];
+            /** @example 3 */
+            locationId?: number;
+            purchasedOn?: components["schemas"]["Date"];
+            /**
+             * Format: date
+             * @description The new expiry date, or `null` to clear it.
+             * @example 2026-02-14
+             */
+            expiresOn?: string | null;
+        };
+        /** @description A member of a household. */
+        Member: {
+            userId: components["schemas"]["Id"];
+            /**
+             * @description The member's display name (see `User`).
+             * @example Sam
+             */
+            displayName: string;
+            /**
+             * @description The member's email, or null if their account has none.
+             * @example sam@example.com
+             */
+            email: string | null;
+            role: components["schemas"]["MemberRole"];
+            joinedAt: components["schemas"]["Timestamp"];
+        };
+        MemberList: {
+            /** @description The owner first, then the other members by `joinedAt`. */
+            members: components["schemas"]["Member"][];
+        };
+        TransferOwnership: {
+            userId: components["schemas"]["Id"];
+        };
     };
     responses: {
         /** @description The request is malformed or fails validation. */
@@ -451,10 +711,55 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /**
+         * @description The household does not exist, the caller is not a member of it, or the
+         *     entry is not in that household (code `not_found`); the cases are
+         *     indistinguishable.
+         */
+        EntryNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "error": {
+                 *         "code": "not_found",
+                 *         "message": "Entry not found."
+                 *       }
+                 *     }
+                 */
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /**
+         * @description `eventId` was already used for a different change (code
+         *     `event_id_conflict`), or the entry `id` is already used by an entry
+         *     for a different catalog item or household (code `entry_id_conflict`).
+         *     Generate new IDs for a new change.
+         */
+        EntryConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "error": {
+                 *         "code": "event_id_conflict",
+                 *         "message": "eventId was already used for a different change."
+                 *       }
+                 *     }
+                 */
+                "application/json": components["schemas"]["Error"];
+            };
+        };
     };
     parameters: {
         /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
         HouseholdId: components["schemas"]["Id"];
+        /** @description The pantry entry's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+        EntryId: components["schemas"]["Id"];
     };
     requestBodies: never;
     headers: never;
@@ -774,6 +1079,344 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["OwnerOnly"];
             404: components["responses"]["HouseholdNotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateEntry"];
+            };
+        };
+        responses: {
+            /** @description A retry of a create that was already applied. The entry as it is now. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PantryEntry"];
+                };
+            };
+            /** @description The new entry. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PantryEntry"];
+                };
+            };
+            /**
+             * @description The body is not valid JSON or a value has the wrong type (code
+             *     `bad_request`), `id` or `eventId` is missing or not a UUIDv7 (code
+             *     `invalid_id`), `catalogItemId` is not a built-in item or a custom
+             *     item of this household (code `invalid_catalog_item`), `locationId`
+             *     is not a location (code `invalid_location`), or `level` is not a
+             *     stock level (code `invalid_level`).
+             */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "invalid_catalog_item",
+                     *         "message": "catalogItemId must be a built-in item or one of this household's items."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["HouseholdNotFound"];
+            409: components["responses"]["EntryConflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteEntry: {
+        parameters: {
+            query: {
+                /** @description The client-generated UUIDv7 of the `entry_deleted` event. */
+                eventId: string;
+            };
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+                /** @description The pantry entry's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                entryId: components["parameters"]["EntryId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The entry was deleted (or this delete was already applied). */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /**
+             * @description `eventId` is missing or `entryId` is not a UUID (code
+             *     `bad_request`), or `eventId` is not a UUIDv7 (code `invalid_id`).
+             */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "invalid_id",
+                     *         "message": "eventId must be a UUIDv7."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["EntryNotFound"];
+            409: components["responses"]["EntryConflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+                /** @description The pantry entry's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                entryId: components["parameters"]["EntryId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateEntry"];
+            };
+        };
+        responses: {
+            /** @description The entry after the change. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PantryEntry"];
+                };
+            };
+            /**
+             * @description The body is not valid JSON or a value has the wrong type (code
+             *     `bad_request`), `eventId` is missing or not a UUIDv7 (code
+             *     `invalid_id`), the body does not set exactly one field (code
+             *     `one_field_per_update`), `locationId` is not a location (code
+             *     `invalid_location`), or `level` is not a stock level (code
+             *     `invalid_level`).
+             */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "one_field_per_update",
+                     *         "message": "Set exactly one of level, locationId, purchasedOn or expiresOn."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["EntryNotFound"];
+            409: components["responses"]["EntryConflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The household's members. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["HouseholdNotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    removeMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+                /** @description The member's user ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                userId: components["schemas"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user is no longer a member of the household. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["OwnerOnly"];
+            /**
+             * @description The household does not exist or the caller is not a member of it, or
+             *     `userId` is not a member of the household (code `not_found` in
+             *     every case).
+             */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "not_found",
+                     *         "message": "Member not found."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /**
+             * @description The owner tried to remove themselves (code `owner_cannot_leave`), or
+             *     the membership changed while the request ran (code `conflict`).
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "owner_cannot_leave",
+                     *         "message": "The owner cannot leave the household. Transfer ownership to another member or delete the household first."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    transferOwnership: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransferOwnership"];
+            };
+        };
+        responses: {
+            /** @description The household's members after the transfer, new owner first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberList"];
+                };
+            };
+            /**
+             * @description The body is missing or not valid JSON (code `bad_request`), `userId`
+             *     is not a member of the household (code `not_a_member`), or `userId`
+             *     is the caller (code `already_owner`).
+             */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "not_a_member",
+                     *         "message": "The new owner must be a member of the household."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["OwnerOnly"];
+            404: components["responses"]["HouseholdNotFound"];
+            /**
+             * @description Another change to the household's members conflicted with this one;
+             *     reload the members and try again (code `conflict`).
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "conflict",
+                     *         "message": "The household's members changed while this request ran. Try again."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             500: components["responses"]["InternalError"];
         };
     };

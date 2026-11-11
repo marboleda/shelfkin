@@ -287,6 +287,303 @@ paths:
           $ref: '#/components/responses/HouseholdNotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+  /households/{householdId}/entries:
+    parameters:
+      - $ref: '#/components/parameters/HouseholdId'
+    post:
+      operationId: createEntry
+      summary: Add a pantry entry
+      description: |
+        Adds one entry (one purchase) to the household's pantry and records an
+        `entry_created` event in the same transaction.
+
+        The client generates `id` and `eventId`, so a retried request is
+        applied once: repeating it with the same `id` and `eventId` returns
+        200 with the existing entry and writes nothing.
+
+        Defaults for omitted fields:
+        - `locationId`: the item's default location for this household.
+        - `level`: `full`.
+        - `purchasedOn`: today in the caller's `timezone` (see `User`).
+        - `expiresOn`: `purchasedOn` plus the item's shelf life, or no expiry
+          if the item has none. Send `null` for no expiry.
+
+        An expiry date before the purchase date, and a purchase date in the
+        future, are accepted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEntry'
+      responses:
+        '200':
+          description: A retry of a create that was already applied. The entry as it is now.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PantryEntry'
+        '201':
+          description: The new entry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PantryEntry'
+        '400':
+          description: |
+            The body is not valid JSON or a value has the wrong type (code
+            `bad_request`), `id` or `eventId` is missing or not a UUIDv7 (code
+            `invalid_id`), `catalogItemId` is not a built-in item or a custom
+            item of this household (code `invalid_catalog_item`), `locationId`
+            is not a location (code `invalid_location`), or `level` is not a
+            stock level (code `invalid_level`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: invalid_catalog_item
+                  message: catalogItemId must be a built-in item or one of this household's items.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/HouseholdNotFound'
+        '409':
+          $ref: '#/components/responses/EntryConflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /households/{householdId}/entries/{entryId}:
+    parameters:
+      - $ref: '#/components/parameters/HouseholdId'
+      - $ref: '#/components/parameters/EntryId'
+    patch:
+      operationId: updateEntry
+      summary: Change one field of a pantry entry
+      description: |
+        Changes exactly one of `level`, `locationId`, `purchasedOn` or
+        `expiresOn`, and records one `level_changed`, `location_changed`,
+        `purchase_date_changed` or `expiry_changed` event in the same
+        transaction. `expiresOn: null` clears the expiry. Changing
+        `purchasedOn` does not change `expiresOn`.
+
+        Setting a field to the value it already has changes nothing and
+        records no event. Repeating a request with the same `eventId` returns
+        the entry as it is now and does not apply the change again. When two
+        members change the same entry at the same time, both changes are
+        applied in turn (the last one wins) and both are recorded.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateEntry'
+      responses:
+        '200':
+          description: The entry after the change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PantryEntry'
+        '400':
+          description: |
+            The body is not valid JSON or a value has the wrong type (code
+            `bad_request`), `eventId` is missing or not a UUIDv7 (code
+            `invalid_id`), the body does not set exactly one field (code
+            `one_field_per_update`), `locationId` is not a location (code
+            `invalid_location`), or `level` is not a stock level (code
+            `invalid_level`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: one_field_per_update
+                  message: Set exactly one of level, locationId, purchasedOn or expiresOn.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/EntryNotFound'
+        '409':
+          $ref: '#/components/responses/EntryConflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      operationId: deleteEntry
+      summary: Remove a pantry entry
+      description: |
+        Deletes the entry and records an `entry_deleted` event in the same
+        transaction. Repeating the request with the same `eventId` after it
+        succeeded returns 204 again.
+      parameters:
+        - name: eventId
+          in: query
+          required: true
+          description: The client-generated UUIDv7 of the `entry_deleted` event.
+          schema:
+            type: string
+            example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a82
+      responses:
+        '204':
+          description: The entry was deleted (or this delete was already applied).
+        '400':
+          description: |
+            `eventId` is missing or `entryId` is not a UUID (code
+            `bad_request`), or `eventId` is not a UUIDv7 (code `invalid_id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: invalid_id
+                  message: eventId must be a UUIDv7.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/EntryNotFound'
+        '409':
+          $ref: '#/components/responses/EntryConflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /households/{householdId}/members:
+    parameters:
+      - $ref: '#/components/parameters/HouseholdId'
+    get:
+      operationId: listMembers
+      summary: List a household's members
+      description: |
+        Every member of the household, owner first, then the other members by
+        the time they joined (earliest first). Any member can call this.
+      responses:
+        '200':
+          description: The household's members.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/HouseholdNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /households/{householdId}/members/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/HouseholdId'
+      - name: userId
+        in: path
+        required: true
+        description: The member's user ID. A value that is not a UUID gets 400 (code `bad_request`).
+        schema:
+          $ref: '#/components/schemas/Id'
+    delete:
+      operationId: removeMember
+      summary: Remove a member, or leave the household
+      description: |
+        - The **owner** can remove any other member.
+        - A **member** can remove only themselves, which is leaving the household.
+        - The **owner** cannot leave: they must transfer ownership to another
+          member (`POST /households/{householdId}/transfer-ownership`) or
+          delete the household first.
+
+        The removed user loses access to the household straight away. Pantry
+        entries and events they created stay, still labelled with their name.
+      responses:
+        '204':
+          description: The user is no longer a member of the household.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/OwnerOnly'
+        '404':
+          description: |
+            The household does not exist or the caller is not a member of it, or
+            `userId` is not a member of the household (code `not_found` in
+            every case).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: not_found
+                  message: Member not found.
+        '409':
+          description: |
+            The owner tried to remove themselves (code `owner_cannot_leave`), or
+            the membership changed while the request ran (code `conflict`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: owner_cannot_leave
+                  message: The owner cannot leave the household. Transfer ownership to another member or delete the household first.
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /households/{householdId}/transfer-ownership:
+    parameters:
+      - $ref: '#/components/parameters/HouseholdId'
+    post:
+      operationId: transferOwnership
+      summary: Make another member the owner
+      description: |
+        Owner only. Makes `userId`, who must already be a member, the owner and
+        the caller a member, in one step. The household always has exactly one
+        owner. Afterwards the caller can leave the household.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferOwnership'
+      responses:
+        '200':
+          description: The household's members after the transfer, new owner first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberList'
+        '400':
+          description: |
+            The body is missing or not valid JSON (code `bad_request`), `userId`
+            is not a member of the household (code `not_a_member`), or `userId`
+            is the caller (code `already_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: not_a_member
+                  message: The new owner must be a member of the household.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/OwnerOnly'
+        '404':
+          $ref: '#/components/responses/HouseholdNotFound'
+        '409':
+          description: |
+            Another change to the household's members conflicted with this one;
+            reload the members and try again (code `conflict`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: conflict
+                  message: The household's members changed while this request ran. Try again.
+        '500':
+          $ref: '#/components/responses/InternalError'
 components:
   parameters:
     HouseholdId:
@@ -294,6 +591,13 @@ components:
       in: path
       required: true
       description: The household's ID. A value that is not a UUID gets 400 (code `bad_request`).
+      schema:
+        $ref: '#/components/schemas/Id'
+    EntryId:
+      name: entryId
+      in: path
+      required: true
+      description: The pantry entry's ID. A value that is not a UUID gets 400 (code `bad_request`).
       schema:
         $ref: '#/components/schemas/Id'
   securitySchemes:
@@ -497,6 +801,164 @@ components:
           description: Trimmed, then must be 1 to 50 characters.
           type: string
           example: Cottage
+    StockLevel:
+      description: How much of an entry is left. `out` entries stay in the pantry until deleted.
+      type: string
+      enum:
+        - full
+        - half
+        - low
+        - out
+    PantryEntry:
+      description: One purchase of a catalog item in a household's pantry, for example "Milk (Oct 20)".
+      type: object
+      required:
+        - id
+        - catalogItemId
+        - locationId
+        - level
+        - purchasedOn
+        - expiresOn
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        catalogItemId:
+          $ref: '#/components/schemas/Id'
+        locationId:
+          description: The ID of the location the entry is stored in.
+          type: integer
+          example: 2
+        level:
+          $ref: '#/components/schemas/StockLevel'
+        purchasedOn:
+          $ref: '#/components/schemas/Date'
+        expiresOn:
+          description: The expiry date, or null if the entry has none.
+          type: string
+          format: date
+          nullable: true
+          example: '2026-02-14'
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        updatedAt:
+          description: |
+            When the entry last changed. A change that sets a field to the
+            value it already has does not count.
+          type: string
+          format: date-time
+          example: '2026-01-31T18:04:05Z'
+    CreateEntry:
+      type: object
+      required:
+        - id
+        - eventId
+        - catalogItemId
+      properties:
+        id:
+          description: |
+            The new entry's ID, a UUIDv7 generated by the client. It is a plain
+            string so that any value that is not a UUIDv7 gets code `invalid_id`.
+          type: string
+          example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+        eventId:
+          description: The ID of the `entry_created` event, a UUIDv7 generated by the client.
+          type: string
+          example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a81
+        catalogItemId:
+          $ref: '#/components/schemas/Id'
+        locationId:
+          description: Defaults to the item's default location for this household.
+          type: integer
+          example: 2
+        level:
+          $ref: '#/components/schemas/StockLevel'
+        purchasedOn:
+          $ref: '#/components/schemas/Date'
+        expiresOn:
+          description: |
+            Omitted: `purchasedOn` plus the item's shelf life, or no expiry if
+            the item has none. `null`: no expiry.
+          type: string
+          format: date
+          nullable: true
+          example: '2026-02-14'
+          x-go-type: nullable.Nullable[openapi_types.Date]
+          x-go-type-import:
+            path: github.com/oapi-codegen/nullable
+          x-go-type-skip-optional-pointer: true
+    UpdateEntry:
+      description: '`eventId` and exactly one of the other fields.'
+      type: object
+      required:
+        - eventId
+      properties:
+        eventId:
+          description: The ID of the change event, a UUIDv7 generated by the client.
+          type: string
+          example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a81
+        level:
+          $ref: '#/components/schemas/StockLevel'
+        locationId:
+          type: integer
+          example: 3
+        purchasedOn:
+          $ref: '#/components/schemas/Date'
+        expiresOn:
+          description: The new expiry date, or `null` to clear it.
+          type: string
+          format: date
+          nullable: true
+          example: '2026-02-14'
+          x-go-type: nullable.Nullable[openapi_types.Date]
+          x-go-type-import:
+            path: github.com/oapi-codegen/nullable
+          x-go-type-skip-optional-pointer: true
+    Member:
+      description: A member of a household.
+      type: object
+      required:
+        - userId
+        - displayName
+        - email
+        - role
+        - joinedAt
+      properties:
+        userId:
+          $ref: '#/components/schemas/Id'
+        displayName:
+          description: The member's display name (see `User`).
+          type: string
+          example: Sam
+        email:
+          description: The member's email, or null if their account has none.
+          type: string
+          nullable: true
+          example: sam@example.com
+        role:
+          $ref: '#/components/schemas/MemberRole'
+        joinedAt:
+          # When the user joined (or created) the household.
+          $ref: '#/components/schemas/Timestamp'
+    MemberList:
+      type: object
+      required:
+        - members
+      properties:
+        members:
+          description: The owner first, then the other members by `joinedAt`.
+          type: array
+          items:
+            $ref: '#/components/schemas/Member'
+    TransferOwnership:
+      type: object
+      required:
+        - userId
+      properties:
+        userId:
+          # The member to make the owner.
+          $ref: '#/components/schemas/Id'
   responses:
     BadRequest:
       description: The request is malformed or fails validation.
@@ -582,3 +1044,30 @@ components:
             error:
               code: not_found
               message: Household not found.
+    EntryNotFound:
+      description: |
+        The household does not exist, the caller is not a member of it, or the
+        entry is not in that household (code `not_found`); the cases are
+        indistinguishable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: not_found
+              message: Entry not found.
+    EntryConflict:
+      description: |
+        `eventId` was already used for a different change (code
+        `event_id_conflict`), or the entry `id` is already used by an entry
+        for a different catalog item or household (code `entry_id_conflict`).
+        Generate new IDs for a new change.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: event_id_conflict
+              message: eventId was already used for a different change.
