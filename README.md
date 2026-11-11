@@ -399,8 +399,8 @@ The output is in the execution's logs.
 The API and the expiry job log in as `shelfkin_api`, which must be able to do **less** than `shelfkin_app` on its own: `dbtx` runs `SET LOCAL ROLE shelfkin_app`, and SQL in that transaction could run `RESET ROLE`. After every `migrate up`, the grant step (`api/cmd/migrate/grant.go`, enabled by `API_DB_ROLE`):
 
 - grants `shelfkin_app` to `shelfkin_api` `WITH INHERIT FALSE, SET TRUE` if no such grant exists yet (or fixes the options of its own grant), so `shelfkin_api` has `shelfkin_app`'s privileges only after `SET ROLE` and none after `RESET ROLE`. This needs `shelfkin_migrator` to have `ADMIN` on `shelfkin_app`, which it has because the #10 migration created the role as that user;
-- tries to revoke every other grant of `shelfkin_app` to `shelfkin_api` that is not `INHERIT FALSE, SET TRUE` without `ADMIN`, every other role membership (such as `cloudsqlsuperuser`), and the `CREATEDB`, `CREATEROLE` and `BYPASSRLS` attributes;
-- then **fails the migrate job** (so the API is not deployed) if `shelfkin_api` is still `SUPERUSER`, `CREATEDB`, `CREATEROLE` or `BYPASSRLS`, is a member of any role other than `shelfkin_app`, has any `shelfkin_app` grant that inherits, lacks `SET` or has `ADMIN` (or no right one at all), owns any relation, function, schema or type, or holds direct grants on any relation, function or schema. The error names each grant and who granted it, and points to the one-time admin step below.
+- tries to revoke every other grant of `shelfkin_app` to `shelfkin_api` that is not `INHERIT FALSE, SET TRUE` without `ADMIN`, every other role membership (such as `cloudsqlsuperuser`), and the `CREATEDB`, `CREATEROLE`, `BYPASSRLS` and `REPLICATION` attributes;
+- then **fails the migrate job** (so the API is not deployed) if `shelfkin_api` is still `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `BYPASSRLS` or `REPLICATION`, is a member of any role other than `shelfkin_app`, has any `shelfkin_app` grant that inherits, lacks `SET` or has `ADMIN` (or no right one at all), owns any relation, function, schema, type, large object or database, or holds direct grants on anything: relations (tables, views, sequences), single columns, functions, schemas, types, large objects, languages, foreign-data wrappers and servers, parameters, default privileges for future objects, or a database (beyond `CONNECT` and `TEMPORARY`). The error names each grant and who granted it, and points to the one-time admin step below.
 
 Why per grantor: on Postgres 16 and later, `pg_auth_members` keeps **one row per grantor**, and `GRANT`/`REVOKE` only touch the row of the role running them. A second `GRANT shelfkin_app TO shelfkin_api WITH INHERIT TRUE` made by an admin is a separate row that `shelfkin_migrator`'s own `GRANT` does not change. So the step revokes each row `GRANTED BY` its own grantor, and the check reads every row again. Postgres only lets a role revoke a grant made by a role whose privileges it has, so `shelfkin_migrator` (not a superuser on Cloud SQL) cannot revoke grants made by `postgres` or by Cloud SQL itself. Those make the step fail rather than pass.
 
@@ -434,9 +434,13 @@ REVOKE cloudsqlsuperuser FROM shelfkin_api GRANTED BY <grantor>;
 ALTER ROLE shelfkin_api NOCREATEDB NOCREATEROLE;
 -- Only if the query showed a wrong shelfkin_app row from another grantor:
 -- REVOKE shelfkin_app FROM shelfkin_api GRANTED BY <grantor>;
+-- Only if the error lists REPLICATION or BYPASSRLS:
+-- ALTER ROLE shelfkin_api NOREPLICATION NOBYPASSRLS;
 ```
 
-Run the membership query again: it must show only the `shelfkin_app` row (`f`, `t`, `f`), and `SELECT rolcreatedb, rolcreaterole FROM pg_roles WHERE rolname = 'shelfkin_api'` must show `f`, `f`.
+Run the membership query again: it must show only the `shelfkin_app` row (`f`, `t`, `f`), and `SELECT rolcreatedb, rolcreaterole, rolbypassrls, rolreplication FROM pg_roles WHERE rolname = 'shelfkin_api'` must show all `f`.
+
+If the error lists **privileges granted directly** to `shelfkin_api` (each is named, for example `SELECT on column users.email`), find out who granted them (the direct-grants query under "Production checks" shows the grantor). Nothing in this repo grants anything to `shelfkin_api`. If a migration did, fix it with a new migration that revokes it (migrations are forward-only); otherwise revoke it as the role that granted it, for example `REVOKE SELECT (id, email) ON users FROM shelfkin_api;` connected as that role.
 
 **If `postgres` gets `permission denied`** (for example "Only roles with privileges of role "cloudsqladmin" may revoke privileges granted by this role", or "permission denied to alter role"), stop. Stock Postgres 16+ refuses both to a role that is not a superuser, and `postgres` on Cloud SQL is not one; whether Cloud SQL lets `postgres` do it anyway has to be tried on the real instance. Record the exact error on the deploy issue and do not weaken the check: the API stays on its previous image (or undeployed) until `shelfkin_api` is fixed. The way out then is to stop creating `shelfkin_api` through the Cloud SQL API (a change to `infra/`) and create it with SQL instead (`CREATE ROLE shelfkin_api LOGIN PASSWORD ...` as `shelfkin_migrator`, which then has `ADMIN` on it and gives it no other membership). That needs a decision on the deploy issue first.
 
@@ -465,7 +469,28 @@ SELECT pg_get_userbyid(m.grantor) AS grantor, m.inherit_option, m.set_option, m.
 FROM pg_auth_members m WHERE m.member = 'shelfkin_api'::regrole;
 
 -- All false
-SELECT rolsuper, rolcreatedb, rolcreaterole, rolbypassrls FROM pg_roles WHERE rolname = 'shelfkin_api';
+SELECT rolsuper, rolcreatedb, rolcreaterole, rolbypassrls, rolreplication FROM pg_roles WHERE rolname = 'shelfkin_api';
+
+-- No rows: nothing granted directly to shelfkin_api, including single columns
+-- (column grants are in pg_attribute.attacl, not pg_class.relacl)
+WITH g AS (
+  SELECT 'relation ' || c.oid::regclass AS obj, a.* FROM pg_class c, aclexplode(c.relacl) a
+  UNION ALL SELECT 'column ' || c.oid::regclass || '.' || quote_ident(att.attname), a.*
+    FROM pg_attribute att JOIN pg_class c ON c.oid = att.attrelid, aclexplode(att.attacl) a
+  UNION ALL SELECT 'function ' || p.oid::regprocedure, a.* FROM pg_proc p, aclexplode(p.proacl) a
+  UNION ALL SELECT 'schema ' || n.nspname, a.* FROM pg_namespace n, aclexplode(n.nspacl) a
+  UNION ALL SELECT 'type ' || t.oid::regtype, a.* FROM pg_type t, aclexplode(t.typacl) a
+  UNION ALL SELECT 'large object ' || l.oid, a.* FROM pg_largeobject_metadata l, aclexplode(l.lomacl) a
+  UNION ALL SELECT 'language ' || l.lanname, a.* FROM pg_language l, aclexplode(l.lanacl) a
+  UNION ALL SELECT 'foreign-data wrapper ' || w.fdwname, a.* FROM pg_foreign_data_wrapper w, aclexplode(w.fdwacl) a
+  UNION ALL SELECT 'foreign server ' || s.srvname, a.* FROM pg_foreign_server s, aclexplode(s.srvacl) a
+  UNION ALL SELECT 'parameter ' || p.parname, a.* FROM pg_parameter_acl p, aclexplode(p.paracl) a
+  UNION ALL SELECT 'database ' || d.datname, a.* FROM pg_database d, aclexplode(d.datacl) a
+    WHERE a.privilege_type NOT IN ('CONNECT', 'TEMPORARY')
+  UNION ALL SELECT 'default privileges (' || d.defaclobjtype::text || ') of ' || pg_get_userbyid(d.defaclrole), a.*
+    FROM pg_default_acl d, aclexplode(d.defaclacl) a
+)
+SELECT obj, privilege_type, pg_get_userbyid(grantor) AS grantor FROM g WHERE grantee = 'shelfkin_api'::regrole;
 
 -- Every table is owned by shelfkin_migrator, none by shelfkin_api (or the owner column of \dt)
 SELECT tableowner, count(*) FROM pg_tables WHERE schemaname = 'public' GROUP BY tableowner;
@@ -478,7 +503,7 @@ SELECT tableowner FROM pg_tables WHERE tablename = 'household_members';
 SELECT relforcerowsecurity FROM pg_class WHERE relname = 'household_members';
 ```
 
-Then connect as `shelfkin_api` (`user=shelfkin_api`; its password is in the `api-database-url` secret, which must name `shelfkin_api`). Each of these must fail with `permission denied` (42501):
+Then connect as `shelfkin_api` (`user=shelfkin_api`; its password is in the `api-database-url` secret, which must name `shelfkin_api`). Each of these must fail with `permission denied` (42501). Keep the zero-column `SELECT`: it succeeds if `shelfkin_api` has `SELECT` on the table or on any single column, so it also catches a column grant (`SELECT *` would not, for a grant on some columns only):
 
 ```sql
 BEGIN; SET LOCAL ROLE shelfkin_app; RESET ROLE; SELECT FROM household_members; ROLLBACK;

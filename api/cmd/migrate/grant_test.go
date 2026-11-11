@@ -364,7 +364,7 @@ func TestUpRemovesExtraMembershipsAndAttributes(t *testing.T) {
 	dbURL, pool := emptyDatabase(t)
 	ctx := t.Context()
 	extra := createRole(t, pool, "e38_extra_", "NOLOGIN")
-	api := createRole(t, pool, "e38_api_", "LOGIN CREATEDB CREATEROLE BYPASSRLS")
+	api := createRole(t, pool, "e38_api_", "LOGIN CREATEDB CREATEROLE BYPASSRLS REPLICATION")
 	if _, err := pool.Exec(ctx, "GRANT "+pgx.Identifier{extra}.Sanitize()+" TO "+pgx.Identifier{api}.Sanitize()); err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +382,7 @@ func TestUpRemovesExtraMembershipsAndAttributes(t *testing.T) {
 	if createDB || createRole || bypassRLS {
 		t.Errorf("createdb=%v createrole=%v bypassrls=%v, want all false", createDB, createRole, bypassRLS)
 	}
-	for _, want := range []string{"REVOKE", "NOCREATEDB", "NOCREATEROLE", "NOBYPASSRLS"} {
+	for _, want := range []string{"REVOKE", "NOCREATEDB", "NOCREATEROLE", "NOBYPASSRLS", "NOREPLICATION"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output = %q, want it to mention %s", out.String(), want)
 		}
@@ -400,7 +400,7 @@ func TestUpFailsWhenAnExtraMembershipCannotBeRevoked(t *testing.T) {
 		t.Fatal(err)
 	}
 	extra := createRole(t, pool, "e38_extra_", "NOLOGIN")
-	api := createRole(t, pool, "e38_api_", "LOGIN")
+	api := createRole(t, pool, "e38_api_", "LOGIN REPLICATION")
 	migrator := createRole(t, pool, "e38_mig_", "LOGIN PASSWORD 'mig-pw' CREATEROLE")
 	apiIdent := pgx.Identifier{api}.Sanitize()
 	if _, err := pool.Exec(ctx, "GRANT "+pgx.Identifier{extra}.Sanitize()+" TO "+apiIdent); err != nil {
@@ -424,7 +424,7 @@ func TestUpFailsWhenAnExtraMembershipCannotBeRevoked(t *testing.T) {
 	if err := pool.QueryRow(ctx, "SELECT current_user").Scan(&admin); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"is a member of " + extra + " (granted by " + admin, "One-time admin step", "workflow by hand"} {
+	for _, want := range []string{"is a member of " + extra + " (granted by " + admin, "has REPLICATION", "One-time admin step", "workflow by hand"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("err = %q, want it to mention %q", err, want)
 		}
@@ -479,6 +479,96 @@ func TestUpFailsWhenTheAPIRoleOwnsOrIsGrantedObjects(t *testing.T) {
 		t.Fatal("up succeeded although the API role owns a table and has a grant")
 	}
 	for _, want := range []string{"owns 1 objects", "1 privileges granted directly"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %q, want it to mention %q", err, want)
+		}
+	}
+}
+
+// Re-QA of #38: column privileges live in pg_attribute.attacl, not relacl. A
+// column grant on users lets the login read emails after RESET ROLE (users
+// has no RLS), so it must fail the step and be named.
+func TestUpFailsOnAColumnGrant(t *testing.T) {
+	t.Parallel()
+	dbURL, pool := emptyDatabase(t)
+	ctx := t.Context()
+	if err := run(ctx, []string{"up"}, dbURL, "", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	api := createRole(t, pool, "e38_api_", "LOGIN PASSWORD 'api-pw'")
+	if _, err := pool.Exec(ctx, "GRANT SELECT (id, email) ON users TO "+pgx.Identifier{api}.Sanitize()); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	err := run(ctx, []string{"up"}, dbURL, api, &out)
+	if err == nil {
+		t.Fatalf("up succeeded with a column grant on users; output %q", out.String())
+	}
+	for _, want := range []string{
+		"2 privileges granted directly",
+		"SELECT on column users.email",
+		"SELECT on column users.id",
+		"One-time admin step",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %q, want it to mention %q", err, want)
+		}
+	}
+
+	// The README's production check (a zero-column SELECT after RESET ROLE,
+	// which must fail) catches it too: with any column privilege it succeeds.
+	conn, err := pgx.Connect(ctx, loginURL(t, dbURL, api, "api-pw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(context.Background())
+	if _, err := conn.Exec(ctx, "SELECT FROM users"); err != nil {
+		t.Errorf("zero-column SELECT FROM users with a column grant: err = %v, want success (so the README check fails)", err)
+	}
+}
+
+// Direct grants in every other ACL catalog are found and named too.
+func TestUpFailsOnGrantsInOtherCatalogs(t *testing.T) {
+	t.Parallel()
+	dbURL, pool := emptyDatabase(t)
+	ctx := t.Context()
+	if err := run(ctx, []string{"up"}, dbURL, "", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	api := createRole(t, pool, "e38_api_", "LOGIN")
+	apiIdent := pgx.Identifier{api}.Sanitize()
+	var dbName, loid string
+	if err := pool.QueryRow(ctx, "SELECT current_database(), lo_create(0)::text").Scan(&dbName, &loid); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		"CREATE DOMAIN e38_dom AS int",
+		"GRANT USAGE ON DOMAIN e38_dom TO " + apiIdent,
+		"GRANT SELECT ON LARGE OBJECT " + loid + " TO " + apiIdent,
+		"GRANT USAGE ON LANGUAGE plpgsql TO " + apiIdent,
+		"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO " + apiIdent,
+		"GRANT CREATE ON DATABASE " + pgx.Identifier{dbName}.Sanitize() + " TO " + apiIdent,
+		"GRANT SET ON PARAMETER work_mem TO " + apiIdent,
+	} {
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+
+	err := run(ctx, []string{"up"}, dbURL, api, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("up succeeded with direct grants in other catalogs")
+	}
+	for _, want := range []string{
+		"6 privileges granted directly",
+		"USAGE on type e38_dom",
+		"SELECT on large object " + loid,
+		"USAGE on language plpgsql",
+		"SELECT on default privileges for tables created by",
+		"CREATE on database " + dbName,
+		"SET on parameter work_mem",
+	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("err = %q, want it to mention %q", err, want)
 		}

@@ -25,7 +25,8 @@ const appRole = "shelfkin_app"
 // SET TRUE, so the login can use shelfkin_app's privileges only after
 // SET ROLE, and has none of them after RESET ROLE. It then removes anything
 // else that would let the login do more than shelfkin_app (see #38): other
-// role memberships and the CREATEDB, CREATEROLE and BYPASSRLS attributes.
+// role memberships and the CREATEDB, CREATEROLE, BYPASSRLS and REPLICATION
+// attributes.
 //
 // On Postgres 16 and later pg_auth_members holds one row per grantor, and
 // GRANT and REVOKE only touch the row whose grantor is the role running them.
@@ -117,7 +118,7 @@ func grantAppRole(ctx context.Context, sqlDB *sql.DB, apiRole string, out io.Wri
 	for _, a := range []struct {
 		on   bool
 		attr string
-	}{{attrs.createDB, "NOCREATEDB"}, {attrs.createRole, "NOCREATEROLE"}, {attrs.bypassRLS, "NOBYPASSRLS"}} {
+	}{{attrs.createDB, "NOCREATEDB"}, {attrs.createRole, "NOCREATEROLE"}, {attrs.bypassRLS, "NOBYPASSRLS"}, {attrs.replication, "NOREPLICATION"}} {
 		if !a.on {
 			continue
 		}
@@ -131,14 +132,14 @@ func grantAppRole(ctx context.Context, sqlDB *sql.DB, apiRole string, out io.Wri
 }
 
 type attributes struct {
-	superuser, createDB, createRole, bypassRLS bool
+	superuser, createDB, createRole, bypassRLS, replication bool
 }
 
 func roleAttributes(ctx context.Context, conn *sql.Conn, role string) (attributes, error) {
 	var a attributes
 	err := conn.QueryRowContext(ctx,
-		"SELECT rolsuper, rolcreatedb, rolcreaterole, rolbypassrls FROM pg_catalog.pg_roles WHERE rolname = $1",
-		role).Scan(&a.superuser, &a.createDB, &a.createRole, &a.bypassRLS)
+		"SELECT rolsuper, rolcreatedb, rolcreaterole, rolbypassrls, rolreplication FROM pg_catalog.pg_roles WHERE rolname = $1",
+		role).Scan(&a.superuser, &a.createDB, &a.createRole, &a.bypassRLS, &a.replication)
 	if err != nil {
 		return a, fmt.Errorf("reading attributes of %s: %w", role, err)
 	}
@@ -214,7 +215,7 @@ func hasRightAppGrant(app []memberGrant) bool {
 }
 
 // checkAPIRole fails unless apiRole can do no more than shelfkin_app: no
-// superuser, CREATEDB, CREATEROLE or BYPASSRLS, no role membership besides
+// superuser, CREATEDB, CREATEROLE, BYPASSRLS or REPLICATION, no role membership besides
 // shelfkin_app, every shelfkin_app grant (whoever made it) INHERIT FALSE,
 // SET TRUE without ADMIN, and no objects or privileges of its own in this
 // database.
@@ -229,7 +230,7 @@ func checkAPIRole(ctx context.Context, conn *sql.Conn, apiRole string) error {
 	for _, a := range []struct {
 		on   bool
 		attr string
-	}{{attrs.superuser, "SUPERUSER"}, {attrs.createDB, "CREATEDB"}, {attrs.createRole, "CREATEROLE"}, {attrs.bypassRLS, "BYPASSRLS"}} {
+	}{{attrs.superuser, "SUPERUSER"}, {attrs.createDB, "CREATEDB"}, {attrs.createRole, "CREATEROLE"}, {attrs.bypassRLS, "BYPASSRLS"}, {attrs.replication, "REPLICATION"}} {
 		if a.on {
 			problems = append(problems, "has "+a.attr)
 		}
@@ -257,7 +258,8 @@ func checkAPIRole(ctx context.Context, conn *sql.Conn, apiRole string) error {
 		SELECT (SELECT count(*) FROM pg_catalog.pg_class WHERE relowner = $1::regrole)
 		     + (SELECT count(*) FROM pg_catalog.pg_proc WHERE proowner = $1::regrole)
 		     + (SELECT count(*) FROM pg_catalog.pg_namespace WHERE nspowner = $1::regrole)
-		     + (SELECT count(*) FROM pg_catalog.pg_type WHERE typowner = $1::regrole AND typrelid = 0 AND typcategory <> 'A')`,
+		     + (SELECT count(*) FROM pg_catalog.pg_type WHERE typowner = $1::regrole AND typrelid = 0 AND typcategory <> 'A')
+		     + (SELECT count(*) FROM pg_catalog.pg_largeobject_metadata WHERE lomowner = $1::regrole)`,
 		ident).Scan(&owned); err != nil {
 		return fmt.Errorf("checking objects owned by %s: %w", apiRole, err)
 	}
@@ -265,23 +267,25 @@ func checkAPIRole(ctx context.Context, conn *sql.Conn, apiRole string) error {
 		problems = append(problems, fmt.Sprintf("owns %d objects in this database", owned))
 	}
 
-	// Direct grants on tables, views, sequences, functions and schemas in
-	// this database (PUBLIC's grants are not counted: they name grantee 0).
-	var grants int
-	if err := conn.QueryRowContext(ctx, `
-		SELECT count(*) FROM (
-			SELECT (aclexplode(relacl)).grantee FROM pg_catalog.pg_class WHERE relacl IS NOT NULL
-			UNION ALL
-			SELECT (aclexplode(proacl)).grantee FROM pg_catalog.pg_proc WHERE proacl IS NOT NULL
-			UNION ALL
-			SELECT (aclexplode(nspacl)).grantee FROM pg_catalog.pg_namespace WHERE nspacl IS NOT NULL
-		) g
-		WHERE g.grantee = $1::regrole`,
-		ident).Scan(&grants); err != nil {
+	var ownedDBs []string
+	if err := queryStrings(ctx, conn, &ownedDBs,
+		"SELECT datname FROM pg_catalog.pg_database WHERE datdba = $1::regrole ORDER BY 1", ident); err != nil {
+		return fmt.Errorf("checking databases owned by %s: %w", apiRole, err)
+	}
+	for _, d := range ownedDBs {
+		problems = append(problems, "owns database "+d)
+	}
+
+	grants, err := directGrants(ctx, conn, ident)
+	if err != nil {
 		return fmt.Errorf("checking privileges granted to %s: %w", apiRole, err)
 	}
-	if grants > 0 {
-		problems = append(problems, fmt.Sprintf("has %d privileges granted directly to it", grants))
+	if len(grants) > 0 {
+		shown := grants
+		if len(shown) > 10 {
+			shown = append(shown[:10:10], "...")
+		}
+		problems = append(problems, fmt.Sprintf("has %d privileges granted directly to it (%s)", len(grants), strings.Join(shown, "; ")))
 	}
 
 	if len(problems) == 0 {
@@ -291,4 +295,80 @@ func checkAPIRole(ctx context.Context, conn *sql.Conn, apiRole string) error {
 		"Migrations were applied, but the API must not be deployed like this. "+
 		"An admin must fix it once (README, \"Deploying the API\" > \"One-time admin step\"), then run the Deploy API workflow by hand.",
 		apiRole, appRole, strings.Join(problems, ", "))
+}
+
+// directGrants describes every privilege granted directly to ident (not
+// through PUBLIC, whose grants name grantee 0, and not through a role) that
+// the catalogs record: on relations (tables, views, sequences), on single
+// columns, functions, schemas, types and domains, large objects, languages,
+// foreign-data wrappers and servers, default privileges for objects created
+// later, settable parameters, and on any database other than CONNECT and
+// TEMPORARY (which every login needs and PUBLIC has by default).
+func directGrants(ctx context.Context, conn *sql.Conn, ident string) ([]string, error) {
+	var grants []string
+	err := queryStrings(ctx, conn, &grants, `
+		WITH g AS (
+			SELECT a.privilege_type, a.grantee, format('relation %s', c.oid::regclass) AS obj
+			FROM pg_catalog.pg_class c, aclexplode(c.relacl) a
+			UNION ALL
+			SELECT a.privilege_type, a.grantee, format('column %s.%I', c.oid::regclass, att.attname)
+			FROM pg_catalog.pg_attribute att
+			JOIN pg_catalog.pg_class c ON c.oid = att.attrelid, aclexplode(att.attacl) a
+			UNION ALL
+			SELECT a.privilege_type, a.grantee, format('function %s', p.oid::regprocedure)
+			FROM pg_catalog.pg_proc p, aclexplode(p.proacl) a
+			UNION ALL
+			SELECT a.privilege_type, a.grantee, format('schema %I', n.nspname)
+			FROM pg_catalog.pg_namespace n, aclexplode(n.nspacl) a
+			UNION ALL
+			SELECT a.privilege_type, a.grantee, format('type %s', t.oid::regtype)
+			FROM pg_catalog.pg_type t, aclexplode(t.typacl) a
+			UNION ALL
+			SELECT a.privilege_type, a.grantee, format('large object %s', l.oid)
+			FROM pg_catalog.pg_largeobject_metadata l, aclexplode(l.lomacl) a
+			UNION ALL
+			SELECT a.privilege_type, a.grantee, format('language %I', l.lanname)
+			FROM pg_catalog.pg_language l, aclexplode(l.lanacl) a
+			UNION ALL
+			SELECT a.privilege_type, a.grantee, format('foreign-data wrapper %I', w.fdwname)
+			FROM pg_catalog.pg_foreign_data_wrapper w, aclexplode(w.fdwacl) a
+			UNION ALL
+			SELECT a.privilege_type, a.grantee, format('foreign server %I', s.srvname)
+			FROM pg_catalog.pg_foreign_server s, aclexplode(s.srvacl) a
+			UNION ALL
+			SELECT a.privilege_type, a.grantee, format('parameter %s', p.parname)
+			FROM pg_catalog.pg_parameter_acl p, aclexplode(p.paracl) a
+			UNION ALL
+			SELECT a.privilege_type, a.grantee, format('database %I', d.datname)
+			FROM pg_catalog.pg_database d, aclexplode(d.datacl) a
+			WHERE a.privilege_type NOT IN ('CONNECT', 'TEMPORARY')
+			UNION ALL
+			SELECT a.privilege_type, a.grantee,
+				format('default privileges for %s created by %s%s',
+					CASE d.defaclobjtype WHEN 'r' THEN 'tables' WHEN 'S' THEN 'sequences' WHEN 'f' THEN 'functions'
+						WHEN 'T' THEN 'types' WHEN 'n' THEN 'schemas' ELSE d.defaclobjtype::text END,
+					pg_catalog.pg_get_userbyid(d.defaclrole),
+					CASE WHEN d.defaclnamespace = 0 THEN '' ELSE format(' in schema %s', d.defaclnamespace::regnamespace) END)
+			FROM pg_catalog.pg_default_acl d, aclexplode(d.defaclacl) a
+		)
+		SELECT format('%s on %s', privilege_type, obj) FROM g WHERE grantee = $1::regrole ORDER BY 1`, ident)
+	return grants, err
+}
+
+// queryStrings runs a query returning one text column and appends each row
+// to dst.
+func queryStrings(ctx context.Context, conn *sql.Conn, dst *[]string, query string, args ...any) error {
+	rows, err := conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			return err
+		}
+		*dst = append(*dst, s)
+	}
+	return rows.Err()
 }
