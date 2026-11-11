@@ -6,8 +6,16 @@ import { useColorScheme } from 'react-native';
 
 import { colors } from '@/theme';
 import { FONT_LOAD_TIMEOUT_MS, fontSources } from '@/theme/fonts';
+import { setupApiServer } from '../test-utils/api';
+import { signedInApiHandlers, signInTestUser } from '../test-utils/auth';
 
 jest.setTimeout(60000);
+
+// These tests render the signed-in app: sign the test user in and answer its API calls.
+setupApiServer(...signedInApiHandlers());
+beforeEach(() => {
+  signInTestUser();
+});
 
 // Fonts never really load in Jest. Each test decides what `useFonts` reports.
 jest.mock('expo-font', () => ({

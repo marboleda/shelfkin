@@ -5,6 +5,7 @@ import { http, HttpResponse } from 'msw';
 
 import { SERVER_STATUS_TEXT } from '@/components/server-status';
 import { apiUrl, setupApiServer } from '../test-utils/api';
+import { signedInApiHandlers, signInTestUser } from '../test-utils/auth';
 
 jest.setTimeout(60000);
 
@@ -34,7 +35,11 @@ jest.mock('@/api/query-client', () => {
 });
 
 const APP_DIR = './src/app';
-const server = setupApiServer();
+const server = setupApiServer(...signedInApiHandlers());
+
+beforeEach(() => {
+  signInTestUser();
+});
 
 function healthOk() {
   return http.get(apiUrl('/health'), () => HttpResponse.json({ status: 'ok' }));

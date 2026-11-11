@@ -37,6 +37,8 @@ describe('health query', () => {
   });
 
   test('each test gets a fresh QueryClient, so nothing is cached from the last test', async () => {
+    // The query still fetches; answer it, or a slow run fails on an unhandled request.
+    countHealthRequests(() => HttpResponse.json({ status: 'ok' }));
     const { client } = await renderHealthQuery();
     expect(client.getQueryData(queryKeys.health())).toBeUndefined();
   });

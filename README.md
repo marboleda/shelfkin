@@ -27,7 +27,7 @@ Install the app's dependencies once:
 npm --prefix app install
 ```
 
-Run the app (press `w` for web, or scan the QR code with Expo Go):
+Run the app (press `w` for web, or scan the QR code with Expo Go). To sign in locally, start the API and the Auth emulator first; see [Sign-in and the Auth emulator](app/README.md#sign-in-and-the-auth-emulator):
 
 ```sh
 npm --prefix app start
@@ -134,6 +134,8 @@ curl -s -X PATCH http://localhost:8080/me -H "Authorization: Bearer $TOKEN" \
 ```
 
 In PowerShell, use `Invoke-RestMethod`, for example `$TOKEN = (Invoke-RestMethod -Method Post -Uri 'http://localhost:9099/identitytoolkit.googleapis.com/v1/accounts:signUp?key=any' -ContentType 'application/json' -Body '{"email":"sam@example.com","password":"password123","displayName":"Sam","returnSecureToken":true}').idToken` and then `Invoke-RestMethod http://localhost:8080/me -Headers @{ Authorization = "Bearer $TOKEN" }`.
+
+The app uses the same emulator in development: see [Sign-in and the Auth emulator](app/README.md#sign-in-and-the-auth-emulator) for how to point it there (including from an Android emulator or a physical device). Password reset emails are not sent; the emulator prints each reset link in its log (`docker compose logs auth`) and lists it at `http://localhost:9099/emulator/v1/projects/demo-shelfkin/oobCodes`.
 
 Go tests that need an authenticated caller do not need the emulator: build the server with `authtest.NewVerifier()` (`api/internal/auth/authtest`) and send `authtest.Bearer(v.Issue(auth.Token{UID: "alice", Name: "Alice"}))` as the `Authorization` header. Only the integration tests that check real token verification use the emulator.
 

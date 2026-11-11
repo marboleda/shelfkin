@@ -10,4 +10,6 @@
  */
 export const queryKeys = {
   health: () => ['health'] as const,
+  /** The signed-in user's profile (`GET /me`). */
+  me: () => ['me'] as const,
 };

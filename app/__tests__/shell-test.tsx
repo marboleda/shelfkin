@@ -4,8 +4,16 @@ import { Dimensions, StyleSheet, useColorScheme } from 'react-native';
 
 import { documentTitle, safeAreaPadding } from '@/components/screen';
 import { colors, CONTENT_MAX_WIDTH } from '@/theme';
+import { setupApiServer } from '../test-utils/api';
+import { mockFirebase, signedInApiHandlers, signInTestUser } from '../test-utils/auth';
 
 jest.setTimeout(60000);
+
+// These tests render the signed-in app: sign the test user in and answer its API calls.
+setupApiServer(...signedInApiHandlers());
+beforeEach(() => {
+  signInTestUser();
+});
 
 // Fonts never really load in Jest: report them as loaded so the app renders (see font-loading-test).
 jest.mock('expo-font', () => ({
@@ -55,6 +63,8 @@ describe('browser tab title', () => {
 describe('dark mode', () => {
   test.each(ROUTES)('%s (%s) has a dark background and light heading', async (url, heading) => {
     mockUseColorScheme.mockReturnValue('dark');
+    // /sign-in is only shown to signed-out users.
+    if (url === '/sign-in') mockFirebase.signOutElsewhere();
     await renderRouter(APP_DIR, { initialUrl: url });
 
     expect(screen.getByTestId('screen')).toHaveStyle({ backgroundColor: colors.dark.background });
