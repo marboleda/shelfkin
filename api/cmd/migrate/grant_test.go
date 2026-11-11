@@ -196,6 +196,167 @@ func TestUpFixesAnInheritingGrant(t *testing.T) {
 	wantOnlyAppRole(t, pool, api)
 }
 
+// wantResetRoleDenied connects as the login and checks that, without SET ROLE
+// and after SET LOCAL ROLE shelfkin_app; RESET ROLE, it can read neither
+// household_members nor users.
+func wantResetRoleDenied(t *testing.T, dbURL, login, password string) {
+	t.Helper()
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, loginURL(t, dbURL, login, password))
+	if err != nil {
+		t.Fatalf("connecting as %s: %v", login, err)
+	}
+	defer conn.Close(context.Background())
+	for _, table := range []string{"household_members", "users"} {
+		if _, err := conn.Exec(ctx, "SELECT FROM "+table); !isPermissionDenied(err) {
+			t.Errorf("SELECT from %s without SET ROLE: err = %v, want 42501", table, err)
+		}
+		tx, err := conn.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, stmt := range []string{"SET LOCAL ROLE shelfkin_app", "RESET ROLE"} {
+			if _, err := tx.Exec(ctx, stmt); err != nil {
+				t.Fatalf("%s: %v", stmt, err)
+			}
+		}
+		if _, err := tx.Exec(ctx, "SELECT FROM "+table); !isPermissionDenied(err) {
+			t.Errorf("SELECT from %s after RESET ROLE: err = %v, want 42501", table, err)
+		}
+		_ = tx.Rollback(ctx)
+	}
+}
+
+// QA of #38: on Postgres 16+ each grantor has its own pg_auth_members row, and
+// GRANT only updates the runner's row. An INHERIT TRUE grant made by another
+// role (an admin) must be revoked as granted by that role, not left in place.
+func TestUpRevokesAnInheritingGrantMadeByAnotherGrantor(t *testing.T) {
+	t.Parallel()
+	dbURL, pool := emptyDatabase(t)
+	ctx := t.Context()
+	if err := run(ctx, []string{"up"}, dbURL, "", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	// Created before the API role, so it is dropped after it (its grant goes
+	// with the API role).
+	adm := createRole(t, pool, "e38_adm_", "NOLOGIN")
+	api := createRole(t, pool, "e38_api_", "LOGIN PASSWORD 'api-pw'")
+	apiIdent, admIdent := pgx.Identifier{api}.Sanitize(), pgx.Identifier{adm}.Sanitize()
+	for _, stmt := range []string{
+		"GRANT shelfkin_app TO " + admIdent + " WITH ADMIN TRUE",
+		"GRANT shelfkin_app TO " + apiIdent + " WITH INHERIT FALSE, SET TRUE",
+		"GRANT shelfkin_app TO " + apiIdent + " WITH INHERIT TRUE GRANTED BY " + admIdent,
+	} {
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	if ms := memberships(t, pool, api); len(ms) != 2 {
+		t.Fatalf("memberships = %+v, want the right grant and the admin's inheriting one", ms)
+	}
+
+	var out bytes.Buffer
+	if err := run(ctx, []string{"up"}, dbURL, api, &out); err != nil {
+		t.Fatalf("up: %v\n%s", err, out.String())
+	}
+	if want := "REVOKE shelfkin_app FROM " + apiIdent + " GRANTED BY " + admIdent; !strings.Contains(out.String(), want) {
+		t.Errorf("output = %q, want %q", out.String(), want)
+	}
+	wantOnlyAppRole(t, pool, api)
+	wantResetRoleDenied(t, dbURL, api, "api-pw")
+}
+
+// The same, but the runner is not a superuser (shelfkin_migrator on Cloud
+// SQL): it cannot revoke another role's grant, so the check must fail closed
+// instead of reporting the grant as fixed.
+func TestUpFailsOnAnInheritingGrantItCannotRevoke(t *testing.T) {
+	t.Parallel()
+	dbURL, pool := emptyDatabase(t)
+	ctx := t.Context()
+	if err := run(ctx, []string{"up"}, dbURL, "", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	api := createRole(t, pool, "e38_api_", "LOGIN PASSWORD 'api-pw'")
+	migrator := createRole(t, pool, "e38_mig_", "LOGIN PASSWORD 'mig-pw' CREATEROLE")
+	apiIdent := pgx.Identifier{api}.Sanitize()
+	// The migrator has ADMIN on shelfkin_app, as the creator does in production.
+	if _, err := pool.Exec(ctx, "GRANT shelfkin_app TO "+pgx.Identifier{migrator}.Sanitize()+" WITH ADMIN TRUE, INHERIT FALSE, SET FALSE"); err != nil {
+		t.Fatal(err)
+	}
+
+	sqlDB, err := connect(ctx, loginURL(t, dbURL, migrator, "mig-pw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	var out bytes.Buffer
+	if err := grantAppRole(ctx, sqlDB, api, &out); err != nil {
+		t.Fatalf("first grant step: %v", err)
+	}
+
+	// An admin adds an inheriting grant next to the migrator's right one.
+	var admin string
+	if err := pool.QueryRow(ctx, "SELECT current_user").Scan(&admin); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "GRANT shelfkin_app TO "+apiIdent+" WITH INHERIT TRUE"); err != nil {
+		t.Fatal(err)
+	}
+
+	for range 2 { // fails the same way every run
+		out.Reset()
+		err = grantAppRole(ctx, sqlDB, api, &out)
+		if err == nil {
+			t.Fatalf("grant step succeeded with an inheriting grant by %s left; output %q", admin, out.String())
+		}
+		for _, want := range []string{
+			"has a wrong grant of shelfkin_app (granted by " + admin + " with INHERIT TRUE",
+			"One-time admin step",
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("err = %q, want it to mention %q", err, want)
+			}
+		}
+		if strings.Contains(out.String(), "Updated") || strings.Contains(out.String(), "Ran ") {
+			t.Errorf("output = %q, want no claimed fix", out.String())
+		}
+	}
+	if ms := memberships(t, pool, api); len(ms) != 2 {
+		t.Errorf("memberships = %+v, want both rows left for the admin", ms)
+	}
+}
+
+// A grant with ADMIN would let the login grant shelfkin_app onwards: the
+// option is revoked and the membership kept.
+func TestUpRevokesAdminOptionOnTheAppGrant(t *testing.T) {
+	t.Parallel()
+	dbURL, pool := emptyDatabase(t)
+	ctx := t.Context()
+	if err := run(ctx, []string{"up"}, dbURL, "", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	api := createRole(t, pool, "e38_api_", "LOGIN")
+	if _, err := pool.Exec(ctx, "GRANT shelfkin_app TO "+pgx.Identifier{api}.Sanitize()+" WITH ADMIN TRUE, INHERIT FALSE, SET TRUE"); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := run(ctx, []string{"up"}, dbURL, api, &out); err != nil {
+		t.Fatalf("up: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "REVOKE ADMIN OPTION FOR shelfkin_app") {
+		t.Errorf("output = %q, want the ADMIN option revoked", out.String())
+	}
+	wantOnlyAppRole(t, pool, api)
+	var adminOpt bool
+	if err := pool.QueryRow(ctx, "SELECT bool_or(admin_option) FROM pg_auth_members WHERE member = $1::regrole",
+		pgx.Identifier{api}.Sanitize()).Scan(&adminOpt); err != nil {
+		t.Fatal(err)
+	}
+	if adminOpt {
+		t.Error("shelfkin_app grant still has ADMIN")
+	}
+}
+
 // Locally the migrator is a superuser, so it can remove everything; in
 // production (Cloud SQL) it may not be, which the next test covers.
 func TestUpRemovesExtraMembershipsAndAttributes(t *testing.T) {
@@ -259,7 +420,11 @@ func TestUpFailsWhenAnExtraMembershipCannotBeRevoked(t *testing.T) {
 	if err == nil {
 		t.Fatal("grant step succeeded with an extra membership left")
 	}
-	for _, want := range []string{"is a member of " + extra, "One-time admin step", "workflow by hand"} {
+	var admin string
+	if err := pool.QueryRow(ctx, "SELECT current_user").Scan(&admin); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"is a member of " + extra + " (granted by " + admin, "One-time admin step", "workflow by hand"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("err = %q, want it to mention %q", err, want)
 		}

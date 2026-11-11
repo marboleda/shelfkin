@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -27,8 +26,13 @@ const appRole = "shelfkin_app"
 // SET ROLE, and has none of them after RESET ROLE. It then removes anything
 // else that would let the login do more than shelfkin_app (see #38): other
 // role memberships and the CREATEDB, CREATEROLE and BYPASSRLS attributes.
-// Changes it cannot make (for example a membership granted by a Cloud SQL
-// admin) make it fail, naming the one-time admin step in the README.
+//
+// On Postgres 16 and later pg_auth_members holds one row per grantor, and
+// GRANT and REVOKE only touch the row whose grantor is the role running them.
+// So every membership row is revoked as granted by its own grantor (REVOKE
+// ... GRANTED BY), and the final check reads every row again. Changes the
+// runner cannot make, such as a membership granted by a Cloud SQL admin, make
+// it fail, naming the grantor and the one-time admin step in the README.
 //
 // It is idempotent: when everything is already in place it changes nothing.
 func grantAppRole(ctx context.Context, sqlDB *sql.DB, apiRole string, out io.Writer) error {
@@ -51,24 +55,22 @@ func grantAppRole(ctx context.Context, sqlDB *sql.DB, apiRole string, out io.Wri
 	}
 	ident := pgx.Identifier{apiRole}.Sanitize()
 
-	// 1. The shelfkin_app membership, with the right options.
-	var granted, inherit, set bool
-	err = conn.QueryRowContext(ctx, `
-		SELECT true, bool_or(m.inherit_option), bool_or(m.set_option)
-		FROM pg_catalog.pg_auth_members m
-		WHERE m.roleid = $1::regrole AND m.member = $2::regrole
-		GROUP BY m.member`, appRole, ident).Scan(&granted, &inherit, &set)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("checking %s membership of %s: %w", apiRole, appRole, err)
+	// 1. A shelfkin_app membership with the right options. Granting again
+	// updates the options of the runner's own row. It is only needed when no
+	// row is right yet, so a right row exists before step 2 revokes wrong
+	// ones, and the serving API never loses shelfkin_app.
+	grants, err := memberGrants(ctx, conn, ident)
+	if err != nil {
+		return err
 	}
+	appGrants, _ := splitGrants(grants)
 	switch {
-	case !granted:
+	case len(appGrants) == 0:
 		if _, err := conn.ExecContext(ctx, fmt.Sprintf("GRANT %s TO %s WITH INHERIT FALSE, SET TRUE", appRole, ident)); err != nil {
 			return fmt.Errorf("granting %s to %s: %w", appRole, apiRole, err)
 		}
 		fmt.Fprintf(out, "Granted %s to %s (INHERIT FALSE, SET TRUE)\n", appRole, apiRole)
-	case inherit || !set:
-		// Granting again updates the options of the existing membership.
+	case !hasRightAppGrant(appGrants):
 		if _, err := conn.ExecContext(ctx, fmt.Sprintf("GRANT %s TO %s WITH INHERIT FALSE, SET TRUE", appRole, ident)); err != nil {
 			return fmt.Errorf("updating the %s grant to %s: %w", appRole, apiRole, err)
 		}
@@ -77,19 +79,37 @@ func grantAppRole(ctx context.Context, sqlDB *sql.DB, apiRole string, out io.Wri
 		fmt.Fprintf(out, "%s already has %s (INHERIT FALSE, SET TRUE)\n", apiRole, appRole)
 	}
 
-	// 2. Best effort: drop other memberships and attributes. Any that stay
-	// are reported by checkAPIRole below. REVOKE of a membership someone else
-	// granted only warns, so the result is checked rather than the error.
-	others, err := otherMemberships(ctx, conn, ident)
-	if err != nil {
+	// 2. Best effort: revoke every wrong shelfkin_app row (for example an
+	// INHERIT TRUE grant made by an admin) and every other membership, each
+	// as granted by its own grantor. Revoking a row granted by a role whose
+	// privileges the runner does not have fails; whatever stays is reported
+	// by checkAPIRole below, so the error is not returned here.
+	if grants, err = memberGrants(ctx, conn, ident); err != nil {
 		return err
 	}
-	for _, role := range others {
-		stmt := fmt.Sprintf("REVOKE %s FROM %s", pgx.Identifier{role}.Sanitize(), ident)
+	appGrants, otherGrants := splitGrants(grants)
+	var revokes []string
+	for _, g := range appGrants {
+		grantor := pgx.Identifier{g.grantor}.Sanitize()
+		switch {
+		case g.right():
+		case !g.inherit && g.set:
+			// Only ADMIN is wrong: keep the membership, drop the option.
+			revokes = append(revokes, fmt.Sprintf("REVOKE ADMIN OPTION FOR %s FROM %s GRANTED BY %s", appRole, ident, grantor))
+		default:
+			revokes = append(revokes, fmt.Sprintf("REVOKE %s FROM %s GRANTED BY %s", appRole, ident, grantor))
+		}
+	}
+	for _, g := range otherGrants {
+		revokes = append(revokes, fmt.Sprintf("REVOKE %s FROM %s GRANTED BY %s",
+			pgx.Identifier{g.role}.Sanitize(), ident, pgx.Identifier{g.grantor}.Sanitize()))
+	}
+	for _, stmt := range revokes {
 		if _, err := conn.ExecContext(ctx, stmt); err == nil {
 			fmt.Fprintf(out, "Ran %s\n", stmt)
 		}
 	}
+
 	attrs, err := roleAttributes(ctx, conn, apiRole)
 	if err != nil {
 		return err
@@ -125,33 +145,79 @@ func roleAttributes(ctx context.Context, conn *sql.Conn, role string) (attribute
 	return a, nil
 }
 
-// otherMemberships lists the roles ident is a direct member of, other than
-// shelfkin_app.
-func otherMemberships(ctx context.Context, conn *sql.Conn, ident string) ([]string, error) {
+// memberGrant is one pg_auth_members row: the member belongs to role, granted
+// by grantor with these options.
+type memberGrant struct {
+	role, grantor       string
+	inherit, set, admin bool
+}
+
+// right reports whether g has the only shape a shelfkin_app grant may have:
+// INHERIT FALSE, SET TRUE and no ADMIN.
+func (g memberGrant) right() bool { return !g.inherit && g.set && !g.admin }
+
+func (g memberGrant) String() string {
+	return fmt.Sprintf("%s (granted by %s with INHERIT %s, SET %s, ADMIN %s)",
+		g.role, g.grantor, boolWord(g.inherit), boolWord(g.set), boolWord(g.admin))
+}
+
+func boolWord(b bool) string {
+	if b {
+		return "TRUE"
+	}
+	return "FALSE"
+}
+
+// memberGrants lists every pg_auth_members row for member ident, one per role
+// and grantor.
+func memberGrants(ctx context.Context, conn *sql.Conn, ident string) ([]memberGrant, error) {
 	rows, err := conn.QueryContext(ctx, `
-		SELECT DISTINCT r.rolname
+		SELECT r.rolname, pg_catalog.pg_get_userbyid(m.grantor), m.inherit_option, m.set_option, m.admin_option
 		FROM pg_catalog.pg_auth_members m
 		JOIN pg_catalog.pg_roles r ON r.oid = m.roleid
-		WHERE m.member = $1::regrole AND r.rolname <> $2
-		ORDER BY r.rolname`, ident, appRole)
+		WHERE m.member = $1::regrole
+		ORDER BY 1, 2`, ident)
 	if err != nil {
 		return nil, fmt.Errorf("listing role memberships: %w", err)
 	}
 	defer rows.Close()
-	var roles []string
+	var grants []memberGrant
 	for rows.Next() {
-		var r string
-		if err := rows.Scan(&r); err != nil {
+		var g memberGrant
+		if err := rows.Scan(&g.role, &g.grantor, &g.inherit, &g.set, &g.admin); err != nil {
 			return nil, err
 		}
-		roles = append(roles, r)
+		grants = append(grants, g)
 	}
-	return roles, rows.Err()
+	return grants, rows.Err()
+}
+
+// splitGrants separates the shelfkin_app rows from every other membership.
+func splitGrants(grants []memberGrant) (app, others []memberGrant) {
+	for _, g := range grants {
+		if g.role == appRole {
+			app = append(app, g)
+		} else {
+			others = append(others, g)
+		}
+	}
+	return app, others
+}
+
+func hasRightAppGrant(app []memberGrant) bool {
+	for _, g := range app {
+		if g.right() {
+			return true
+		}
+	}
+	return false
 }
 
 // checkAPIRole fails unless apiRole can do no more than shelfkin_app: no
 // superuser, CREATEDB, CREATEROLE or BYPASSRLS, no role membership besides
-// shelfkin_app, and no objects or privileges of its own in this database.
+// shelfkin_app, every shelfkin_app grant (whoever made it) INHERIT FALSE,
+// SET TRUE without ADMIN, and no objects or privileges of its own in this
+// database.
 func checkAPIRole(ctx context.Context, conn *sql.Conn, apiRole string) error {
 	ident := pgx.Identifier{apiRole}.Sanitize()
 	var problems []string
@@ -169,12 +235,21 @@ func checkAPIRole(ctx context.Context, conn *sql.Conn, apiRole string) error {
 		}
 	}
 
-	others, err := otherMemberships(ctx, conn, ident)
+	members, err := memberGrants(ctx, conn, ident)
 	if err != nil {
 		return err
 	}
-	for _, r := range others {
-		problems = append(problems, "is a member of "+r)
+	appGrants, otherGrants := splitGrants(members)
+	if !hasRightAppGrant(appGrants) {
+		problems = append(problems, fmt.Sprintf("has no %s grant with INHERIT FALSE, SET TRUE", appRole))
+	}
+	for _, g := range appGrants {
+		if !g.right() {
+			problems = append(problems, "has a wrong grant of "+g.String())
+		}
+	}
+	for _, g := range otherGrants {
+		problems = append(problems, "is a member of "+g.String())
 	}
 
 	var owned int

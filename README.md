@@ -396,15 +396,17 @@ The output is in the execution's logs.
 
 The API and the expiry job log in as `shelfkin_api`, which must be able to do **less** than `shelfkin_app` on its own: `dbtx` runs `SET LOCAL ROLE shelfkin_app`, and SQL in that transaction could run `RESET ROLE`. After every `migrate up`, the grant step (`api/cmd/migrate/grant.go`, enabled by `API_DB_ROLE`):
 
-- grants `shelfkin_app` to `shelfkin_api` `WITH INHERIT FALSE, SET TRUE` if it is not granted yet (or fixes the options), so `shelfkin_api` has `shelfkin_app`'s privileges only after `SET ROLE` and none after `RESET ROLE`. This needs `shelfkin_migrator` to have `ADMIN` on `shelfkin_app`, which it has because the #10 migration created the role as that user;
-- tries to revoke any other role membership and the `CREATEDB`, `CREATEROLE` and `BYPASSRLS` attributes;
-- then **fails the migrate job** (so the API is not deployed) if `shelfkin_api` is still `SUPERUSER`, `CREATEDB`, `CREATEROLE` or `BYPASSRLS`, is a member of any role other than `shelfkin_app`, owns any relation, function, schema or type, or holds direct grants on any relation, function or schema. The error points to the one-time admin step below.
+- grants `shelfkin_app` to `shelfkin_api` `WITH INHERIT FALSE, SET TRUE` if no such grant exists yet (or fixes the options of its own grant), so `shelfkin_api` has `shelfkin_app`'s privileges only after `SET ROLE` and none after `RESET ROLE`. This needs `shelfkin_migrator` to have `ADMIN` on `shelfkin_app`, which it has because the #10 migration created the role as that user;
+- tries to revoke every other grant of `shelfkin_app` to `shelfkin_api` that is not `INHERIT FALSE, SET TRUE` without `ADMIN`, every other role membership (such as `cloudsqlsuperuser`), and the `CREATEDB`, `CREATEROLE` and `BYPASSRLS` attributes;
+- then **fails the migrate job** (so the API is not deployed) if `shelfkin_api` is still `SUPERUSER`, `CREATEDB`, `CREATEROLE` or `BYPASSRLS`, is a member of any role other than `shelfkin_app`, has any `shelfkin_app` grant that inherits, lacks `SET` or has `ADMIN` (or no right one at all), owns any relation, function, schema or type, or holds direct grants on any relation, function or schema. The error names each grant and who granted it, and points to the one-time admin step below.
+
+Why per grantor: on Postgres 16 and later, `pg_auth_members` keeps **one row per grantor**, and `GRANT`/`REVOKE` only touch the row of the role running them. A second `GRANT shelfkin_app TO shelfkin_api WITH INHERIT TRUE` made by an admin is a separate row that `shelfkin_migrator`'s own `GRANT` does not change. So the step revokes each row `GRANTED BY` its own grantor, and the check reads every row again. Postgres only lets a role revoke a grant made by a role whose privileges it has, so `shelfkin_migrator` (not a superuser on Cloud SQL) cannot revoke grants made by `postgres` or by Cloud SQL itself. Those make the step fail rather than pass.
 
 Do not weaken this check to get a deploy through.
 
 ### One-time admin step (first deploy)
 
-Cloud SQL creates built-in users with `CREATEDB` and `CREATEROLE` and as members of `cloudsqlsuperuser`, and `shelfkin_migrator` cannot revoke them. So **the first deploy on a fresh Cloud SQL database is expected to fail**: it applies the migrations, then the grant step fails with "shelfkin_api can do more than shelfkin_app", before the API service is touched (it keeps its previous image). This is by design. Fix it once as an admin, as `postgres` through the Cloud SQL Auth Proxy:
+Cloud SQL creates built-in users (the `google_sql_user` resources, including `shelfkin_api`) with `CREATEDB` and `CREATEROLE` and as members of `cloudsqlsuperuser`; #37 confirmed that production's `shelfkin_api` is a member. Terraform cannot remove that, and `shelfkin_migrator` most likely cannot either: Cloud SQL, not `shelfkin_migrator`, made the grant, and on Postgres 16 and later only a role with the grantor's privileges may revoke it, and only a role with `ADMIN` on `shelfkin_api` may `ALTER` it. (The grant step still tries, `GRANTED BY` the recorded grantor. If that grantor is a role `shelfkin_migrator` has the privileges of, the step revokes the membership itself; the error then lists only what is left.) So **the first deploy on a fresh Cloud SQL database is expected to fail**: it applies the migrations, then the grant step fails with "shelfkin_api can do more than shelfkin_app: it ... is a member of cloudsqlsuperuser (granted by ...)", before the API service is touched (it keeps its previous image). This is by design. Fix it once as an admin, as `postgres` through the Cloud SQL Auth Proxy:
 
 ```sh
 # Set a password for the built-in postgres user (only needed once)
@@ -415,10 +417,26 @@ cloud-sql-proxy "$(terraform -chdir=infra output -raw cloudsql_connection_name)"
 psql "host=127.0.0.1 port=5433 user=postgres dbname=shelfkin"
 ```
 
+First see every membership row of `shelfkin_api` and who granted it (the migrate job's error lists the same):
+
 ```sql
-REVOKE cloudsqlsuperuser FROM shelfkin_api;
-ALTER ROLE shelfkin_api NOCREATEDB NOCREATEROLE;
+SELECT r.rolname, pg_get_userbyid(m.grantor) AS grantor, m.inherit_option, m.set_option, m.admin_option
+FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid
+WHERE m.member = 'shelfkin_api'::regrole;
 ```
+
+Then revoke each row other than the `shelfkin_app` row with `inherit_option = f, set_option = t, admin_option = f`, naming its grantor. A plain `REVOKE` without `GRANTED BY` only removes a grant `postgres` made itself, and only warns otherwise. For `cloudsqlsuperuser`, with `<grantor>` from the query above:
+
+```sql
+REVOKE cloudsqlsuperuser FROM shelfkin_api GRANTED BY <grantor>;
+ALTER ROLE shelfkin_api NOCREATEDB NOCREATEROLE;
+-- Only if the query showed a wrong shelfkin_app row from another grantor:
+-- REVOKE shelfkin_app FROM shelfkin_api GRANTED BY <grantor>;
+```
+
+Run the membership query again: it must show only the `shelfkin_app` row (`f`, `t`, `f`), and `SELECT rolcreatedb, rolcreaterole FROM pg_roles WHERE rolname = 'shelfkin_api'` must show `f`, `f`.
+
+**If `postgres` gets `permission denied`** (for example "Only roles with privileges of role "cloudsqladmin" may revoke privileges granted by this role", or "permission denied to alter role"), stop. Stock Postgres 16+ refuses both to a role that is not a superuser, and `postgres` on Cloud SQL is not one; whether Cloud SQL lets `postgres` do it anyway has to be tried on the real instance. Record the exact error on the deploy issue and do not weaken the check: the API stays on its previous image (or undeployed) until `shelfkin_api` is fixed. The way out then is to stop creating `shelfkin_api` through the Cloud SQL API (a change to `infra/`) and create it with SQL instead (`CREATE ROLE shelfkin_api LOGIN PASSWORD ...` as `shelfkin_migrator`, which then has `ADMIN` on it and gives it no other membership). That needs a decision on the deploy issue first.
 
 Do not create or change any table as `postgres`. Then **run the workflow by hand** (Actions > Deploy API > Run workflow on `main`, or `gh workflow run deploy-api.yml --ref main`). That run, and every later deploy, passes the grant step with no admin step.
 
@@ -439,6 +457,10 @@ SELECT DISTINCT usename FROM pg_stat_activity WHERE datname = 'shelfkin' AND app
 -- Only shelfkin_app
 SELECT r.rolname FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid
 WHERE m.member = 'shelfkin_api'::regrole;
+
+-- Every row (one per grantor): inherit_option f, set_option t, admin_option f
+SELECT pg_get_userbyid(m.grantor) AS grantor, m.inherit_option, m.set_option, m.admin_option
+FROM pg_auth_members m WHERE m.member = 'shelfkin_api'::regrole;
 
 -- All false
 SELECT rolsuper, rolcreatedb, rolcreaterole, rolbypassrls FROM pg_roles WHERE rolname = 'shelfkin_api';
