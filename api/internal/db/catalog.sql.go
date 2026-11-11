@@ -80,35 +80,93 @@ func (q *Queries) ListLocations(ctx context.Context) ([]ListLocationsRow, error)
 }
 
 const searchCatalog = `-- name: SearchCatalog :many
-SELECT s.catalog_item_id, s.name, s.is_custom, s.category_id, s.location_id, s.shelf_life_days
-FROM public.search_catalog($1::uuid, $2::text, $3::integer) s
+SELECT h.id AS household_id,
+       e.catalog_item_id, e.name, e.is_custom, e.category_id, e.location_id, e.shelf_life_days
+FROM households h
+CROSS JOIN LATERAL (
+    SELECT lower($1::text) AS lq,
+           replace(replace(replace(lower($1::text), '\', '\\'), '%', '\%'), '_', '\_') AS pat,
+           '(^|[^[:alnum:]])' || regexp_replace(lower($1::text), '([^[:alnum:][:space:]])', '\\\1', 'g') AS word_re,
+           char_length($1::text) >= 3 AS fuzzy
+) p
+LEFT JOIN effective_catalog_items e
+  ON e.household_id = h.id
+ AND p.lq <> ''
+ AND (
+       (lower(e.name) LIKE '%' || p.pat || '%'
+        AND (lower(e.name) LIKE p.pat || '%' OR lower(e.name) ~ p.word_re))
+    OR (p.fuzzy AND p.lq <% lower(e.name))
+ )
+CROSS JOIN LATERAL (
+    SELECT CASE
+               WHEN lower(e.name) = p.lq THEN 1
+               WHEN lower(e.name) LIKE p.pat || '%' THEN 2
+               WHEN lower(e.name) ~ p.word_re THEN 3
+               ELSE 4
+           END AS match_rank
+) r
+WHERE h.id = $2::uuid
+ORDER BY r.match_rank,
+         CASE WHEN r.match_rank = 4 THEN -word_similarity(p.lq, lower(e.name)) END,
+         char_length(e.name), lower(e.name), e.name, e.catalog_item_id
+LIMIT $3::integer
 `
 
 type SearchCatalogParams struct {
-	HouseholdID pgtype.UUID
 	Q           string
+	HouseholdID pgtype.UUID
 	MaxResults  int32
 }
 
 type SearchCatalogRow struct {
+	HouseholdID   pgtype.UUID
 	CatalogItemID pgtype.UUID
-	Name          string
-	IsCustom      bool
-	CategoryID    int16
-	LocationID    int16
+	Name          pgtype.Text
+	IsCustom      pgtype.Bool
+	CategoryID    pgtype.Int2
+	LocationID    pgtype.Int2
 	ShelfLifeDays pgtype.Int4
 }
 
-// Type-ahead search for one household, best match first: the built-in items
-// plus that household's custom items, with its effective defaults. See the
-// search_catalog migration for the matching, ranking and why it is a
-// SECURITY DEFINER function. Fails with SQLSTATE P0002 (no_data_found) if
-// the caller is not a member of the household.
-// A plpgsql function returns its rows from a tuplestore in the order RETURN
-// QUERY produced them, and a bare function scan keeps that order. (sqlc
-// cannot check ORDER BY ordinality, so WITH ORDINALITY is not used.)
+// Type-ahead search for one household (#17), best match first: the built-in
+// items plus that household's custom items, with its effective defaults
+// (effective_catalog_items). Runs under row-level security like every other
+// read.
+//
+// It starts from households, which RLS limits to the caller's households,
+// and LEFT JOINs the matching items of effective_catalog_items. So it returns:
+//   - no row if the household does not exist or the caller is not a member
+//     (the API answers 404);
+//   - one row with a NULL catalog_item_id if the caller is a member and
+//     nothing matches, or q is empty (the API answers 200 with no items);
+//   - otherwise one row per match, best first.
+//
+// The API trims q, rejects one over 100 characters, and checks max_results
+// is 1 to 25.
+//
+// Matching is case-insensitive, and %, _ and \ in q match literally: pat is
+// q escaped for LIKE (whose default escape character is \), and word_re is
+// the start of a word followed by q, with every punctuation character in q
+// escaped for the regular expression. Ranking, best first:
+//  1. exact name
+//  2. name starts with q
+//  3. a word in the name starts with q (after a non-alphanumeric character)
+//  4. fuzzy: q <% lower(name), trigram word similarity at or above
+//     pg_trgm.word_similarity_threshold (default 0.6). Only for a q of 3 or
+//     more characters; shorter ones have too few trigrams to mean anything.
+//     pg_trgm ignores punctuation, so only q's letters and digits count.
+//
+// Within rank 4 a higher similarity comes first. Remaining ties go to the
+// shorter name, then alphabetically (case-insensitive, then exact, then the
+// ID so the order is stable).
+//
+// Plan: the household conditions (households.id, and inside the view
+// catalog_items.household_id IS NULL or = the household) use leakproof
+// operators, so under RLS the planner can use them as index conditions. It
+// reads the built-in items plus this household's custom items, however many
+// items other households have, and checks the name only on those.
 func (q *Queries) SearchCatalog(ctx context.Context, arg SearchCatalogParams) ([]SearchCatalogRow, error) {
-	rows, err := q.db.Query(ctx, searchCatalog, arg.HouseholdID, arg.Q, arg.MaxResults)
+	rows, err := q.db.Query(ctx, searchCatalog, arg.Q, arg.HouseholdID, arg.MaxResults)
 	if err != nil {
 		return nil, err
 	}
@@ -117,6 +175,7 @@ func (q *Queries) SearchCatalog(ctx context.Context, arg SearchCatalogParams) ([
 	for rows.Next() {
 		var i SearchCatalogRow
 		if err := rows.Scan(
+			&i.HouseholdID,
 			&i.CatalogItemID,
 			&i.Name,
 			&i.IsCustom,

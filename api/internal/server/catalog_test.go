@@ -231,23 +231,29 @@ func TestSearchCatalogRanking(t *testing.T) {
 func TestSearchCatalogLiteralWildcards(t *testing.T) {
 	t.Parallel()
 	f := newSearchFixture(t)
-	for _, n := range []string{"5% vinegar", "50 grams rice", "a_b sauce", "abc sauce", `a\b sauce`} {
+	for _, n := range []string{"5% vinegar", "50 grams rice", "Lemon 5%er", "a_b sauce", "Abc sauce", "Ab", `a\b sauce`, "ab sauce"} {
 		f.addCustomItem(t, f.home, n, nil)
 	}
 	// Two-character queries have no fuzzy matches, so these show exactly what
-	// the prefix matching does. Unescaped, "5%" would match "50 grams rice",
-	// "a_" every name starting with "a", and "%" or "_" every name.
+	// the prefix and word-prefix matching does. Unescaped, "5%" would match
+	// "50 grams rice", "a_" every name starting with "a", and "%" or "_"
+	// every name.
 	tests := []struct {
 		q    string
 		want []string
 	}{
-		{"5%", []string{"5% vinegar"}},
+		// Only names with a word starting with "5%".
+		{"5%", []string{"5% vinegar", "Lemon 5%er"}},
+		// Not "Ab", "Abc sauce" or any other name starting with "ab".
 		{"a_", []string{"a_b sauce"}},
+		// A backslash is not an escape character: `a\` does not match "ab sauce".
 		{`a\`, []string{`a\b sauce`}},
 		{"%", nil},
 		{"_", nil},
+		{`\`, nil},
 		{"%%", nil},
 		{"__", nil},
+		{`\\`, nil},
 	}
 	for _, tt := range tests {
 		got := names(f.search(t, f.sam, f.home, tt.q, 25))
@@ -259,13 +265,27 @@ func TestSearchCatalogLiteralWildcards(t *testing.T) {
 		}
 	}
 
+	// Three or more characters made only of punctuation have no trigrams, so
+	// nothing fuzzy-matches them either: with no name containing them, they
+	// return nothing.
+	for _, q := range []string{"%%%", "___", `\\\`} {
+		if got := names(f.search(t, f.sam, f.home, q, 25)); len(got) != 0 {
+			t.Errorf("search %q = %q, want [] (no name contains it)", q, got)
+		}
+	}
+
 	// A longer query with % ranks the literal match first and does not
-	// match everything. (Fuzzy matching ignores punctuation, so "50 grams
-	// rice" may follow as a fuzzy match.)
+	// match everything. Fuzzy matching ignores punctuation, so "50 grams
+	// rice" may follow it, but only below the literal match.
 	f.addCustomItem(t, f.home, "50% cream", nil)
 	got := names(f.search(t, f.sam, f.home, "50%", 25))
 	if len(got) == 0 || got[0] != "50% cream" || len(got) > 3 || slices.Contains(got, "Milk") {
 		t.Errorf("search 50%% = %q, want 50%% cream first and only a few items", got)
+	}
+	// The same for a backslash in a longer query.
+	got = names(f.search(t, f.sam, f.home, `a\b`, 25))
+	if len(got) == 0 || got[0] != `a\b sauce` || len(got) > 3 {
+		t.Errorf(`search a\b = %q, want a\b sauce first and only a few items`, got)
 	}
 }
 
@@ -437,8 +457,9 @@ func (c *queryCounter) reset() []string {
 }
 
 // TestSearchCatalogOneQuery checks a search runs one SQL query besides the
-// transaction itself and the setup of dbtx (SET LOCAL ROLE and set_config), whatever the
-// number of results, including for a non-member.
+// transaction itself and the setup of dbtx (SET LOCAL ROLE and set_config),
+// whatever the number of results, including for a member with no matches
+// (200) and a non-member (404).
 func TestSearchCatalogOneQuery(t *testing.T) {
 	t.Parallel()
 	pool := dbtest.New(t)
@@ -471,7 +492,9 @@ func TestSearchCatalogOneQuery(t *testing.T) {
 		{sam, "s", http.StatusOK},
 		{sam, "tomatos", http.StatusOK},
 		{sam, "", http.StatusOK},
+		{sam, "zzzzqqq", http.StatusOK},
 		{eve, "milk", http.StatusNotFound},
+		{eve, "", http.StatusNotFound},
 	} {
 		counter.reset()
 		resp, b := s.req(t, http.MethodGet, searchPath(home, c.q, "25"), c.token, "")
@@ -486,8 +509,8 @@ func TestSearchCatalogOneQuery(t *testing.T) {
 			}
 			queries = append(queries, sql)
 		}
-		if len(queries) != 1 || !strings.Contains(queries[0], "search_catalog") {
-			t.Errorf("q=%q ran %d queries, want only the search_catalog query: %q", c.q, len(queries), queries)
+		if len(queries) != 1 || !strings.Contains(queries[0], "name: SearchCatalog") {
+			t.Errorf("q=%q ran %d queries, want only the SearchCatalog query: %q", c.q, len(queries), queries)
 		}
 	}
 }

@@ -2,13 +2,11 @@ package server
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/oapi-codegen/runtime/types"
 
 	"github.com/marboleda/shelfkin/api/internal/auth"
@@ -32,10 +30,6 @@ const (
 	CodeInvalidLimit = "invalid_limit"
 )
 
-// sqlstateNoDataFound is what search_catalog raises when the caller is not a
-// member of the household (see the search_catalog migration).
-const sqlstateNoDataFound = "P0002"
-
 // ValidateSearchQuery trims q and reports whether the result is at most
 // MaxSearchQueryLength characters long. An empty result is valid.
 func ValidateSearchQuery(q string) (string, bool) {
@@ -44,8 +38,9 @@ func ValidateSearchQuery(q string) (string, bool) {
 }
 
 // SearchCatalog returns the household's best-matching catalog items for
-// type-ahead. It runs one SQL query: search_catalog checks membership,
-// matches, ranks and limits in the database.
+// type-ahead. It runs one SQL query, under row-level security, that checks
+// membership, matches, ranks and limits in the database (see SearchCatalog in
+// db/queries/catalog.sql).
 func (a *API) SearchCatalog(ctx context.Context, req openapi.SearchCatalogRequestObject) (openapi.SearchCatalogResponseObject, error) {
 	userID, ok := auth.UserID(ctx)
 	if !ok {
@@ -81,20 +76,26 @@ func (a *API) SearchCatalog(ctx context.Context, req openapi.SearchCatalogReques
 		})
 		return err
 	})
-	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == sqlstateNoDataFound {
-		return openapi.SearchCatalog404JSONResponse{HouseholdNotFoundJSONResponse: householdNotFoundBody()}, nil
-	}
 	if err != nil {
 		return nil, fmt.Errorf("GET /households/{id}/catalog/search: %w", err)
 	}
+	// No row: the household does not exist or the caller is not a member.
+	if len(rows) == 0 {
+		return openapi.SearchCatalog404JSONResponse{HouseholdNotFoundJSONResponse: householdNotFoundBody()}, nil
+	}
 	list := openapi.CatalogItemList{Items: make([]openapi.CatalogItem, 0, len(rows))}
 	for _, r := range rows {
+		// A member with no matches gets one row with no item. The item's
+		// columns are nullable only because of that LEFT JOIN.
+		if !r.CatalogItemID.Valid {
+			continue
+		}
 		item := openapi.CatalogItem{
 			Id:         types.UUID(r.CatalogItemID.Bytes),
-			Name:       r.Name,
-			IsCustom:   r.IsCustom,
-			CategoryId: int(r.CategoryID),
-			LocationId: int(r.LocationID),
+			Name:       r.Name.String,
+			IsCustom:   r.IsCustom.Bool,
+			CategoryId: int(r.CategoryID.Int16),
+			LocationId: int(r.LocationID.Int16),
 		}
 		if r.ShelfLifeDays.Valid {
 			days := int(r.ShelfLifeDays.Int32)
