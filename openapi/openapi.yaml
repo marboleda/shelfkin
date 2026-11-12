@@ -584,6 +584,108 @@ paths:
                   message: The household's members changed while this request ran. Try again.
         '500':
           $ref: '#/components/responses/InternalError'
+  /households/{householdId}/catalog/search:
+    parameters:
+      - $ref: '#/components/parameters/HouseholdId'
+    get:
+      operationId: searchCatalog
+      summary: Type-ahead search of the household's catalog
+      description: |
+        The best-matching built-in catalog items plus this household's own custom
+        items, for type-ahead as the user types an ingredient name. Custom items
+        of other households never appear. `categoryId` and `locationId` are the
+        household's **effective** defaults: its own override of a built-in item
+        if it set one, else the item's default.
+
+        Matching is case-insensitive, and `%`, `_` and `\` in `q` match literally.
+        Results are ranked, best first:
+
+        1. Exact name (`milk` finds `Milk`)
+        2. Names that start with `q` (`mil`: `Milk` before `Oat milk`)
+        3. Names with a word that starts with `q` (`flour` finds `All-purpose flour`)
+        4. Fuzzy matches by trigram word similarity (`tomatos` finds `Tomatoes`),
+           most similar first. Only for a `q` of 3 or more characters.
+
+        Ties go to the shorter name, then alphabetically.
+      parameters:
+        - name: q
+          in: query
+          required: false
+          description: |
+            The text typed so far. Trimmed; an empty or whitespace-only (or
+            missing) `q` returns an empty list. At most 100 characters after
+            trimming, else 400 (code `invalid_query`).
+          schema:
+            type: string
+          example: tom
+        - name: limit
+          in: query
+          required: false
+          description: The most items to return, 1 to 25 (default 10), else 400 (code `invalid_limit`).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 25
+            default: 10
+      responses:
+        '200':
+          description: The matching items, best first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CatalogItemList'
+        '400':
+          description: |
+            `householdId` is not a UUID or `limit` is not an integer (code
+            `bad_request`), `q` is longer than 100 characters after trimming
+            (code `invalid_query`), or `limit` is outside 1 to 25 (code
+            `invalid_limit`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: invalid_query
+                  message: q must be at most 100 characters after trimming spaces.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/HouseholdNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /categories:
+    get:
+      operationId: listCategories
+      summary: List the item categories
+      description: Every built-in category, in display order. Needs a signed-in user but no household.
+      responses:
+        '200':
+          description: The categories, in display order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /locations:
+    get:
+      operationId: listLocations
+      summary: List the storage locations
+      description: Every built-in storage location, in display order. Needs a signed-in user but no household.
+      responses:
+        '200':
+          description: The locations, in display order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocationList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /households/{householdId}/invites:
     parameters:
       - $ref: '#/components/parameters/HouseholdId'
@@ -1105,6 +1207,110 @@ components:
         userId:
           # The member to make the owner.
           $ref: '#/components/schemas/Id'
+    Category:
+      description: A built-in item category.
+      type: object
+      required:
+        - id
+        - key
+        - name
+      properties:
+        id:
+          description: The same in every environment.
+          type: integer
+          example: 2
+        key:
+          description: A stable identifier that never changes, for example `dairy`.
+          type: string
+          example: dairy
+        name:
+          description: Display name.
+          type: string
+          example: Dairy
+    CategoryList:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          description: Every category, in display order.
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+    Location:
+      description: A built-in storage location.
+      type: object
+      required:
+        - id
+        - key
+        - name
+      properties:
+        id:
+          description: The same in every environment.
+          type: integer
+          example: 2
+        key:
+          description: A stable identifier that never changes, for example `fridge`.
+          type: string
+          example: fridge
+        name:
+          description: Display name.
+          type: string
+          example: Fridge
+    LocationList:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          description: Every location, in display order.
+          type: array
+          items:
+            $ref: '#/components/schemas/Location'
+    CatalogItem:
+      description: |
+        A catalog item as seen by one household: a built-in item or one of the
+        household's own custom items, with the household's effective defaults.
+      type: object
+      required:
+        - id
+        - name
+        - isCustom
+        - categoryId
+        - locationId
+        - shelfLifeDays
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        name:
+          type: string
+          example: Milk
+        isCustom:
+          description: True for the household's own custom item, false for a built-in item.
+          type: boolean
+          example: false
+        categoryId:
+          type: integer
+          example: 2
+          description: The household's default category for this item (its override, else the item's default).
+        locationId:
+          type: integer
+          example: 2
+          description: The household's default location for this item (its override, else the item's default).
+        shelfLifeDays:
+          description: Typical shelf life in days, used to suggest an expiry date. Null means no suggestion.
+          type: integer
+          nullable: true
+          example: 7
+    CatalogItemList:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CatalogItem'
     Invite:
       description: An invite code for a household, as seen by its owner.
       type: object
