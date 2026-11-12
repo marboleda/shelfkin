@@ -75,6 +75,7 @@ The API server is `api/main.go`. It reads its configuration from environment var
 | `PORT` | No | `8080` | Port to listen on, 1 to 65535. Cloud Run sets it |
 | `LOG_LEVEL` | No | `info` | `debug`, `info`, `warn` or `error` |
 | `CORS_ALLOWED_ORIGINS` | No | `http://localhost:8081` (the Expo web dev server) | Comma-separated browser origins allowed to call the API, each `http(s)://host[:port]` with no path, for example `https://shelfkin-5da75.web.app,https://shelfkin-5da75.firebaseapp.com`. Setting it replaces the default. `*` and wildcards are rejected |
+| `APP_BASE_URL` | No | `http://localhost:8081` (the Expo web dev server) | Base URL of the app, used to build invite links as `<APP_BASE_URL>/join/<code>`. Must be an absolute `http` or `https` URL with no query or fragment; a trailing slash is ignored. Production sets it to the Hosting URL in `infra/run.tf` |
 
 An empty variable counts as unset. If a variable is missing or invalid, the server logs one line naming it and exits with code 1. The database password is never logged. Every occurrence of the password in a log line is replaced with `[REDACTED]`; with the local credentials, where the password is the same as the user name, `shelfkin` is redacted wherever it appears.
 
