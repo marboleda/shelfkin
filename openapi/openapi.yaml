@@ -584,6 +584,152 @@ paths:
                   message: The household's members changed while this request ran. Try again.
         '500':
           $ref: '#/components/responses/InternalError'
+  /households/{householdId}/invites:
+    parameters:
+      - $ref: '#/components/parameters/HouseholdId'
+    get:
+      operationId: listInvites
+      summary: List a household's active invites
+      description: |
+        Owner only. The household's invites that are neither revoked nor
+        expired, newest first. A household with none returns an empty list.
+      responses:
+        '200':
+          description: The household's active invites, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InviteList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/OwnerOnly'
+        '404':
+          $ref: '#/components/responses/HouseholdNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: createInvite
+      summary: Create an invite code
+      description: |
+        Owner only. Creates a new invite code for the household, valid for 7
+        days. Anyone signed in can use it, any number of times, to join the
+        household as a member until it expires or is revoked. A household can
+        have several active invites; creating one does not revoke the others.
+        No request body.
+      responses:
+        '201':
+          description: The new invite.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invite'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/OwnerOnly'
+        '404':
+          $ref: '#/components/responses/HouseholdNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /households/{householdId}/invites/{inviteId}:
+    parameters:
+      - $ref: '#/components/parameters/HouseholdId'
+      - name: inviteId
+        in: path
+        required: true
+        description: The invite's ID. A value that is not a UUID gets 400 (code `bad_request`).
+        schema:
+          $ref: '#/components/schemas/Id'
+    delete:
+      operationId: revokeInvite
+      summary: Revoke an invite code
+      description: |
+        Owner only. The code stops working straight away; members who already
+        joined with it stay. Revoking an invite that is already revoked, or
+        has expired, also succeeds.
+      responses:
+        '204':
+          description: The invite is revoked.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/OwnerOnly'
+        '404':
+          description: |
+            The household does not exist or the caller is not a member of it,
+            or `inviteId` is not an invite of this household (code `not_found`
+            in every case).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: not_found
+                  message: Invite not found.
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /invites/join:
+    post:
+      operationId: joinInvite
+      summary: Join a household with an invite code
+      description: |
+        Adds the caller to the invite's household as a member. The code is
+        normalised first: whitespace and dashes are removed and letters are
+        upper-cased, so `abcd-efgh` matches `ABCDEFGH`.
+
+        A caller who is already a member of the household (including its
+        owner) gets 200 with `alreadyMember: true` and their current role,
+        even if the code has expired or been revoked. Error responses never
+        say anything about the household.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JoinInviteRequest'
+      responses:
+        '200':
+          description: The caller is a member of the household.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JoinInviteResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No invite has this code (code `invite_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: invite_not_found
+                  message: This invite code is not valid.
+        '410':
+          description: |
+            The invite was revoked (code `invite_revoked`) or has expired (code
+            `invite_expired`). A code that is both gets `invite_revoked`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: invite_expired
+                  message: This invite code has expired.
+        '500':
+          $ref: '#/components/responses/InternalError'
 components:
   parameters:
     HouseholdId:
@@ -959,6 +1105,67 @@ components:
         userId:
           # The member to make the owner.
           $ref: '#/components/schemas/Id'
+    Invite:
+      description: An invite code for a household, as seen by its owner.
+      type: object
+      required:
+        - id
+        - code
+        - url
+        - expiresAt
+        - createdAt
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        code:
+          description: |
+            8 characters from `ABCDEFGHJKMNPQRSTUVWXYZ23456789` (no `I`, `L`,
+            `O`, `0` or `1`). Apps may show it as `ABCD-EFGH`.
+          type: string
+          example: K7MQ3XPA
+        url:
+          description: The invite link, `<APP_BASE_URL>/join/<code>`.
+          type: string
+          format: uri
+          example: https://shelfkin.web.app/join/K7MQ3XPA
+        expiresAt:
+          # Exactly 7 days after createdAt.
+          $ref: '#/components/schemas/Timestamp'
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+    InviteList:
+      type: object
+      required:
+        - invites
+      properties:
+        invites:
+          description: Active invites, newest first.
+          type: array
+          items:
+            $ref: '#/components/schemas/Invite'
+    JoinInviteRequest:
+      type: object
+      required:
+        - code
+      properties:
+        code:
+          description: |
+            The invite code. Whitespace and dashes are ignored and letters may
+            be lower-case.
+          type: string
+          example: k7mq-3xpa
+    JoinInviteResult:
+      type: object
+      required:
+        - household
+        - alreadyMember
+      properties:
+        household:
+          $ref: '#/components/schemas/Household'
+        alreadyMember:
+          description: True if the caller was already a member, so nothing changed.
+          type: boolean
+          example: false
   responses:
     BadRequest:
       description: The request is malformed or fails validation.
