@@ -2,8 +2,8 @@
 //
 // It reads DATABASE_URL (required), FIREBASE_PROJECT_ID (required), PORT
 // (default 8080), LOG_LEVEL (default info), CORS_ALLOWED_ORIGINS (default
-// http://localhost:8081) and FIREBASE_AUTH_EMULATOR_HOST (local development
-// only) from the environment, logs JSON to stdout and shuts down gracefully
+// http://localhost:8081), APP_BASE_URL (default http://localhost:8081) and
+// FIREBASE_AUTH_EMULATOR_HOST (local development only) from the environment, logs JSON to stdout and shuts down gracefully
 // on SIGTERM or SIGINT. See the README for how to run it locally.
 package main
 
@@ -83,7 +83,7 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer, shut
 	}
 	logger.Info("listening", "port", cfg.Port)
 
-	handler := server.NewHandler(server.NewAPI(pool, logger), auth.NewAuthenticator(verifier, pool), logger, cfg.CORSAllowedOrigins)
+	handler := server.NewHandler(server.NewAPI(pool, logger, server.WithAppBaseURL(cfg.AppBaseURL)), auth.NewAuthenticator(verifier, pool), logger, cfg.CORSAllowedOrigins)
 	srv := server.NewHTTPServer(handler, logger)
 	err = server.Serve(ctx, srv, ln, shutdownTimeout)
 	switch {

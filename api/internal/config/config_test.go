@@ -215,3 +215,56 @@ func TestLoadFirebaseProjectOptional(t *testing.T) {
 		t.Errorf("LoadAPI without FIREBASE_PROJECT_ID: err = %v, want it to name %s", err, FirebaseProjectIDEnv)
 	}
 }
+
+func TestLoadAppBaseURL(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"unset uses the Expo web dev server", "", "http://localhost:8081"},
+		{"https", "https://x.web.app", "https://x.web.app"},
+		{"trailing slash ignored", "https://x.web.app/", "https://x.web.app"},
+		{"port kept", "http://localhost:19006", "http://localhost:19006"},
+		{"path kept, trailing slash ignored", "https://example.com/shelfkin/", "https://example.com/shelfkin"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load(env(map[string]string{DatabaseURLEnv: validURL, AppBaseURLEnv: tt.raw}))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.AppBaseURL != tt.want {
+				t.Errorf("AppBaseURL = %q, want %q", cfg.AppBaseURL, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadAppBaseURLInvalid(t *testing.T) {
+	for _, raw := range []string{
+		"not a url",
+		"ftp://x",
+		"https://x/?a=1",
+		"https://x/#top",
+		"https://x?",
+		"x.web.app",
+		"/join",
+		"https://",
+		"mailto:sam@example.com",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			cfg, err := LoadAPI(env(map[string]string{DatabaseURLEnv: validURL, AppBaseURLEnv: raw}))
+			if err == nil {
+				t.Fatalf("Load succeeded with AppBaseURL %q, want error", cfg.AppBaseURL)
+			}
+			var cerr *Error
+			if !errors.As(err, &cerr) {
+				t.Fatalf("error is %T, want *config.Error", err)
+			}
+			if !strings.Contains(err.Error(), AppBaseURLEnv) {
+				t.Errorf("error %q does not name %s", err, AppBaseURLEnv)
+			}
+		})
+	}
+}

@@ -26,12 +26,18 @@ const (
 	// AuthEmulatorHostEnv (host:port) makes the API accept unsigned tokens
 	// from the Firebase Auth emulator. Never set it in production.
 	AuthEmulatorHostEnv = "FIREBASE_AUTH_EMULATOR_HOST"
+	// AppBaseURLEnv is the base URL of the app (scheme://host[:port][/path]);
+	// invite links are <APP_BASE_URL>/join/<code>.
+	AppBaseURLEnv = "APP_BASE_URL"
 )
 
 // Defaults for the optional variables.
 const (
 	DefaultPort     = 8080
 	DefaultLogLevel = slog.LevelInfo
+	// DefaultAppBaseURL is the local Expo web dev server (npx expo start
+	// --web).
+	DefaultAppBaseURL = "http://localhost:8081"
 )
 
 // DefaultCORSAllowedOrigins is used when CORS_ALLOWED_ORIGINS is unset: the
@@ -54,6 +60,9 @@ type Config struct {
 	// AuthEmulatorHost is FIREBASE_AUTH_EMULATOR_HOST, or "" when tokens
 	// must come from real Firebase.
 	AuthEmulatorHost string
+	// AppBaseURL is APP_BASE_URL without a trailing slash: an absolute http
+	// or https URL with no query or fragment.
+	AppBaseURL string
 }
 
 // Error reports one or more invalid environment variables. Its message names
@@ -95,6 +104,7 @@ func load(getenv func(string) string, requireFirebase bool) (*Config, error) {
 		Port:               DefaultPort,
 		LogLevel:           DefaultLogLevel,
 		CORSAllowedOrigins: append([]string(nil), DefaultCORSAllowedOrigins...),
+		AppBaseURL:         DefaultAppBaseURL,
 	}
 	var problems []string
 
@@ -141,6 +151,15 @@ func load(getenv func(string) string, requireFirebase bool) (*Config, error) {
 		}
 	}
 
+	if raw := getenv(AppBaseURLEnv); raw != "" {
+		base, err := parseAppBaseURL(raw)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("%s %v", AppBaseURLEnv, err))
+		} else {
+			cfg.AppBaseURL = base
+		}
+	}
+
 	if len(problems) > 0 {
 		return nil, &Error{Problems: problems}
 	}
@@ -179,4 +198,16 @@ func parseOrigins(raw string) ([]string, error) {
 		return nil, fmt.Errorf("must list at least one origin")
 	}
 	return origins, nil
+}
+
+// parseAppBaseURL checks raw is an absolute http or https URL with a host and
+// no query or fragment, and returns it without trailing slashes.
+func parseAppBaseURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Opaque != "" ||
+		u.RawQuery != "" || u.Fragment != "" || strings.ContainsAny(raw, "?#") {
+		return "", fmt.Errorf("must be an absolute http or https URL with no query or fragment, like https://example.com, got %q", raw)
+	}
+	return strings.TrimRight(raw, "/"), nil
 }
