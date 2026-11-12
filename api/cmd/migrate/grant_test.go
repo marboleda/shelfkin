@@ -478,7 +478,7 @@ func TestUpFailsWhenTheAPIRoleOwnsOrIsGrantedObjects(t *testing.T) {
 	if err == nil {
 		t.Fatal("up succeeded although the API role owns a table and has a grant")
 	}
-	for _, want := range []string{"owns 1 objects", "1 privileges granted directly"} {
+	for _, want := range []string{"owns 1 objects (table e38_owned)", "privileges granted directly to it on 1 objects (table users)"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("err = %q, want it to mention %q", err, want)
 		}
@@ -506,9 +506,9 @@ func TestUpFailsOnAColumnGrant(t *testing.T) {
 		t.Fatalf("up succeeded with a column grant on users; output %q", out.String())
 	}
 	for _, want := range []string{
-		"2 privileges granted directly",
-		"SELECT on column users.email",
-		"SELECT on column users.id",
+		"privileges granted directly to it on 2 objects",
+		"column email of table users",
+		"column id of table users",
 		"One-time admin step",
 	} {
 		if !strings.Contains(err.Error(), want) {
@@ -561,17 +561,122 @@ func TestUpFailsOnGrantsInOtherCatalogs(t *testing.T) {
 		t.Fatal("up succeeded with direct grants in other catalogs")
 	}
 	for _, want := range []string{
-		"6 privileges granted directly",
-		"USAGE on type e38_dom",
-		"SELECT on large object " + loid,
-		"USAGE on language plpgsql",
-		"SELECT on default privileges for tables created by",
-		"CREATE on database " + dbName,
-		"SET on parameter work_mem",
+		"privileges granted directly to it on 6 objects",
+		"type e38_dom",
+		"large object " + loid,
+		"language plpgsql",
+		"default privileges on new relations belonging to role",
+		"database " + dbName,
+		"parameter work_mem",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("err = %q, want it to mention %q", err, want)
 		}
+	}
+}
+
+// Third QA of #38: ownership is read from pg_shdepend, so every kind of
+// owned object is found, including a domain over an array (typcategory 'A',
+// which the old per-catalog count skipped) and kinds it never looked at.
+func TestUpFailsOnAnyOwnedObject(t *testing.T) {
+	t.Parallel()
+	dbURL, pool := emptyDatabase(t)
+	ctx := t.Context()
+	if err := run(ctx, []string{"up"}, dbURL, "", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	api := createRole(t, pool, "e38_api_", "LOGIN")
+	apiIdent := pgx.Identifier{api}.Sanitize()
+	for _, stmt := range []string{
+		"CREATE DOMAIN e38_intarr AS int[]",
+		"ALTER DOMAIN e38_intarr OWNER TO " + apiIdent,
+		"CREATE STATISTICS e38_stats ON id, email FROM users",
+		"ALTER STATISTICS e38_stats OWNER TO " + apiIdent,
+		`CREATE COLLATION e38_coll FROM "C"`,
+		"ALTER COLLATION e38_coll OWNER TO " + apiIdent,
+		"CREATE PUBLICATION e38_pub",
+		"ALTER PUBLICATION e38_pub OWNER TO " + apiIdent,
+	} {
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+
+	err := run(ctx, []string{"up"}, dbURL, api, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("up succeeded although the API role owns objects")
+	}
+	for _, want := range []string{
+		"owns 4 objects",
+		"type e38_intarr",
+		"statistics object e38_stats",
+		"collation e38_coll",
+		"publication e38_pub",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %q, want it to mention %q", err, want)
+		}
+	}
+}
+
+// A grant on a tablespace (a shared object, outside this database's
+// catalogs) is found too, while CONNECT and TEMPORARY on a database are not
+// counted.
+func TestUpFailsOnATablespaceGrantButAllowsConnect(t *testing.T) {
+	t.Parallel()
+	dbURL, pool := emptyDatabase(t)
+	ctx := t.Context()
+	if err := run(ctx, []string{"up"}, dbURL, "", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var dbName string
+	if err := pool.QueryRow(ctx, "SELECT current_database()").Scan(&dbName); err != nil {
+		t.Fatal(err)
+	}
+	api := createRole(t, pool, "e38_api_", "LOGIN")
+	apiIdent := pgx.Identifier{api}.Sanitize()
+	if _, err := pool.Exec(ctx, "GRANT CONNECT, TEMPORARY ON DATABASE "+pgx.Identifier{dbName}.Sanitize()+" TO "+apiIdent); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(ctx, []string{"up"}, dbURL, api, &bytes.Buffer{}); err != nil {
+		t.Fatalf("up with only CONNECT and TEMPORARY on the database: %v", err)
+	}
+
+	// An in-place tablespace needs no directory on the server. Tablespaces are
+	// shared, so it is dropped after the role (cleanups run last first).
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tsName := randomName(t, "e38_ts_")
+	tsIdent := pgx.Identifier{tsName}.Sanitize()
+	_, err = conn.Exec(ctx, "SET allow_in_place_tablespaces = on")
+	if err == nil {
+		_, err = conn.Exec(ctx, "CREATE TABLESPACE "+tsIdent+" LOCATION ''")
+	}
+	conn.Release()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), "DROP TABLESPACE "+tsIdent); err != nil {
+			t.Errorf("dropping tablespace: %v", err)
+		}
+	})
+	// Registered after the tablespace cleanup, so it runs first.
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), "REVOKE ALL ON TABLESPACE "+tsIdent+" FROM "+apiIdent)
+	})
+	if _, err := pool.Exec(ctx, "GRANT CREATE ON TABLESPACE "+tsIdent+" TO "+apiIdent); err != nil {
+		t.Fatal(err)
+	}
+
+	err = run(ctx, []string{"up"}, dbURL, api, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("up succeeded with a tablespace grant")
+	}
+	if want := "privileges granted directly to it on 1 objects (tablespace " + tsName + ")"; !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %q, want it to mention %q", err, want)
 	}
 }
 

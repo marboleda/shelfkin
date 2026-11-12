@@ -253,39 +253,24 @@ func checkAPIRole(ctx context.Context, conn *sql.Conn, apiRole string) error {
 		problems = append(problems, "is a member of "+g.String())
 	}
 
-	var owned int
-	if err := conn.QueryRowContext(ctx, `
-		SELECT (SELECT count(*) FROM pg_catalog.pg_class WHERE relowner = $1::regrole)
-		     + (SELECT count(*) FROM pg_catalog.pg_proc WHERE proowner = $1::regrole)
-		     + (SELECT count(*) FROM pg_catalog.pg_namespace WHERE nspowner = $1::regrole)
-		     + (SELECT count(*) FROM pg_catalog.pg_type WHERE typowner = $1::regrole AND typrelid = 0 AND typcategory <> 'A')
-		     + (SELECT count(*) FROM pg_catalog.pg_largeobject_metadata WHERE lomowner = $1::regrole)`,
-		ident).Scan(&owned); err != nil {
-		return fmt.Errorf("checking objects owned by %s: %w", apiRole, err)
-	}
-	if owned > 0 {
-		problems = append(problems, fmt.Sprintf("owns %d objects in this database", owned))
-	}
-
-	var ownedDBs []string
-	if err := queryStrings(ctx, conn, &ownedDBs,
-		"SELECT datname FROM pg_catalog.pg_database WHERE datdba = $1::regrole ORDER BY 1", ident); err != nil {
-		return fmt.Errorf("checking databases owned by %s: %w", apiRole, err)
-	}
-	for _, d := range ownedDBs {
-		problems = append(problems, "owns database "+d)
-	}
-
-	grants, err := directGrants(ctx, conn, ident)
+	deps, err := roleDependencies(ctx, conn, ident)
 	if err != nil {
-		return fmt.Errorf("checking privileges granted to %s: %w", apiRole, err)
+		return fmt.Errorf("checking objects owned by or granted to %s: %w", apiRole, err)
 	}
-	if len(grants) > 0 {
-		shown := grants
+	for _, kind := range []struct{ deptype, phrase string }{
+		{"o", "owns %d objects (%s)"},
+		{"a", "has privileges granted directly to it on %d objects (%s)"},
+		{"r", "is named in %d policies (%s)"},
+	} {
+		objs := deps[kind.deptype]
+		if len(objs) == 0 {
+			continue
+		}
+		shown := objs
 		if len(shown) > 10 {
 			shown = append(shown[:10:10], "...")
 		}
-		problems = append(problems, fmt.Sprintf("has %d privileges granted directly to it (%s)", len(grants), strings.Join(shown, "; ")))
+		problems = append(problems, fmt.Sprintf(kind.phrase, len(objs), strings.Join(shown, "; ")))
 	}
 
 	if len(problems) == 0 {
@@ -297,78 +282,55 @@ func checkAPIRole(ctx context.Context, conn *sql.Conn, apiRole string) error {
 		apiRole, appRole, strings.Join(problems, ", "))
 }
 
-// directGrants describes every privilege granted directly to ident (not
-// through PUBLIC, whose grants name grantee 0, and not through a role) that
-// the catalogs record: on relations (tables, views, sequences), on single
-// columns, functions, schemas, types and domains, large objects, languages,
-// foreign-data wrappers and servers, default privileges for objects created
-// later, settable parameters, and on any database other than CONNECT and
-// TEMPORARY (which every login needs and PUBLIC has by default).
-func directGrants(ctx context.Context, conn *sql.Conn, ident string) ([]string, error) {
-	var grants []string
-	err := queryStrings(ctx, conn, &grants, `
-		WITH g AS (
-			SELECT a.privilege_type, a.grantee, format('relation %s', c.oid::regclass) AS obj
-			FROM pg_catalog.pg_class c, aclexplode(c.relacl) a
-			UNION ALL
-			SELECT a.privilege_type, a.grantee, format('column %s.%I', c.oid::regclass, att.attname)
-			FROM pg_catalog.pg_attribute att
-			JOIN pg_catalog.pg_class c ON c.oid = att.attrelid, aclexplode(att.attacl) a
-			UNION ALL
-			SELECT a.privilege_type, a.grantee, format('function %s', p.oid::regprocedure)
-			FROM pg_catalog.pg_proc p, aclexplode(p.proacl) a
-			UNION ALL
-			SELECT a.privilege_type, a.grantee, format('schema %I', n.nspname)
-			FROM pg_catalog.pg_namespace n, aclexplode(n.nspacl) a
-			UNION ALL
-			SELECT a.privilege_type, a.grantee, format('type %s', t.oid::regtype)
-			FROM pg_catalog.pg_type t, aclexplode(t.typacl) a
-			UNION ALL
-			SELECT a.privilege_type, a.grantee, format('large object %s', l.oid)
-			FROM pg_catalog.pg_largeobject_metadata l, aclexplode(l.lomacl) a
-			UNION ALL
-			SELECT a.privilege_type, a.grantee, format('language %I', l.lanname)
-			FROM pg_catalog.pg_language l, aclexplode(l.lanacl) a
-			UNION ALL
-			SELECT a.privilege_type, a.grantee, format('foreign-data wrapper %I', w.fdwname)
-			FROM pg_catalog.pg_foreign_data_wrapper w, aclexplode(w.fdwacl) a
-			UNION ALL
-			SELECT a.privilege_type, a.grantee, format('foreign server %I', s.srvname)
-			FROM pg_catalog.pg_foreign_server s, aclexplode(s.srvacl) a
-			UNION ALL
-			SELECT a.privilege_type, a.grantee, format('parameter %s', p.parname)
-			FROM pg_catalog.pg_parameter_acl p, aclexplode(p.paracl) a
-			UNION ALL
-			SELECT a.privilege_type, a.grantee, format('database %I', d.datname)
-			FROM pg_catalog.pg_database d, aclexplode(d.datacl) a
-			WHERE a.privilege_type NOT IN ('CONNECT', 'TEMPORARY')
-			UNION ALL
-			SELECT a.privilege_type, a.grantee,
-				format('default privileges for %s created by %s%s',
-					CASE d.defaclobjtype WHEN 'r' THEN 'tables' WHEN 'S' THEN 'sequences' WHEN 'f' THEN 'functions'
-						WHEN 'T' THEN 'types' WHEN 'n' THEN 'schemas' ELSE d.defaclobjtype::text END,
-					pg_catalog.pg_get_userbyid(d.defaclrole),
-					CASE WHEN d.defaclnamespace = 0 THEN '' ELSE format(' in schema %s', d.defaclnamespace::regnamespace) END)
-			FROM pg_catalog.pg_default_acl d, aclexplode(d.defaclacl) a
-		)
-		SELECT format('%s on %s', privilege_type, obj) FROM g WHERE grantee = $1::regrole ORDER BY 1`, ident)
-	return grants, err
-}
-
-// queryStrings runs a query returning one text column and appends each row
-// to dst.
-func queryStrings(ctx context.Context, conn *sql.Conn, dst *[]string, query string, args ...any) error {
-	rows, err := conn.QueryContext(ctx, query, args...)
+// roleDependencies lists, by pg_shdepend deptype, every object that depends
+// on the role ident, described with pg_describe_object:
+//
+//   - "o": objects it owns, of any kind (tables, types and domains, functions,
+//     schemas, statistics objects, collations, text search objects, operator
+//     families, publications, foreign servers, large objects, databases,
+//     tablespaces, ...);
+//   - "a": objects whose ACL names it, which is every direct grant, whatever
+//     the catalog (single columns, relations, functions, schemas, types, large
+//     objects, languages, foreign-data wrappers and servers, parameters,
+//     default privileges, tablespaces and databases). A database grant of only
+//     CONNECT and TEMPORARY is not counted: every login needs those and PUBLIC
+//     has them by default;
+//   - "r": policies that name it in TO.
+//
+// pg_shdepend is shared, so it covers the current database, shared objects
+// (dbid 0) and every other database. Objects in another database cannot be
+// described from here, so they are named by database only. Grants to PUBLIC
+// are not grants to the role and are not listed.
+//
+// One catalog replaces per-catalog checks (relacl, attacl, typacl, ...),
+// which missed whatever kind of object had not been thought of yet.
+func roleDependencies(ctx context.Context, conn *sql.Conn, ident string) (map[string][]string, error) {
+	rows, err := conn.QueryContext(ctx, `
+		SELECT sd.deptype::text,
+			CASE WHEN sd.dbid = 0 OR sd.dbid = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database())
+				THEN pg_catalog.pg_describe_object(sd.classid, sd.objid, sd.objsubid)
+				ELSE format('an object in database %s', (SELECT datname FROM pg_catalog.pg_database WHERE oid = sd.dbid))
+			END
+		FROM pg_catalog.pg_shdepend sd
+		WHERE sd.refclassid = 'pg_catalog.pg_authid'::regclass
+		  AND sd.refobjid = $1::regrole
+		  AND sd.deptype IN ('o', 'a', 'r')
+		  AND NOT (sd.deptype = 'a' AND sd.classid = 'pg_catalog.pg_database'::regclass AND NOT EXISTS (
+			SELECT FROM pg_catalog.pg_database d, aclexplode(d.datacl) a
+			WHERE d.oid = sd.objid AND a.grantee = sd.refobjid
+			  AND a.privilege_type NOT IN ('CONNECT', 'TEMPORARY')))
+		ORDER BY 1, 2`, ident)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer rows.Close()
+	deps := map[string][]string{}
 	for rows.Next() {
-		var s string
-		if err := rows.Scan(&s); err != nil {
-			return err
+		var deptype, desc string
+		if err := rows.Scan(&deptype, &desc); err != nil {
+			return nil, err
 		}
-		*dst = append(*dst, s)
+		deps[deptype] = append(deps[deptype], desc)
 	}
-	return rows.Err()
+	return deps, rows.Err()
 }
