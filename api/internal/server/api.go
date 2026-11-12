@@ -30,6 +30,9 @@ type API struct {
 	appBaseURL string
 	// newInviteCode generates invite codes; tests replace it.
 	newInviteCode func() (string, error)
+	// now is the clock for dates the server picks, such as an entry's
+	// default purchase date. Tests replace it.
+	now func() time.Time
 }
 
 // DefaultAppBaseURL is the base of invite links when NewAPI is given no
@@ -63,6 +66,7 @@ func NewAPI(pool Pool, logger *slog.Logger, opts ...Option) *API {
 		logger:        logger,
 		appBaseURL:    DefaultAppBaseURL,
 		newInviteCode: NewInviteCode,
+		now:           time.Now,
 	}
 	for _, opt := range opts {
 		opt(a)
