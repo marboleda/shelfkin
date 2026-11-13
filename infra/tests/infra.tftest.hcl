@@ -134,11 +134,9 @@ run "database" {
   assert {
     condition = alltrue([
       google_sql_user.migrator.name == "shelfkin_migrator",
-      google_sql_user.api.name == "shelfkin_api",
       google_sql_user.migrator.type == "BUILT_IN",
-      google_sql_user.api.type == "BUILT_IN",
     ])
-    error_message = "Expected built-in users shelfkin_migrator and shelfkin_api"
+    error_message = "Expected built-in user shelfkin_migrator (shelfkin_api is created by the migrate job, #92)"
   }
 }
 
@@ -159,8 +157,13 @@ run "database_urls_in_secret_manager" {
   }
 
   assert {
-    condition     = google_sql_user.api.password == random_password.api.result && google_sql_user.migrator.password == random_password.migrator.result
-    error_message = "User passwords must come from random_password"
+    condition     = google_secret_manager_secret_version.api_database_url.secret_data == "postgres://shelfkin_api:${random_password.api.result}@/shelfkin?host=/cloudsql/test-project:europe-west1:shelfkin"
+    error_message = "api-database-url must use random_password.api"
+  }
+
+  assert {
+    condition     = google_sql_user.migrator.password == random_password.migrator.result
+    error_message = "The shelfkin_migrator password must come from random_password"
   }
 }
 
@@ -250,13 +253,46 @@ run "cloud_run_job" {
   }
 
   assert {
+    condition = [
+      for e in google_cloud_run_v2_job.migrate.template[0].template[0].containers[0].env :
+      [e.value_source[0].secret_key_ref[0].secret, e.value_source[0].secret_key_ref[0].version] if e.name == "API_DATABASE_URL"
+    ] == [["api-database-url", "latest"]]
+    error_message = "Job API_DATABASE_URL must come from the latest api-database-url"
+  }
+
+  assert {
     condition     = (length(google_cloud_run_v2_job.migrate.template[0].template[0].volumes[0].cloud_sql_instance[0].instances) == 1 && contains(google_cloud_run_v2_job.migrate.template[0].template[0].volumes[0].cloud_sql_instance[0].instances, "test-project:europe-west1:shelfkin"))
     error_message = "Job must have the Cloud SQL connection"
   }
 }
 
 run "service_accounts" {
-  command = plan
+  # An apply (all mocked, email_privacy_patch off) so the secret IDs compared
+  # below are known.
+  command = apply
+
+  # The mock gives every service account the same member; tell the runtime
+  # accounts apart so "only" can be checked. A state of its own, so the
+  # overrides are used instead of the accounts in earlier runs' state.
+  state_key = "service_accounts"
+
+  override_resource {
+    target = google_service_account.api_runtime
+    values = {
+      email  = "api-runtime@test-project.iam.gserviceaccount.com"
+      member = "serviceAccount:api-runtime@test-project.iam.gserviceaccount.com"
+      name   = "projects/test-project/serviceAccounts/api-runtime@test-project.iam.gserviceaccount.com"
+    }
+  }
+
+  override_resource {
+    target = google_service_account.migrate_runtime
+    values = {
+      email  = "migrate-runtime@test-project.iam.gserviceaccount.com"
+      member = "serviceAccount:migrate-runtime@test-project.iam.gserviceaccount.com"
+      name   = "projects/test-project/serviceAccounts/migrate-runtime@test-project.iam.gserviceaccount.com"
+    }
+  }
 
   assert {
     condition = (
@@ -268,8 +304,35 @@ run "service_accounts" {
   }
 
   assert {
-    condition     = google_secret_manager_secret_iam_member.api_runtime.role == "roles/secretmanager.secretAccessor"
-    error_message = "api-runtime must be Secret Accessor on its secret"
+    condition = (
+      google_secret_manager_secret_iam_member.api_runtime.role == "roles/secretmanager.secretAccessor" &&
+      google_secret_manager_secret_iam_member.api_runtime.secret_id == google_secret_manager_secret.api_database_url.id &&
+      google_secret_manager_secret_iam_member.api_runtime.member == google_service_account.api_runtime.member
+    )
+    error_message = "api-runtime must be Secret Accessor on api-database-url"
+  }
+
+  assert {
+    condition = alltrue([
+      for m in [
+        google_secret_manager_secret_iam_member.migrate_runtime,
+        google_secret_manager_secret_iam_member.migrate_runtime_api_url,
+      ] : m.role == "roles/secretmanager.secretAccessor" && m.member == google_service_account.migrate_runtime.member
+      ]) && toset([
+      google_secret_manager_secret_iam_member.migrate_runtime.secret_id,
+      google_secret_manager_secret_iam_member.migrate_runtime_api_url.secret_id,
+    ]) == toset([google_secret_manager_secret.migrator_database_url.id, google_secret_manager_secret.api_database_url.id])
+    error_message = "migrate-runtime must be Secret Accessor on migrator-database-url and api-database-url"
+  }
+
+  assert {
+    condition = alltrue([
+      for m in [
+        google_secret_manager_secret_iam_member.migrate_runtime,
+        google_secret_manager_secret_iam_member.migrate_runtime_api_url,
+      ] : m.member != google_service_account.api_runtime.member
+    ])
+    error_message = "api-runtime must have access to api-database-url only"
   }
 
   assert {

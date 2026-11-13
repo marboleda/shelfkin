@@ -113,9 +113,12 @@ func sqlStateOf(err error) string {
 // only as a SCRAM-SHA-256 verifier, so it never appears in SQL text or in the
 // server's log of a failed statement.
 //
-// When shelfkin_migrator creates the role (Postgres 16+, CREATEROLE, not a
-// superuser) it gets ADMIN on it, which lets later runs ALTER its password.
-// The new role itself gets no membership; the grant step adds shelfkin_app.
+// A role shelfkin_migrator created (CREATEROLE, not a superuser) is one it
+// may ALTER later. Stock Postgres 16+ records that as an ADMIN grant of the
+// new role to its creator in pg_auth_members; Cloud SQL does not show that
+// row (step 0 on #92). Nothing here or in the grant step reads it: only the
+// success of CREATE ROLE and ALTER ROLE counts. The new role itself gets no
+// membership; the grant step adds shelfkin_app.
 func ensureAPILogin(ctx context.Context, sqlDB *sql.DB, login *apiLogin, out io.Writer) error {
 	role := login.cfg.User
 	ident := pgx.Identifier{role}.Sanitize()

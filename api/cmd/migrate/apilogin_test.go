@@ -264,6 +264,61 @@ func TestAPILoginIsCreatedKeptAndRotated(t *testing.T) {
 	}
 }
 
+// Cloud SQL does not show the creator's ADMIN row (role = the API login,
+// member = the migrator) in pg_auth_members, which stock Postgres 16+ adds
+// (step 0 on #92). The job and the grant step must pass with or without it.
+func TestAPILoginDoesNotDependOnTheCreatorsAdminRow(t *testing.T) {
+	t.Parallel()
+	dbURL, pool := migratedDatabase(t)
+	ctx := t.Context()
+	migrator := cloudSQLMigrator(t, dbURL, pool)
+	api := jobRoleName(t, pool)
+	pw := randomName(t, "pw")
+	apiURL := loginURL(t, dbURL, api, pw)
+
+	out, err := apiStep(t, migrator, api, apiURL)
+	wantNoLeak(t, out, err, pw, apiURL)
+	if err != nil {
+		t.Fatalf("first run (ADMIN row present): %v\n%s", err, out)
+	}
+
+	// Remove every row where the API login is the granted role, as Cloud SQL
+	// shows it.
+	rows, err := pool.Query(ctx, `
+		SELECT pg_get_userbyid(member), pg_get_userbyid(grantor) FROM pg_auth_members
+		WHERE roleid = $1::regrole`, pgx.Identifier{api}.Sanitize())
+	if err != nil {
+		t.Fatal(err)
+	}
+	grants, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) ([2]string, error) {
+		var g [2]string
+		return g, row.Scan(&g[0], &g[1])
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(grants) == 0 {
+		t.Fatal("expected stock Postgres to record the creator's ADMIN row")
+	}
+	for _, g := range grants {
+		if _, err := pool.Exec(ctx, "REVOKE "+pgx.Identifier{api}.Sanitize()+" FROM "+pgx.Identifier{g[0]}.Sanitize()+
+			" GRANTED BY "+pgx.Identifier{g[1]}.Sanitize()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err = apiStep(t, migrator, api, apiURL)
+	wantNoLeak(t, out, err, pw, apiURL)
+	if err != nil {
+		t.Fatalf("second run (no ADMIN row): %v\n%s", err, out)
+	}
+	for _, want := range []string{api + " can log in; password unchanged", "already has shelfkin_app", "Checked: " + api + " can log in"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("second run output = %q, want %q", out, want)
+		}
+	}
+}
+
 // Production today: shelfkin_api was made by Cloud SQL (here: the superuser)
 // as a member of cloudsqlsuperuser, granted by an admin, with NOCREATEDB
 // NOCREATEROLE set afterwards. The migrator has no ADMIN on it.
