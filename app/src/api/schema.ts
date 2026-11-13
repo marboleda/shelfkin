@@ -236,6 +236,45 @@ export interface paths {
         patch: operations["updateEntry"];
         trace?: never;
     };
+    "/households/{householdId}/pantry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * The household's whole pantry, grouped by item
+         * @description Every entry in the household's pantry, including `out` entries, in one
+         *     response with no pagination. Entries are grouped by catalog item, one
+         *     group per item that has at least one entry ("Milk ×2"). Groups are
+         *     sorted by name (case-insensitive), and entries within a group by
+         *     `purchasedOn`, then `createdAt`.
+         *
+         *     A group's `categoryId` is the item's **effective** category for this
+         *     household: its own override of a built-in item if it set one, else
+         *     the item's default. Category and location names come from
+         *     `GET /categories` and `GET /locations`.
+         *
+         *     `locationId` filters entries by their own location, and `categoryId`
+         *     filters groups by effective category. Each can be repeated
+         *     (`?locationId=2&locationId=3`) and matches any of its values; when
+         *     both are given an entry must match both. With a location filter a
+         *     group holds only the matching entries, and a group left with none is
+         *     dropped.
+         */
+        get: operations["getPantry"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/households/{householdId}/members": {
         parameters: {
             query?: never;
@@ -708,6 +747,98 @@ export interface components {
              */
             expiresOn?: string | null;
         };
+        /** @description A household's pantry, grouped by catalog item. */
+        Pantry: {
+            /**
+             * Format: date
+             * @description Today's date in the caller's `timezone` (see `User`), the date
+             *     `expiryStatus` is computed against.
+             * @example 2026-02-14
+             */
+            today: string;
+            /** @description One group per catalog item with at least one (matching) entry, sorted by name, case-insensitive. */
+            groups: components["schemas"]["PantryGroup"][];
+        };
+        /** @description The entries of one catalog item, for example "Milk ×2". */
+        PantryGroup: {
+            catalogItemId: components["schemas"]["Id"];
+            /** @example Milk */
+            name: string;
+            /**
+             * @description True for a custom item of this household, false for a built-in item.
+             * @example false
+             */
+            isCustom: boolean;
+            /**
+             * @description The item's effective category for this household (its override first).
+             * @example 1
+             */
+            categoryId: number;
+            /** @description At least one entry, sorted by `purchasedOn`, then `createdAt`. */
+            entries: components["schemas"]["PantryListEntry"][];
+        };
+        /** @description A `PantryEntry` with its expiry status and its latest change. */
+        PantryListEntry: components["schemas"]["PantryEntry"] & {
+            expiryStatus: components["schemas"]["ExpiryStatus"];
+            lastChange: components["schemas"]["LastChange"];
+        };
+        /**
+         * @description Against `today`: `expired` when `expiresOn` is before it, `soon` when
+         *     `expiresOn` is from `today` to `today` + 3 days inclusive, and null
+         *     otherwise, when there is no expiry date, or when the level is `out`.
+         * @example soon
+         * @enum {string|null}
+         */
+        ExpiryStatus: "expired" | "soon" | null;
+        /**
+         * @description The kind of change an item event records.
+         * @enum {string}
+         */
+        ItemEventType: "entry_created" | "level_changed" | "expiry_changed" | "location_changed" | "purchase_date_changed" | "entry_deleted";
+        /**
+         * @description The old and new value of one field. A stock level or a `YYYY-MM-DD`
+         *     date is a string, a location ID a number, and no expiry date is null.
+         */
+        EntryChange: {
+            /** @example half */
+            from: unknown;
+            /** @example low */
+            to: unknown;
+        };
+        /**
+         * @description The entry's most recent change, for labels like "Set to Low by Sam,
+         *     2h ago". Null on the entry when it has no recorded change.
+         */
+        LastChange: {
+            type: components["schemas"]["ItemEventType"];
+            /**
+             * @description The changed field, keyed by database column name: `level`,
+             *     `location_id`, `purchased_on` or `expires_on`. Exactly one key for
+             *     a `*_changed` event, empty for `entry_created`.
+             * @example {
+             *       "level": {
+             *         "from": "half",
+             *         "to": "low"
+             *       }
+             *     }
+             */
+            changes: {
+                [key: string]: components["schemas"]["EntryChange"];
+            };
+            /**
+             * Format: uuid
+             * @description The member who made the change, or null if their account was deleted.
+             * @example 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+             */
+            actorId: string | null;
+            /**
+             * @description The actor's current `displayName`, also when they have since left
+             *     the household. Null if their account was deleted.
+             * @example Sam
+             */
+            actorName: string | null;
+            occurredAt: components["schemas"]["Timestamp"];
+        } | null;
         /** @description A member of a household. */
         Member: {
             userId: components["schemas"]["Id"];
@@ -1528,6 +1659,74 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["EntryNotFound"];
             409: components["responses"]["EntryConflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getPantry: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Only entries stored in one of these locations. Each value must be
+                 *     the ID of a location (an integer), else 400 (code `invalid_filter`).
+                 *     A plain string, so that any other value gets code `invalid_filter`.
+                 * @example [
+                 *       "2",
+                 *       "3"
+                 *     ]
+                 */
+                locationId?: string[];
+                /**
+                 * @description Only items whose effective category is one of these. Each value
+                 *     must be the ID of a category (an integer), else 400 (code
+                 *     `invalid_filter`). A plain string, so that any other value gets
+                 *     code `invalid_filter`.
+                 * @example [
+                 *       "1"
+                 *     ]
+                 */
+                categoryId?: string[];
+            };
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pantry, grouped by item. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pantry"];
+                };
+            };
+            /**
+             * @description `householdId` is not a UUID (code `bad_request`), or a `locationId`
+             *     or `categoryId` value is not an integer or not the ID of a location
+             *     or category (code `invalid_filter`).
+             */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "invalid_filter",
+                     *         "message": "Every locationId must be the ID of a location."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["HouseholdNotFound"];
             500: components["responses"]["InternalError"];
         };
     };

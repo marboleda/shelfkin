@@ -20,6 +20,24 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for ExpiryStatus.
+const (
+	ExpiryStatusExpired ExpiryStatus = "expired"
+	ExpiryStatusSoon    ExpiryStatus = "soon"
+)
+
+// Valid indicates whether the value is a known member of the ExpiryStatus enum.
+func (e ExpiryStatus) Valid() bool {
+	switch e {
+	case ExpiryStatusExpired:
+		return true
+	case ExpiryStatusSoon:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for HealthStatus.
 const (
 	HealthStatusOk HealthStatus = "ok"
@@ -29,6 +47,36 @@ const (
 func (e HealthStatus) Valid() bool {
 	switch e {
 	case HealthStatusOk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ItemEventType.
+const (
+	ItemEventTypeEntryCreated        ItemEventType = "entry_created"
+	ItemEventTypeEntryDeleted        ItemEventType = "entry_deleted"
+	ItemEventTypeExpiryChanged       ItemEventType = "expiry_changed"
+	ItemEventTypeLevelChanged        ItemEventType = "level_changed"
+	ItemEventTypeLocationChanged     ItemEventType = "location_changed"
+	ItemEventTypePurchaseDateChanged ItemEventType = "purchase_date_changed"
+)
+
+// Valid indicates whether the value is a known member of the ItemEventType enum.
+func (e ItemEventType) Valid() bool {
+	switch e {
+	case ItemEventTypeEntryCreated:
+		return true
+	case ItemEventTypeEntryDeleted:
+		return true
+	case ItemEventTypeExpiryChanged:
+		return true
+	case ItemEventTypeLevelChanged:
+		return true
+	case ItemEventTypeLocationChanged:
+		return true
+	case ItemEventTypePurchaseDateChanged:
 		return true
 	default:
 		return false
@@ -212,6 +260,16 @@ type CreateHousehold struct {
 // Example: 2026-02-14
 type Date = openapi_types.Date
 
+// EntryChange The old and new value of one field. A stock level or a `YYYY-MM-DD`
+// date is a string, a location ID a number, and no expiry date is null.
+type EntryChange struct {
+	// From Example: half
+	From interface{} `json:"from"`
+
+	// To Example: low
+	To interface{} `json:"to"`
+}
+
 // Error The error format every endpoint uses.
 type Error struct {
 	Error ErrorDetail `json:"error"`
@@ -233,6 +291,13 @@ type ErrorDetail struct {
 	// Example: Household not found.
 	Message string `json:"message"`
 }
+
+// ExpiryStatus Against `today`: `expired` when `expiresOn` is before it, `soon` when
+// `expiresOn` is from `today` to `today` + 3 days inclusive, and null
+// otherwise, when there is no expiry date, or when the level is `out`.
+//
+// Example: soon
+type ExpiryStatus string
 
 // Health defines model for Health.
 type Health struct {
@@ -309,6 +374,9 @@ type InviteList struct {
 	Invites []Invite `json:"invites"`
 }
 
+// ItemEventType The kind of change an item event records.
+type ItemEventType string
+
 // JoinInviteRequest defines model for JoinInviteRequest.
 type JoinInviteRequest struct {
 	// Code The invite code. Whitespace and dashes are ignored and letters may
@@ -328,6 +396,38 @@ type JoinInviteResult struct {
 
 	// Household A household, as seen by the signed-in user.
 	Household Household `json:"household"`
+}
+
+// LastChange The entry's most recent change, for labels like "Set to Low by Sam,
+// 2h ago". Null on the entry when it has no recorded change.
+type LastChange struct {
+	// ActorId The member who made the change, or null if their account was deleted.
+	//
+	// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+	ActorId *openapi_types.UUID `json:"actorId"`
+
+	// ActorName The actor's current `displayName`, also when they have since left
+	// the household. Null if their account was deleted.
+	//
+	//
+	// Example: Sam
+	ActorName *string `json:"actorName"`
+
+	// Changes The changed field, keyed by database column name: `level`,
+	// `location_id`, `purchased_on` or `expires_on`. Exactly one key for
+	// a `*_changed` event, empty for `entry_created`.
+	//
+	//
+	// Example: {"level":{"from":"half","to":"low"}}
+	Changes map[string]EntryChange `json:"changes"`
+
+	// OccurredAt A point in time, as an RFC 3339 string in UTC.
+	//
+	// Example: 2026-01-31T18:04:05Z
+	OccurredAt Timestamp `json:"occurredAt"`
+
+	// Type The kind of change an item event records.
+	Type ItemEventType `json:"type"`
 }
 
 // Location A built-in storage location.
@@ -389,6 +489,19 @@ type MemberList struct {
 // MemberRole A member's role in a household. Each household has exactly one owner.
 type MemberRole string
 
+// Pantry A household's pantry, grouped by catalog item.
+type Pantry struct {
+	// Groups One group per catalog item with at least one (matching) entry, sorted by name, case-insensitive.
+	Groups []PantryGroup `json:"groups"`
+
+	// Today Today's date in the caller's `timezone` (see `User`), the date
+	// `expiryStatus` is computed against.
+	//
+	//
+	// Example: 2026-02-14
+	Today openapi_types.Date `json:"today"`
+}
+
 // PantryEntry One purchase of a catalog item in a household's pantry, for example "Milk (Oct 20)".
 type PantryEntry struct {
 	// CatalogItemId A UUIDv7 identifier.
@@ -410,6 +523,85 @@ type PantryEntry struct {
 	//
 	// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
 	Id Id `json:"id"`
+
+	// Level How much of an entry is left. `out` entries stay in the pantry until deleted.
+	Level StockLevel `json:"level"`
+
+	// LocationId The ID of the location the entry is stored in.
+	//
+	// Example: 2
+	LocationId int `json:"locationId"`
+
+	// PurchasedOn A calendar date with no time of day, in `YYYY-MM-DD` form.
+	//
+	// Example: 2026-02-14
+	PurchasedOn Date `json:"purchasedOn"`
+
+	// UpdatedAt When the entry last changed. A change that sets a field to the
+	// value it already has does not count.
+	//
+	//
+	// Example: 2026-01-31T18:04:05Z
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// PantryGroup The entries of one catalog item, for example "Milk ×2".
+type PantryGroup struct {
+	// CatalogItemId A UUIDv7 identifier.
+	//
+	// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+	CatalogItemId Id `json:"catalogItemId"`
+
+	// CategoryId The item's effective category for this household (its override first).
+	//
+	// Example: 1
+	CategoryId int `json:"categoryId"`
+
+	// Entries At least one entry, sorted by `purchasedOn`, then `createdAt`.
+	Entries []PantryListEntry `json:"entries"`
+
+	// IsCustom True for a custom item of this household, false for a built-in item.
+	//
+	// Example: false
+	IsCustom bool `json:"isCustom"`
+
+	// Name Example: Milk
+	Name string `json:"name"`
+}
+
+// PantryListEntry A `PantryEntry` with its expiry status and its latest change.
+type PantryListEntry struct {
+	// CatalogItemId A UUIDv7 identifier.
+	//
+	// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+	CatalogItemId Id `json:"catalogItemId"`
+
+	// CreatedAt A point in time, as an RFC 3339 string in UTC.
+	//
+	// Example: 2026-01-31T18:04:05Z
+	CreatedAt Timestamp `json:"createdAt"`
+
+	// ExpiresOn The expiry date, or null if the entry has none.
+	//
+	// Example: 2026-02-14
+	ExpiresOn *openapi_types.Date `json:"expiresOn"`
+
+	// ExpiryStatus Against `today`: `expired` when `expiresOn` is before it, `soon` when
+	// `expiresOn` is from `today` to `today` + 3 days inclusive, and null
+	// otherwise, when there is no expiry date, or when the level is `out`.
+	//
+	//
+	// Example: soon
+	ExpiryStatus *ExpiryStatus `json:"expiryStatus"`
+
+	// Id A UUIDv7 identifier.
+	//
+	// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+	Id Id `json:"id"`
+
+	// LastChange The entry's most recent change, for labels like "Set to Low by Sam,
+	// 2h ago". Null on the entry when it has no recorded change.
+	LastChange *LastChange `json:"lastChange"`
 
 	// Level How much of an entry is left. `out` entries stay in the pantry until deleted.
 	Level StockLevel `json:"level"`
@@ -614,6 +806,20 @@ type DeleteEntryParams struct {
 	EventId string `form:"eventId" json:"eventId"`
 }
 
+// GetPantryParams defines parameters for GetPantry.
+type GetPantryParams struct {
+	// LocationId Only entries stored in one of these locations. Each value must be
+	// the ID of a location (an integer), else 400 (code `invalid_filter`).
+	// A plain string, so that any other value gets code `invalid_filter`.
+	LocationId *[]string `form:"locationId,omitempty" json:"locationId,omitempty"`
+
+	// CategoryId Only items whose effective category is one of these. Each value
+	// must be the ID of a category (an integer), else 400 (code
+	// `invalid_filter`). A plain string, so that any other value gets
+	// code `invalid_filter`.
+	CategoryId *[]string `form:"categoryId,omitempty" json:"categoryId,omitempty"`
+}
+
 // CreateHouseholdJSONRequestBody defines body for CreateHousehold for application/json ContentType.
 type CreateHouseholdJSONRequestBody = CreateHousehold
 
@@ -688,6 +894,9 @@ type ServerInterface interface {
 	// RemoveMember Remove a member, or leave the household
 	// (DELETE /households/{householdId}/members/{userId})
 	RemoveMember(w http.ResponseWriter, r *http.Request, householdId HouseholdId, userId Id)
+	// GetPantry The household's whole pantry, grouped by item
+	// (GET /households/{householdId}/pantry)
+	GetPantry(w http.ResponseWriter, r *http.Request, householdId HouseholdId, params GetPantryParams)
 	// TransferOwnership Make another member the owner
 	// (POST /households/{householdId}/transfer-ownership)
 	TransferOwnership(w http.ResponseWriter, r *http.Request, householdId HouseholdId)
@@ -1169,6 +1378,61 @@ func (siw *ServerInterfaceWrapper) RemoveMember(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
+// GetPantry operation middleware
+func (siw *ServerInterfaceWrapper) GetPantry(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "householdId" -------------
+	var householdId HouseholdId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "householdId", r.PathValue("householdId"), &householdId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "householdId", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetPantryParams
+
+	// ------------- Optional query parameter "locationId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "locationId", r.URL.Query(), &params.LocationId, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "locationId"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "locationId", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "categoryId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "categoryId", r.URL.Query(), &params.CategoryId, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "categoryId"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "categoryId", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetPantry(w, r, householdId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // TransferOwnership operation middleware
 func (siw *ServerInterfaceWrapper) TransferOwnership(w http.ResponseWriter, r *http.Request) {
 
@@ -1424,6 +1688,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/households/{householdId}/entries", wrapper.CreateEntry)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/households/{householdId}/entries/{entryId}", wrapper.DeleteEntry)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/households/{householdId}/entries/{entryId}", wrapper.UpdateEntry)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/households/{householdId}/pantry", wrapper.GetPantry)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/households/{householdId}/members", wrapper.ListMembers)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/households/{householdId}/members/{userId}", wrapper.RemoveMember)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/households/{householdId}/transfer-ownership", wrapper.TransferOwnership)
@@ -2744,6 +3009,85 @@ func (response RemoveMember500JSONResponse) VisitRemoveMemberResponse(w http.Res
 	return err
 }
 
+type GetPantryRequestObject struct {
+	HouseholdId HouseholdId `json:"householdId"`
+	Params      GetPantryParams
+}
+
+type GetPantryResponseObject interface {
+	VisitGetPantryResponse(w http.ResponseWriter) error
+}
+
+type GetPantry200JSONResponse Pantry
+
+func (response GetPantry200JSONResponse) VisitGetPantryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPantry400JSONResponse Error
+
+func (response GetPantry400JSONResponse) VisitGetPantryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPantry401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetPantry401JSONResponse) VisitGetPantryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPantry404JSONResponse struct{ HouseholdNotFoundJSONResponse }
+
+func (response GetPantry404JSONResponse) VisitGetPantryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPantry500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetPantry500JSONResponse) VisitGetPantryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type TransferOwnershipRequestObject struct {
 	HouseholdId HouseholdId `json:"householdId"`
 	Body        *TransferOwnershipJSONRequestBody
@@ -3263,6 +3607,9 @@ type StrictServerInterface interface {
 	// RemoveMember Remove a member, or leave the household
 	// (DELETE /households/{householdId}/members/{userId})
 	RemoveMember(ctx context.Context, request RemoveMemberRequestObject) (RemoveMemberResponseObject, error)
+	// GetPantry The household's whole pantry, grouped by item
+	// (GET /households/{householdId}/pantry)
+	GetPantry(ctx context.Context, request GetPantryRequestObject) (GetPantryResponseObject, error)
 	// TransferOwnership Make another member the owner
 	// (POST /households/{householdId}/transfer-ownership)
 	TransferOwnership(ctx context.Context, request TransferOwnershipRequestObject) (TransferOwnershipResponseObject, error)
@@ -3760,6 +4107,33 @@ func (sh *strictHandler) RemoveMember(w http.ResponseWriter, r *http.Request, ho
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RemoveMemberResponseObject); ok {
 		if err := validResponse.VisitRemoveMemberResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetPantry operation middleware
+func (sh *strictHandler) GetPantry(w http.ResponseWriter, r *http.Request, householdId HouseholdId, params GetPantryParams) {
+	var request GetPantryRequestObject
+
+	request.HouseholdId = householdId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetPantry(ctx, request.(GetPantryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetPantry")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetPantryResponseObject); ok {
+		if err := validResponse.VisitGetPantryResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

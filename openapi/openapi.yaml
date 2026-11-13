@@ -447,6 +447,86 @@ paths:
           $ref: '#/components/responses/EntryConflict'
         '500':
           $ref: '#/components/responses/InternalError'
+  /households/{householdId}/pantry:
+    parameters:
+      - $ref: '#/components/parameters/HouseholdId'
+    get:
+      operationId: getPantry
+      summary: The household's whole pantry, grouped by item
+      description: |
+        Every entry in the household's pantry, including `out` entries, in one
+        response with no pagination. Entries are grouped by catalog item, one
+        group per item that has at least one entry ("Milk ×2"). Groups are
+        sorted by name (case-insensitive), and entries within a group by
+        `purchasedOn`, then `createdAt`.
+
+        A group's `categoryId` is the item's **effective** category for this
+        household: its own override of a built-in item if it set one, else
+        the item's default. Category and location names come from
+        `GET /categories` and `GET /locations`.
+
+        `locationId` filters entries by their own location, and `categoryId`
+        filters groups by effective category. Each can be repeated
+        (`?locationId=2&locationId=3`) and matches any of its values; when
+        both are given an entry must match both. With a location filter a
+        group holds only the matching entries, and a group left with none is
+        dropped.
+      parameters:
+        - name: locationId
+          in: query
+          required: false
+          description: |
+            Only entries stored in one of these locations. Each value must be
+            the ID of a location (an integer), else 400 (code `invalid_filter`).
+            A plain string, so that any other value gets code `invalid_filter`.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+          example: ['2', '3']
+        - name: categoryId
+          in: query
+          required: false
+          description: |
+            Only items whose effective category is one of these. Each value
+            must be the ID of a category (an integer), else 400 (code
+            `invalid_filter`). A plain string, so that any other value gets
+            code `invalid_filter`.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+          example: ['1']
+      responses:
+        '200':
+          description: The pantry, grouped by item.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pantry'
+        '400':
+          description: |
+            `householdId` is not a UUID (code `bad_request`), or a `locationId`
+            or `categoryId` value is not an integer or not the ID of a location
+            or category (code `invalid_filter`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: invalid_filter
+                  message: Every locationId must be the ID of a location.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/HouseholdNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /households/{householdId}/members:
     parameters:
       - $ref: '#/components/parameters/HouseholdId'
@@ -1163,6 +1243,144 @@ components:
           x-go-type-import:
             path: github.com/oapi-codegen/nullable
           x-go-type-skip-optional-pointer: true
+    Pantry:
+      description: A household's pantry, grouped by catalog item.
+      type: object
+      required:
+        - today
+        - groups
+      properties:
+        today:
+          description: |
+            Today's date in the caller's `timezone` (see `User`), the date
+            `expiryStatus` is computed against.
+          type: string
+          format: date
+          example: '2026-02-14'
+        groups:
+          description: One group per catalog item with at least one (matching) entry, sorted by name, case-insensitive.
+          type: array
+          items:
+            $ref: '#/components/schemas/PantryGroup'
+    PantryGroup:
+      description: The entries of one catalog item, for example "Milk ×2".
+      type: object
+      required:
+        - catalogItemId
+        - name
+        - isCustom
+        - categoryId
+        - entries
+      properties:
+        catalogItemId:
+          $ref: '#/components/schemas/Id'
+        name:
+          type: string
+          example: Milk
+        isCustom:
+          description: True for a custom item of this household, false for a built-in item.
+          type: boolean
+          example: false
+        categoryId:
+          description: The item's effective category for this household (its override first).
+          type: integer
+          example: 1
+        entries:
+          description: At least one entry, sorted by `purchasedOn`, then `createdAt`.
+          type: array
+          items:
+            $ref: '#/components/schemas/PantryListEntry'
+    PantryListEntry:
+      description: A `PantryEntry` with its expiry status and its latest change.
+      allOf:
+        - $ref: '#/components/schemas/PantryEntry'
+        - type: object
+          required:
+            - expiryStatus
+            - lastChange
+          properties:
+            expiryStatus:
+              $ref: '#/components/schemas/ExpiryStatus'
+            lastChange:
+              $ref: '#/components/schemas/LastChange'
+    ExpiryStatus:
+      description: |
+        Against `today`: `expired` when `expiresOn` is before it, `soon` when
+        `expiresOn` is from `today` to `today` + 3 days inclusive, and null
+        otherwise, when there is no expiry date, or when the level is `out`.
+      type: string
+      nullable: true
+      enum:
+        - expired
+        - soon
+      example: soon
+    ItemEventType:
+      description: The kind of change an item event records.
+      type: string
+      enum:
+        - entry_created
+        - level_changed
+        - expiry_changed
+        - location_changed
+        - purchase_date_changed
+        - entry_deleted
+    EntryChange:
+      description: |
+        The old and new value of one field. A stock level or a `YYYY-MM-DD`
+        date is a string, a location ID a number, and no expiry date is null.
+      type: object
+      required:
+        - from
+        - to
+      properties:
+        from:
+          nullable: true
+          example: half
+        to:
+          nullable: true
+          example: low
+    LastChange:
+      description: |
+        The entry's most recent change, for labels like "Set to Low by Sam,
+        2h ago". Null on the entry when it has no recorded change.
+      type: object
+      nullable: true
+      required:
+        - type
+        - changes
+        - actorId
+        - actorName
+        - occurredAt
+      properties:
+        type:
+          $ref: '#/components/schemas/ItemEventType'
+        changes:
+          description: |
+            The changed field, keyed by database column name: `level`,
+            `location_id`, `purchased_on` or `expires_on`. Exactly one key for
+            a `*_changed` event, empty for `entry_created`.
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/EntryChange'
+          example:
+            level:
+              from: half
+              to: low
+        actorId:
+          description: The member who made the change, or null if their account was deleted.
+          type: string
+          format: uuid
+          nullable: true
+          example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+        actorName:
+          description: |
+            The actor's current `displayName`, also when they have since left
+            the household. Null if their account was deleted.
+          type: string
+          nullable: true
+          example: Sam
+        occurredAt:
+          $ref: '#/components/schemas/Timestamp'
     Member:
       description: A member of a household.
       type: object
