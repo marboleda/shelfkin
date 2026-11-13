@@ -22,6 +22,11 @@ type ScreenProps = {
   inShell?: boolean;
   /** Rendered above the heading, e.g. a back control. */
   accessory?: ReactNode;
+  /**
+   * Shown as the level-1 heading instead of `title` (which still names the browser
+   * tab), e.g. the household switcher on Pantry.
+   */
+  header?: ReactNode;
   children?: ReactNode;
 };
 
@@ -50,7 +55,7 @@ export function safeAreaPadding(insets: EdgeInsets, inShell: boolean, wide: bool
   };
 }
 
-export function Screen({ title, inShell = false, accessory, children }: ScreenProps) {
+export function Screen({ title, inShell = false, accessory, header, children }: ScreenProps) {
   const styles = useThemedStyles(createStyles);
   const insets = useSafeAreaInsets();
   const wide = useIsWideLayout();
@@ -63,9 +68,15 @@ export function Screen({ title, inShell = false, accessory, children }: ScreenPr
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
         <View testID="screen-content" style={styles.content}>
           {accessory}
-          <Text role="heading" aria-level={1} style={styles.heading}>
-            {title}
-          </Text>
+          {header ? (
+            <View role="heading" aria-level={1}>
+              {header}
+            </View>
+          ) : (
+            <Text role="heading" aria-level={1} style={styles.heading}>
+              {title}
+            </Text>
+          )}
           {children}
         </View>
       </ScrollView>

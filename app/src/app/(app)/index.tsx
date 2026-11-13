@@ -1,15 +1,20 @@
 import { Text, View } from 'react-native';
 
+import { HouseholdSwitcher } from '@/components/household-switcher';
 import { PressableLink } from '@/components/pressable-link';
+import { useIsWideLayout } from '@/hooks/use-is-wide-layout';
 import { Screen } from '@/components/screen';
 import { ThemedText } from '@/components/themed-text';
 import { useThemedStyles, type Theme } from '@/theme';
 
 export default function PantryScreen() {
   const styles = useThemedStyles(createStyles);
+  const wide = useIsWideLayout();
 
+  // Below the breakpoint the header is the household switcher; at and above it
+  // the switcher is in the side nav and the header is a plain "Pantry".
   return (
-    <Screen title="Pantry" inShell>
+    <Screen title="Pantry" inShell header={wide ? undefined : <HouseholdSwitcher placement="header" />}>
       <ThemedText variant="muted">Your household&apos;s items will appear here.</ThemedText>
 
       <PressableLink
