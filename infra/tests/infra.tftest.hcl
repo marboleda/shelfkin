@@ -54,6 +54,13 @@ variables {
   hosting_site_id   = "shelfkin-test"
   budget_amount     = 30
   github_repository = "marboleda/shelfkin"
+
+  # terraform_data.email_privacy PATCHes the real Identity Toolkit API from a
+  # local-exec provisioner. Mocked providers and override_resource do not stop
+  # a provisioner, and the run blocks with the default `command = apply` would
+  # run it. So it is off here: no network call, no gcloud or curl needed. Only
+  # `command = plan` runs (which never run provisioners) may turn it on.
+  email_privacy_patch = false
 }
 
 run "regional_resources_use_region" {
@@ -312,7 +319,12 @@ run "workload_identity" {
 }
 
 run "firebase" {
+  # Must stay a plan: with email_privacy_patch on, an apply would run the PATCH.
   command = plan
+
+  variables {
+    email_privacy_patch = true
+  }
 
   assert {
     condition = (
@@ -336,6 +348,20 @@ run "firebase" {
   assert {
     condition     = google_firebase_android_app.android.package_name == "com.marboleda.shelfkin" && google_firebase_apple_app.ios.bundle_id == "com.marboleda.shelfkin"
     error_message = "Mobile apps must use com.marboleda.shelfkin"
+  }
+
+  assert {
+    condition     = google_identity_platform_config.this.monitoring[0].request_logging[0].enabled
+    error_message = "Identity Platform request logging must be on, so disabled-account sign-ins are logged server-side"
+  }
+
+  assert {
+    condition = (
+      terraform_data.email_privacy[0].input.project_id == var.project_id &&
+      terraform_data.email_privacy[0].input.enable_improved_email_privacy == true &&
+      terraform_data.email_privacy[0].triggers_replace == terraform_data.email_privacy[0].input
+    )
+    error_message = "terraform_data.email_privacy must turn on enable_improved_email_privacy for var.project_id, and re-run when that changes"
   }
 }
 

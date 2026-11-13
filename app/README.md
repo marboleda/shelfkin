@@ -43,6 +43,8 @@ To run the app against the local API and emulator:
 
 The emulator's users live in memory, so they are gone when it stops. **Password reset emails** are not sent: the emulator prints the reset link in its log (`docker compose logs auth`, look for "To reset the password for …"), and lists it at `http://localhost:9099/emulator/v1/projects/demo-shelfkin/oobCodes`. The printed link uses the emulator's port inside Docker (9099); change it if you set `SHELFKIN_AUTH_PORT`.
 
+The emulator has no email enumeration protection (production has it on), so it returns `auth/user-not-found` / `auth/wrong-password` where production returns `auth/invalid-credential`. The app shows "Email or password is incorrect" for all of them.
+
 ### How auth works in the app
 
 All auth code lives in `src/auth/`:
