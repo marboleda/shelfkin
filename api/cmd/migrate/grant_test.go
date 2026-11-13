@@ -311,7 +311,7 @@ func TestUpFailsOnAnInheritingGrantItCannotRevoke(t *testing.T) {
 		}
 		for _, want := range []string{
 			"has a wrong grant of shelfkin_app (granted by " + admin + " with INHERIT TRUE",
-			"One-time admin step",
+			"Moving `shelfkin_api` off the Cloud SQL built-in user",
 		} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("err = %q, want it to mention %q", err, want)
@@ -424,7 +424,7 @@ func TestUpFailsWhenAnExtraMembershipCannotBeRevoked(t *testing.T) {
 	if err := pool.QueryRow(ctx, "SELECT current_user").Scan(&admin); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"is a member of " + extra + " (granted by " + admin, "has REPLICATION", "One-time admin step", "workflow by hand"} {
+	for _, want := range []string{"is a member of " + extra + " (granted by " + admin, "has REPLICATION", "Moving `shelfkin_api` off the Cloud SQL built-in user", "workflow by hand"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("err = %q, want it to mention %q", err, want)
 		}
@@ -509,7 +509,7 @@ func TestUpFailsOnAColumnGrant(t *testing.T) {
 		"privileges granted directly to it on 2 objects",
 		"column email of table users",
 		"column id of table users",
-		"One-time admin step",
+		"Moving `shelfkin_api` off the Cloud SQL built-in user",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("err = %q, want it to mention %q", err, want)
