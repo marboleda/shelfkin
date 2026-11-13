@@ -1,0 +1,214 @@
+name: Deploy API
+
+# Builds the API image, runs migrations on Cloud SQL and deploys shelfkin-api
+# to Cloud Run. See "Deploying the API" in the README.
+#
+# Only these two triggers: the Workload Identity provider from infra/wif.tf
+# admits only workflow_run and workflow_dispatch tokens on refs/heads/main.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+# One deploy at a time, never cancelled half way (a migration may be
+# running). GitHub keeps at most one pending run per group and replaces it
+# with a newer one, so two merges in quick succession end with the newer
+# commit deployed.
+concurrency:
+  group: deploy-api
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  # Decides whether to deploy, without any Google credentials.
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    # A workflow_run token carries refs/heads/main even when CI ran for a pull
+    # request (including one from a fork), so check where the tested commit
+    # came from: a successful CI run for a push to main in this repository.
+    # By hand, only on main.
+    if: >-
+      (github.event_name == 'workflow_run'
+        && github.event.workflow_run.conclusion == 'success'
+        && github.event.workflow_run.event == 'push'
+        && github.event.workflow_run.head_branch == 'main'
+        && github.event.workflow_run.head_repository.full_name == github.repository)
+      || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+      deploy: ${{ steps.sha.outputs.deploy }}
+    steps:
+      # The exact commit CI tested. By hand, the commit main pointed to when
+      # the run was started.
+      #
+      # CI runs for two quick merges can finish out of order. When main has
+      # moved on since this commit, its newer commit deploys when its own CI
+      # passes, so this run deploys nothing rather than going backwards: it
+      # builds nothing, never authenticates to Google and does not fail.
+      # (If the newer commit's CI fails, see "Deploying the API" in the
+      # README.) A manual run deploys the commit it was started on.
+      - name: Pick the commit
+        id: sha
+        env:
+          SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" != workflow_run ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          main="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if [ "$main" = "$SHA" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipped deploying ${SHA}: it is no longer the tip of main (now ${main}), which deploys when its CI passes."
+            echo "Skipped deploying \`${SHA}\`: it is no longer the tip of \`main\` (now \`${main}\`), which deploys when its CI passes." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  deploy:
+    name: deploy
+    needs: check
+    if: needs.check.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SHA: ${{ needs.check.outputs.sha }}
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION }}
+      API_URL: ${{ vars.API_URL }}
+      SERVICE: shelfkin-api
+      MIGRATE_JOB: shelfkin-migrate
+      # The login the API connects as; the migrate job grants shelfkin_app to
+      # it (api/cmd/migrate/grant.go).
+      API_DB_ROLE: shelfkin_api
+    steps:
+      - name: Check the Actions variables
+        run: |
+          missing=0
+          for v in GCP_PROJECT_ID GCP_REGION GCP_WIF_PROVIDER GCP_DEPLOYER_SA API_URL; do
+            if [ -z "${!v}" ]; then
+              echo "::error::Actions variable $v is not set (see \"Deploying the API\" in the README)"
+              missing=1
+            fi
+          done
+          exit "$missing"
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          GCP_DEPLOYER_SA: ${{ vars.GCP_DEPLOYER_SA }}
+          API_URL: ${{ vars.API_URL }}
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SHA }}
+          persist-credentials: false
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Build and push the image
+        id: image
+        run: |
+          repo="${REGION}-docker.pkg.dev/${PROJECT_ID}/shelfkin/api"
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          docker build -f api/Dockerfile -t "${repo}:${SHA}" api
+          docker push "${repo}:${SHA}"
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "${repo}:${SHA}")"
+          digest="${digest#*@}"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          # Deploy by digest, so the job and the service run exactly the image
+          # that was just pushed.
+          echo "ref=${repo}@${digest}" >> "$GITHUB_OUTPUT"
+
+      # The job's command, arguments and env stay as Terraform set them; only
+      # the image changes. The binary, its arguments and API_DB_ROLE are
+      # per-execution overrides, so `terraform plan` shows no drift.
+      - name: Run migrations
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
+        run: |
+          gcloud run jobs update "$MIGRATE_JOB" \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --image "$IMAGE" --quiet
+          # --wait exits non-zero if the execution fails, which stops the
+          # workflow before the API is deployed.
+          gcloud run jobs execute "$MIGRATE_JOB" \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --args=/usr/local/bin/migrate,up \
+            --update-env-vars="API_DB_ROLE=${API_DB_ROLE}" \
+            --wait
+
+      # Only the image changes: env vars, secrets, scaling and the probe stay
+      # as Terraform set them. If the new revision fails its startup probe,
+      # the deploy fails and traffic stays on the previous revision.
+      - name: Deploy the API
+        id: deploy
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
+        run: |
+          gcloud run deploy "$SERVICE" \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --image "$IMAGE" --quiet
+          # After a rollback (README) traffic is pinned to an old revision and
+          # a deploy alone would not move it. Send it to the new one; a no-op
+          # when traffic already follows the latest revision.
+          gcloud run services update-traffic "$SERVICE"             --project "$PROJECT_ID" --region "$REGION"             --to-latest --quiet
+          revision="$(gcloud run services describe "$SERVICE" \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --format 'value(status.latestReadyRevisionName)')"
+          echo "revision=${revision}" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke checks
+        run: |
+          set -u
+          fail=0
+
+          code="$(curl -sS -o health.json -w '%{http_code}' --retry 3 --retry-all-errors "${API_URL}/health")"
+          echo "GET /health -> ${code}: $(cat health.json)"
+          if [ "$code" != 200 ] || ! jq -e '.status == "ok"' health.json > /dev/null; then
+            echo "::error::GET /health returned ${code}, want 200 with {\"status\":\"ok\"}"
+            fail=1
+          fi
+
+          # No token: 401 in the Error format (openapi/openapi.yaml).
+          code="$(curl -sS -o me.json -w '%{http_code}' --retry 3 --retry-all-errors "${API_URL}/me")"
+          echo "GET /me -> ${code}: $(cat me.json)"
+          if [ "$code" != 401 ] || ! jq -e '(.error.code | type == "string") and (.error.message | type == "string")' me.json > /dev/null; then
+            echo "::error::GET /me without a token returned ${code}, want 401 in the Error format"
+            fail=1
+          fi
+
+          exit "$fail"
+
+      - name: Summary
+        if: always() && steps.image.outputs.digest != ''
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          REVISION: ${{ steps.deploy.outputs.revision }}
+        run: |
+          {
+            echo "### API deploy"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Commit | \`${SHA}\` |"
+            echo "| Image digest | \`${DIGEST}\` |"
+            echo "| Cloud Run revision | \`${REVISION:-not deployed}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -49,7 +49,7 @@ func TestUpAppliesPendingAndIsIdempotent(t *testing.T) {
 	ctx := t.Context()
 
 	var out bytes.Buffer
-	if err := run(ctx, []string{"up"}, dbURL, &out); err != nil {
+	if err := run(ctx, []string{"up"}, dbURL, "", &out); err != nil {
 		t.Fatalf("first up: %v", err)
 	}
 	if !strings.Contains(out.String(), "Applied ") {
@@ -65,7 +65,7 @@ func TestUpAppliesPendingAndIsIdempotent(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := run(ctx, nil, dbURL, &out); err != nil {
+	if err := run(ctx, nil, dbURL, "", &out); err != nil {
 		t.Fatalf("second up: %v", err)
 	}
 	if !strings.Contains(out.String(), "No pending migrations") {
@@ -79,18 +79,18 @@ func TestStatusListsMigrations(t *testing.T) {
 	ctx := t.Context()
 
 	var out bytes.Buffer
-	if err := run(ctx, []string{"status"}, dbURL, &out); err != nil {
+	if err := run(ctx, []string{"status"}, dbURL, "", &out); err != nil {
 		t.Fatalf("status: %v", err)
 	}
 	if !strings.Contains(out.String(), "Pending") {
 		t.Errorf("status before up = %q, want pending migrations", out.String())
 	}
 
-	if err := run(ctx, []string{"up"}, dbURL, &bytes.Buffer{}); err != nil {
+	if err := run(ctx, []string{"up"}, dbURL, "", &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if err := run(ctx, []string{"status"}, dbURL, &out); err != nil {
+	if err := run(ctx, []string{"status"}, dbURL, "", &out); err != nil {
 		t.Fatalf("status: %v", err)
 	}
 	if strings.Contains(out.String(), "Pending") || !strings.Contains(out.String(), "_init.sql") {
@@ -103,11 +103,11 @@ func TestDownRollsBackOne(t *testing.T) {
 	dbURL, _ := emptyDatabase(t)
 	ctx := t.Context()
 
-	if err := run(ctx, []string{"up"}, dbURL, &bytes.Buffer{}); err != nil {
+	if err := run(ctx, []string{"up"}, dbURL, "", &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := run(ctx, []string{"down"}, dbURL, &out); err != nil {
+	if err := run(ctx, []string{"down"}, dbURL, "", &out); err != nil {
 		t.Fatalf("down: %v", err)
 	}
 	if !strings.Contains(out.String(), "Rolled back ") {
@@ -117,7 +117,7 @@ func TestDownRollsBackOne(t *testing.T) {
 
 func TestUnreachableDatabase(t *testing.T) {
 	t.Parallel()
-	err := run(t.Context(), []string{"up"}, "postgres://nobody:secret@127.0.0.1:1/none?sslmode=disable&connect_timeout=2", &bytes.Buffer{})
+	err := run(t.Context(), []string{"up"}, "postgres://nobody:secret@127.0.0.1:1/none?sslmode=disable&connect_timeout=2", "", &bytes.Buffer{})
 	if err == nil {
 		t.Fatal("up against an unreachable database succeeded")
 	}
@@ -134,7 +134,7 @@ func TestUnreachableDatabase(t *testing.T) {
 
 func TestUnknownCommand(t *testing.T) {
 	t.Parallel()
-	err := run(t.Context(), []string{"sideways"}, "", &bytes.Buffer{})
+	err := run(t.Context(), []string{"sideways"}, "", "", &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "unknown command") {
 		t.Errorf("err = %v, want unknown command", err)
 	}

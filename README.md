@@ -334,6 +334,200 @@ This sets the new password on the Cloud SQL user and replaces the secret version
 
 Cloud SQL has deletion protection on, so `terraform destroy` fails until it is turned off. Set both `deletion_protection = false` and `settings.deletion_protection_enabled = false` in `infra/database.tf`, run `terraform apply`, then `terraform destroy`. This deletes the database and its backups. A deleted Workload Identity pool keeps its ID reserved for 30 days. The state bucket, the project and its billing link are not managed by Terraform.
 
+## Deploying the API
+
+`.github/workflows/deploy-api.yml` builds the API image, runs the migrations on Cloud SQL and deploys `shelfkin-api` to Cloud Run. It authenticates with Workload Identity Federation as `github-deployer`; it uses the Actions variables from [Outputs to GitHub Actions and EAS variables](#outputs-to-github-actions-and-eas-variables) (`GCP_PROJECT_ID`, `GCP_REGION`, `GCP_WIF_PROVIDER`, `GCP_DEPLOYER_SA`, `API_URL`) and no secrets.
+
+Every migration runs as `shelfkin_migrator` through the `shelfkin-migrate` job, never by hand as `postgres` or another admin user. `shelfkin_migrator` must own every table and the `SECURITY DEFINER` helpers (#10), which only work when they run as the owner of `household_members`.
+
+### What triggers a deploy
+
+- **Automatically**, when the `CI` workflow succeeds for a push to `main`. It deploys the exact commit CI tested. A failed CI run, a pull request (including from a fork) or any other branch deploys nothing.
+- **By hand**: Actions > Deploy API > Run workflow, on `main` (or `gh workflow run deploy-api.yml --ref main`). It deploys the commit `main` points to. Other branches are refused.
+
+Only one deploy runs at a time and a running one is never cancelled, so a migration is never stopped half way. If several commits land while a deploy runs, only the newest waits.
+
+CI runs can finish out of order, so an automatic deploy whose commit is no longer the tip of `main` deploys nothing: it builds nothing, does not authenticate to Google and ends without failing. The run shows a notice and a summary line naming the skipped commit. The newer commit deploys when its own CI passes.
+
+**If the newer commit's CI fails**, the older commit is not deployed either, and production stays on the last deployed revision. To get a deploy out, either:
+
+- fix or revert on `main`; its CI then deploys as usual, or
+- run the workflow by hand, but only when the latest CI run on `main` is green, because a manual run deploys the tip of `main`, not the older commit.
+
+### What a deploy does
+
+1. Builds `api/Dockerfile` and pushes it to Artifact Registry as `<region>-docker.pkg.dev/<project>/shelfkin/api:<full commit SHA>`.
+2. Points the `shelfkin-migrate` job at the new image and runs `migrate up` with `--wait`, logged in as `shelfkin_migrator`. After the migrations it grants `shelfkin_app` to `shelfkin_api` (see [Database roles](#database-roles-in-production)); this changes nothing once done. If anything fails, the workflow stops and the API is **not** deployed.
+3. Deploys `shelfkin-api` with the new image. Only the image changes: env vars, secrets, scaling and the startup probe stay as Terraform set them. If the new revision fails its startup probe (`GET /health`), Cloud Run keeps serving the previous revision and the workflow fails. Traffic is then sent to the latest revision, which also undoes an earlier rollback.
+4. Smoke checks: `GET <API_URL>/health` must return 200 with `{"status":"ok"}` and `GET <API_URL>/me` without a token must return 401 in the `Error` format. Either failing fails the workflow (the new revision is already serving then; roll back below if needed).
+
+The job and the migrate binary are chosen per execution (`gcloud run jobs execute --args=/usr/local/bin/migrate,up --update-env-vars=API_DB_ROLE=shelfkin_api`), so the job's definition stays as Terraform made it apart from its image, which Terraform ignores.
+
+### Where to watch it
+
+- The run in GitHub Actions (Actions > Deploy API). Its summary shows the commit SHA, the image digest and the Cloud Run revision.
+- Migration output: Cloud Run > Jobs > `shelfkin-migrate` > Executions, or `gcloud run jobs executions list --job shelfkin-migrate --region "$REGION"` and the execution's logs.
+- The service: Cloud Run > `shelfkin-api` > Revisions and Logs, or `gcloud run services describe shelfkin-api --region "$REGION"`.
+
+Viewing needs Viewer, Cloud Run Viewer and Logs Viewer on the project.
+
+### Rolling back
+
+Send traffic back to the previous revision:
+
+```sh
+gcloud run revisions list --service shelfkin-api --region "$REGION"   # find the last good one
+gcloud run services update-traffic shelfkin-api --region "$REGION" --to-revisions=<revision>=100
+```
+
+The next deploy sends traffic to its new revision again.
+
+**Migrations are forward-only and are never rolled back**, by a deploy or by hand. Rolling back the API leaves the newer schema in place, so every migration must keep the previous release working: add first (new tables, nullable or defaulted columns), and remove or rename only in a later release, once nothing uses the old shape.
+
+### Running the migrate job by hand
+
+Always through the job, so migrations run as `shelfkin_migrator` (see above), never by hand as `postgres` or another admin user.
+
+```sh
+# Show every migration and whether it is applied
+gcloud run jobs execute shelfkin-migrate --region "$REGION" --wait --args=/usr/local/bin/migrate,status
+```
+
+The output is in the execution's logs.
+
+### Database roles in production
+
+The API and the expiry job log in as `shelfkin_api`, which must be able to do **less** than `shelfkin_app` on its own: `dbtx` runs `SET LOCAL ROLE shelfkin_app`, and SQL in that transaction could run `RESET ROLE`. After every `migrate up`, the grant step (`api/cmd/migrate/grant.go`, enabled by `API_DB_ROLE`):
+
+- grants `shelfkin_app` to `shelfkin_api` `WITH INHERIT FALSE, SET TRUE` if no such grant exists yet (or fixes the options of its own grant), so `shelfkin_api` has `shelfkin_app`'s privileges only after `SET ROLE` and none after `RESET ROLE`. This needs `shelfkin_migrator` to have `ADMIN` on `shelfkin_app`, which it has because the #10 migration created the role as that user;
+- tries to revoke every other grant of `shelfkin_app` to `shelfkin_api` that is not `INHERIT FALSE, SET TRUE` without `ADMIN`, every other role membership (such as `cloudsqlsuperuser`), and the `CREATEDB`, `CREATEROLE`, `BYPASSRLS` and `REPLICATION` attributes;
+- then **fails the migrate job** (so the API is not deployed) if `shelfkin_api` is still `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `BYPASSRLS` or `REPLICATION`, is a member of any role other than `shelfkin_app`, has any `shelfkin_app` grant that inherits, lacks `SET` or has `ADMIN` (or no right one at all), owns any object at all, holds a direct grant on any object, or is named in a policy. Ownership and grants are read from `pg_shdepend`, which records every owned object and every ACL entry naming the role, of every kind (tables, columns, types and domains including domains over arrays, functions, schemas, statistics objects, collations, text search objects, operator families, publications, foreign servers, large objects, languages, parameters, default privileges, tablespaces, databases, ...) in this database, in shared catalogs and in every other database. The only exception is `CONNECT` and `TEMPORARY` on a database, which every login needs. The error names each object (with `pg_describe_object`) and each membership's grantor, and points to the one-time admin step below.
+
+Grants to `PUBLIC` are not grants to `shelfkin_api`, so the step does not look at them. The production check `RESET ROLE; SELECT FROM users;` below is what catches a table or column readable through `PUBLIC`.
+
+Why per grantor: on Postgres 16 and later, `pg_auth_members` keeps **one row per grantor**, and `GRANT`/`REVOKE` only touch the row of the role running them. A second `GRANT shelfkin_app TO shelfkin_api WITH INHERIT TRUE` made by an admin is a separate row that `shelfkin_migrator`'s own `GRANT` does not change. So the step revokes each row `GRANTED BY` its own grantor, and the check reads every row again. Postgres only lets a role revoke a grant made by a role whose privileges it has, so `shelfkin_migrator` (not a superuser on Cloud SQL) cannot revoke grants made by `postgres` or by Cloud SQL itself. Those make the step fail rather than pass.
+
+Do not weaken this check to get a deploy through.
+
+### One-time admin step (first deploy)
+
+Cloud SQL creates built-in users (the `google_sql_user` resources, including `shelfkin_api`) with `CREATEDB` and `CREATEROLE` and as members of `cloudsqlsuperuser`; #37 confirmed that production's `shelfkin_api` is a member. Terraform cannot remove that, and `shelfkin_migrator` most likely cannot either: Cloud SQL, not `shelfkin_migrator`, made the grant, and on Postgres 16 and later only a role with the grantor's privileges may revoke it, and only a role with `ADMIN` on `shelfkin_api` may `ALTER` it. (The grant step still tries, `GRANTED BY` the recorded grantor. If that grantor is a role `shelfkin_migrator` has the privileges of, the step revokes the membership itself; the error then lists only what is left.) So **the first deploy on a fresh Cloud SQL database is expected to fail**: it applies the migrations, then the grant step fails with "shelfkin_api can do more than shelfkin_app: it ... is a member of cloudsqlsuperuser (granted by ...)", before the API service is touched (it keeps its previous image). This is by design. Fix it once as an admin, as `postgres` through the Cloud SQL Auth Proxy:
+
+```sh
+# Set a password for the built-in postgres user (only needed once)
+gcloud sql users set-password postgres --instance shelfkin --prompt-for-password
+
+# Connect through the Cloud SQL Auth Proxy (the instance accepts no direct connections)
+cloud-sql-proxy "$(terraform -chdir=infra output -raw cloudsql_connection_name)" --port 5433 &
+psql "host=127.0.0.1 port=5433 user=postgres dbname=shelfkin"
+```
+
+First see every membership row of `shelfkin_api` and who granted it (the migrate job's error lists the same):
+
+```sql
+SELECT r.rolname, pg_get_userbyid(m.grantor) AS grantor, m.inherit_option, m.set_option, m.admin_option
+FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid
+WHERE m.member = 'shelfkin_api'::regrole;
+```
+
+Then revoke each row other than the `shelfkin_app` row with `inherit_option = f, set_option = t, admin_option = f`, naming its grantor. A plain `REVOKE` without `GRANTED BY` only removes a grant `postgres` made itself, and only warns otherwise. For `cloudsqlsuperuser`, with `<grantor>` from the query above:
+
+```sql
+REVOKE cloudsqlsuperuser FROM shelfkin_api GRANTED BY <grantor>;
+ALTER ROLE shelfkin_api NOCREATEDB NOCREATEROLE;
+-- Only if the query showed a wrong shelfkin_app row from another grantor:
+-- REVOKE shelfkin_app FROM shelfkin_api GRANTED BY <grantor>;
+-- Only if the error lists REPLICATION or BYPASSRLS:
+-- ALTER ROLE shelfkin_api NOREPLICATION NOBYPASSRLS;
+```
+
+Run the membership query again: it must show only the `shelfkin_app` row (`f`, `t`, `f`), and `SELECT rolcreatedb, rolcreaterole, rolbypassrls, rolreplication FROM pg_roles WHERE rolname = 'shelfkin_api'` must show all `f`.
+
+If the error lists **privileges granted directly** to `shelfkin_api` or objects it **owns** (each is named, for example `column email of table users` or `type qa_intarr`), find out who granted or changed them (the per-privilege query under "Production checks" shows the privilege and grantor). An owned object must be given back with `ALTER ... OWNER TO shelfkin_migrator`. Nothing in this repo grants anything to `shelfkin_api`. If a migration did, fix it with a new migration that revokes it (migrations are forward-only); otherwise revoke it as the role that granted it, for example `REVOKE SELECT (id, email) ON users FROM shelfkin_api;` connected as that role.
+
+**If `postgres` gets `permission denied`** (for example "Only roles with privileges of role "cloudsqladmin" may revoke privileges granted by this role", or "permission denied to alter role"), stop. Stock Postgres 16+ refuses both to a role that is not a superuser, and `postgres` on Cloud SQL is not one; whether Cloud SQL lets `postgres` do it anyway has to be tried on the real instance. Record the exact error on the deploy issue and do not weaken the check: the API stays on its previous image (or undeployed) until `shelfkin_api` is fixed. The way out then is to stop creating `shelfkin_api` through the Cloud SQL API (a change to `infra/`) and create it with SQL instead (`CREATE ROLE shelfkin_api LOGIN PASSWORD ...` as `shelfkin_migrator`, which then has `ADMIN` on it and gives it no other membership). That needs a decision on the deploy issue first.
+
+Do not create or change any table as `postgres`. Then **run the workflow by hand** (Actions > Deploy API > Run workflow on `main`, or `gh workflow run deploy-api.yml --ref main`). That run, and every later deploy, passes the grant step with no admin step.
+
+### Production checks after the first deploy
+
+Run these once, connected as above, and record the results on the deploy issue.
+
+Every migration applied (in the execution's logs, no `Pending` rows):
+
+```sh
+gcloud run jobs execute shelfkin-migrate --region "$REGION" --wait --args=/usr/local/bin/migrate,status
+```
+
+```sql
+-- The API connects as shelfkin_api, not shelfkin_migrator: run while the API is serving
+SELECT DISTINCT usename FROM pg_stat_activity WHERE datname = 'shelfkin' AND application_name <> 'psql';
+
+-- Only shelfkin_app
+SELECT r.rolname FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid
+WHERE m.member = 'shelfkin_api'::regrole;
+
+-- Every row (one per grantor): inherit_option f, set_option t, admin_option f
+SELECT pg_get_userbyid(m.grantor) AS grantor, m.inherit_option, m.set_option, m.admin_option
+FROM pg_auth_members m WHERE m.member = 'shelfkin_api'::regrole;
+
+-- All false
+SELECT rolsuper, rolcreatedb, rolcreaterole, rolbypassrls, rolreplication FROM pg_roles WHERE rolname = 'shelfkin_api';
+
+-- No rows: shelfkin_api owns nothing (o), has no direct grants (a) and is named in no policy (r),
+-- in this database, in shared catalogs (tablespaces, databases, parameters) or any other database.
+-- CONNECT and TEMPORARY on a database are allowed.
+SELECT sd.deptype,
+       CASE WHEN sd.dbid IN (0, (SELECT oid FROM pg_database WHERE datname = current_database()))
+            THEN pg_describe_object(sd.classid, sd.objid, sd.objsubid)
+            ELSE 'an object in database ' || (SELECT datname FROM pg_database WHERE oid = sd.dbid) END AS object
+FROM pg_shdepend sd
+WHERE sd.refclassid = 'pg_authid'::regclass AND sd.refobjid = 'shelfkin_api'::regrole
+  AND sd.deptype IN ('o', 'a', 'r')
+  AND NOT (sd.deptype = 'a' AND sd.classid = 'pg_database'::regclass AND NOT EXISTS (
+    SELECT FROM pg_database d, aclexplode(d.datacl) a
+    WHERE d.oid = sd.objid AND a.grantee = sd.refobjid AND a.privilege_type NOT IN ('CONNECT', 'TEMPORARY')));
+
+-- If the query above lists grants: which privilege each one is and who granted it
+-- (column grants are in pg_attribute.attacl, not pg_class.relacl)
+WITH g AS (
+  SELECT 'relation ' || c.oid::regclass AS obj, a.* FROM pg_class c, aclexplode(c.relacl) a
+  UNION ALL SELECT 'column ' || c.oid::regclass || '.' || quote_ident(att.attname), a.*
+    FROM pg_attribute att JOIN pg_class c ON c.oid = att.attrelid, aclexplode(att.attacl) a
+  UNION ALL SELECT 'function ' || p.oid::regprocedure, a.* FROM pg_proc p, aclexplode(p.proacl) a
+  UNION ALL SELECT 'schema ' || n.nspname, a.* FROM pg_namespace n, aclexplode(n.nspacl) a
+  UNION ALL SELECT 'type ' || t.oid::regtype, a.* FROM pg_type t, aclexplode(t.typacl) a
+  UNION ALL SELECT 'large object ' || l.oid, a.* FROM pg_largeobject_metadata l, aclexplode(l.lomacl) a
+  UNION ALL SELECT 'language ' || l.lanname, a.* FROM pg_language l, aclexplode(l.lanacl) a
+  UNION ALL SELECT 'foreign-data wrapper ' || w.fdwname, a.* FROM pg_foreign_data_wrapper w, aclexplode(w.fdwacl) a
+  UNION ALL SELECT 'foreign server ' || s.srvname, a.* FROM pg_foreign_server s, aclexplode(s.srvacl) a
+  UNION ALL SELECT 'parameter ' || p.parname, a.* FROM pg_parameter_acl p, aclexplode(p.paracl) a
+  UNION ALL SELECT 'tablespace ' || t.spcname, a.* FROM pg_tablespace t, aclexplode(t.spcacl) a
+  UNION ALL SELECT 'database ' || d.datname, a.* FROM pg_database d, aclexplode(d.datacl) a
+    WHERE a.privilege_type NOT IN ('CONNECT', 'TEMPORARY')
+  UNION ALL SELECT 'default privileges (' || d.defaclobjtype::text || ') of ' || pg_get_userbyid(d.defaclrole), a.*
+    FROM pg_default_acl d, aclexplode(d.defaclacl) a
+)
+SELECT obj, privilege_type, pg_get_userbyid(grantor) AS grantor FROM g WHERE grantee = 'shelfkin_api'::regrole;
+
+-- Every table is owned by shelfkin_migrator, none by shelfkin_api (or the owner column of \dt)
+SELECT tableowner, count(*) FROM pg_tables WHERE schemaname = 'public' GROUP BY tableowner;
+
+-- Both helpers and household_members owned by shelfkin_migrator
+SELECT proname, pg_get_userbyid(proowner) FROM pg_proc WHERE proname LIKE 'app_user_%';
+SELECT tableowner FROM pg_tables WHERE tablename = 'household_members';
+
+-- f: no FORCE ROW LEVEL SECURITY
+SELECT relforcerowsecurity FROM pg_class WHERE relname = 'household_members';
+```
+
+Then connect as `shelfkin_api` (`user=shelfkin_api`; its password is in the `api-database-url` secret, which must name `shelfkin_api`). Each of these must fail with `permission denied` (42501). Keep the zero-column `SELECT`: it succeeds if `shelfkin_api` can read the table or any single column, whether granted directly or to `PUBLIC`, so it catches column grants and `GRANT ... TO PUBLIC`, which the grant step does not look at (`SELECT *` would miss a grant on only some columns):
+
+```sql
+BEGIN; SET LOCAL ROLE shelfkin_app; RESET ROLE; SELECT FROM household_members; ROLLBACK;
+BEGIN; SET LOCAL ROLE shelfkin_app; RESET ROLE; SELECT FROM users; ROLLBACK;
+```
+
 ## Docs
 
 - [Product plan](docs/plan.md)
