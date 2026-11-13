@@ -91,11 +91,13 @@ func (a *API) SearchCatalog(ctx context.Context, req openapi.SearchCatalogReques
 			continue
 		}
 		item := openapi.CatalogItem{
-			Id:         types.UUID(r.CatalogItemID.Bytes),
-			Name:       r.Name.String,
-			IsCustom:   r.IsCustom.Bool,
-			CategoryId: int(r.CategoryID.Int16),
-			LocationId: int(r.LocationID.Int16),
+			Id:                 types.UUID(r.CatalogItemID.Bytes),
+			Name:               r.Name.String,
+			IsCustom:           r.IsCustom.Bool,
+			CategoryId:         int(r.CategoryID.Int16),
+			LocationId:         int(r.LocationID.Int16),
+			CategoryOverridden: r.CategoryOverridden.Bool,
+			LocationOverridden: r.LocationOverridden.Bool,
 		}
 		if r.ShelfLifeDays.Valid {
 			days := int(r.ShelfLifeDays.Int32)
