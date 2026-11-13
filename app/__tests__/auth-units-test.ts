@@ -75,7 +75,7 @@ describe('validation', () => {
 describe('Firebase error messages', () => {
   const error = (code: string) => Object.assign(new Error(`Firebase: Error (${code}).`), { code });
 
-  test.each(['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found'])(
+  test.each(['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found', 'auth/user-disabled'])(
     '%s says the email or password is incorrect',
     (code) => {
       expect(authErrorMessage(error(code))).toBe('Email or password is incorrect');

@@ -8,7 +8,6 @@ export const AUTH_MESSAGES = {
   network: "Can't connect. Check your connection and try again.",
   invalidEmail: 'Enter a valid email address, like you@example.com',
   weakPassword: 'Choose a stronger password',
-  disabled: 'This account has been disabled.',
   generic: 'Something went wrong. Please try again.',
   sessionEnded: 'Your session has ended. Please sign in again.',
 } as const;
@@ -26,8 +25,12 @@ export function firebaseErrorCode(error: unknown): string | undefined {
 }
 
 /**
- * The message for a failed Firebase Auth call. A wrong password and an unknown
- * email give the same message, so the screen never reveals whether an account exists.
+ * The message for a failed Firebase Auth call. A wrong password, an unknown
+ * email and a disabled account (`auth/user-disabled`, which Firebase only
+ * returns when the password is correct) all give the same message, so the
+ * screen never reveals whether an account exists or has been disabled.
+ * Disabled-account attempts are recorded server-side in the Identity Platform
+ * request logs (see "Auth request logs" in the README), not by the app.
  */
 export function authErrorMessage(error: unknown): string {
   switch (firebaseErrorCode(error)) {
@@ -35,6 +38,7 @@ export function authErrorMessage(error: unknown): string {
     case 'auth/invalid-login-credentials':
     case 'auth/wrong-password':
     case 'auth/user-not-found':
+    case 'auth/user-disabled':
       return AUTH_MESSAGES.wrongCredentials;
     case 'auth/email-already-in-use':
       return AUTH_MESSAGES.emailInUse;
@@ -48,8 +52,6 @@ export function authErrorMessage(error: unknown): string {
       return AUTH_MESSAGES.invalidEmail;
     case 'auth/weak-password':
       return AUTH_MESSAGES.weakPassword;
-    case 'auth/user-disabled':
-      return AUTH_MESSAGES.disabled;
     default:
       return AUTH_MESSAGES.generic;
   }

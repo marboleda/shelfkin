@@ -243,6 +243,7 @@ If the Hosting site ID is taken when first applied, pick another, then update `t
 - A Google account with Owner on the target project, or permission to create one
 - Billing Account User on the billing account (to link it) and Billing Account Costs Manager or Administrator (to create the budget)
 - [gcloud CLI](https://cloud.google.com/sdk/docs/install) and [Terraform 1.14.3](https://developer.hashicorp.com/terraform/install)
+- `bash` and `curl` on `PATH`, and `gcloud` logged in with `gcloud auth login` (not only application-default credentials). `terraform apply` runs a bash script that turns on email enumeration protection with `curl` and `gcloud auth print-access-token` (see [Email enumeration protection](#email-enumeration-protection)). macOS and Linux have both. On Windows, install [Git for Windows](https://git-scm.com/download/win) and run `terraform` from Git Bash, so `bash` is Git's and not WSL's `C:\Windows\System32\bash.exe` (which cannot see the Windows `gcloud`)
 - Admin on `marboleda/shelfkin`, to add the GitHub Actions variables. No repository secrets are needed
 
 ### One-time bootstrap
@@ -281,7 +282,7 @@ terraform plan
 terraform apply
 ```
 
-Running `terraform plan` again after an apply should show "No changes". The Cloud Run service and job are created with a public placeholder image; deploys (#38) replace it and Terraform ignores image changes, so an apply never rolls a deploy back.
+Running `terraform plan` again after an apply should show "No changes" (check this on the first apply after a change to `infra/`). The Cloud Run service and job are created with a public placeholder image; deploys (#38) replace it and Terraform ignores image changes, so an apply never rolls a deploy back.
 
 CI runs `terraform fmt -check`, `terraform init -backend=false`, `terraform validate` and `terraform test` (all providers mocked) with no credentials. Run the same locally from `infra/`.
 
@@ -318,6 +319,50 @@ Every member with `roles/owner` or `roles/editor` should be either a human admin
 ```sh
 gcloud projects get-iam-policy "$PROJECT_ID" --flatten=bindings --filter='bindings.role:(roles/owner OR roles/editor)' --format='table(bindings.role, bindings.members)'
 ```
+
+### Auth request logs
+
+Identity Platform request logging is on (`monitoring.request_logging` in `infra/firebase.tf`), so every Firebase Auth API request is written to Cloud Logging in the project, including failed ones. This is the record of sign-in attempts by **disabled accounts**: the app shows them "Email or password is incorrect", the same as a wrong password, and logs nothing itself.
+
+**Finding disabled-account attempts.** In [Logs Explorer](https://console.cloud.google.com/logs/query) for the project, run:
+
+```
+resource.type="identitytoolkit_project"
+log_id("identitytoolkit.googleapis.com/requests")
+"USER_DISABLED"
+```
+
+Then narrow it to sign-ins: the entry's method name ends in `SignInWithPassword`. The field paths below are expected but not yet confirmed against a real entry (nobody but the owner can see production logs). After the first apply, the owner opens the first real entry, corrects these paths and the query if needed, and removes this sentence:
+
+```
+resource.type="identitytoolkit_project"
+log_id("identitytoolkit.googleapis.com/requests")
+jsonPayload.methodName:"SignInWithPassword"
+jsonPayload.status.message:"USER_DISABLED"
+```
+
+**Checking it in production.** In the Firebase console (Authentication > Users), add a throwaway user and disable it. Sign in with it on the production web app: the screen shows "Email or password is incorrect". Within a few minutes the query above shows the entry with the user's email. Then delete the throwaway user.
+
+**Cost.** Request logs go to the `_Default` log bucket, which keeps them for 30 days. Cloud Logging includes 50 GiB per project per month for free, then charges per GiB ingested. Shelfkin's Auth traffic is far below that, but every Auth request is logged: sign-in, sign-up, token refresh and account lookup. If the volume ever matters, add an exclusion filter to the `_Default` sink that drops successful `identitytoolkit.googleapis.com/requests` entries and keeps only errors.
+
+**PII.** Each entry contains the user's email address and the caller's IP address. Firebase does not log passwords; the owner confirms this in the first real entry and records it here. Anyone with `roles/logging.viewer` (or Owner or Editor) on the project can read the entries. They are deleted after the 30-day retention, and nothing exports them anywhere else.
+
+### Email enumeration protection
+
+Email enumeration protection ("improved email privacy") is on, so Firebase's sign-in and password reset responses do not reveal whether an email has an account: a wrong password and an unknown email both return `auth/invalid-credential`, and a password reset succeeds for unknown emails. Sign-up still says when an email is taken (`auth/email-already-in-use`); that is accepted.
+
+The Google provider has no argument for this setting, so `terraform_data.email_privacy` in `infra/firebase.tf` sets it with a `PATCH` to the Identity Toolkit admin API when it is first created (or its project changes). Terraform does **not** read the setting back, so it will not notice if someone turns protection off in the console. Check it after the first apply, and whenever in doubt:
+
+```sh
+curl -sS -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  -H "x-goog-user-project: $PROJECT_ID" \
+  "https://identitytoolkit.googleapis.com/admin/v2/projects/$PROJECT_ID/config" | grep -A2 emailPrivacyConfig
+# "emailPrivacyConfig": { "enableImprovedEmailPrivacy": true }
+```
+
+If it shows `false` or no `emailPrivacyConfig`, run the `PATCH` again with `terraform apply -replace='terraform_data.email_privacy[0]'`.
+
+The `email_privacy_patch` variable only exists so the offline `terraform test` never runs the `PATCH`. Leave it at its default (`true`) in `terraform.tfvars`.
 
 ### Rotating the database passwords
 

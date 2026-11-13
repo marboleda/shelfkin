@@ -155,8 +155,9 @@ export async function sendPasswordReset(email: string): Promise<void> {
   try {
     await sendPasswordResetEmail(getFirebaseAuth(), email.trim());
   } catch (error) {
-    // Projects without email enumeration protection (like the emulator) report
-    // unknown emails. The screen says the same thing either way.
+    // Production has email enumeration protection on (infra/firebase.tf), so
+    // it succeeds for unknown emails. The Auth emulator has no such protection
+    // and reports `auth/user-not-found`. The screen says the same thing either way.
     if ((error as { code?: unknown })?.code === 'auth/user-not-found') return;
     throw error;
   }

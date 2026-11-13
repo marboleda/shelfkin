@@ -61,6 +61,18 @@ describe('errors', () => {
     expect(screen).toHavePathname('/sign-in');
   });
 
+  test('a disabled account shows the same message as wrong credentials', async () => {
+    await openSignIn();
+    mockFirebase.failNext('auth/user-disabled');
+
+    await fill(TEST_EMAIL, TEST_PASSWORD);
+    await pressSignIn();
+
+    expect(formError()).toHaveTextContent('Email or password is incorrect');
+    expect(screen.queryByText(/disabled/i)).toBeNull();
+    expect(screen).toHavePathname('/sign-in');
+  });
+
   test.each([
     ['auth/too-many-requests', 'Too many attempts. Wait a few minutes and try again.'],
     ['auth/network-request-failed', "Can't connect. Check your connection and try again."],
