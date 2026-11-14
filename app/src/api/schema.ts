@@ -355,6 +355,81 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/households/{householdId}/catalog-items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a custom catalog item
+         * @description Adds a custom item to the household's catalog. Only this household
+         *     sees it. Its default category, location and shelf life are stored on
+         *     the item itself.
+         *
+         *     `name` is trimmed and inner runs of whitespace are collapsed to one
+         *     space; it is stored that way. It must not match a built-in item or one
+         *     of this household's custom items, ignoring case. The same name as
+         *     another household's custom item is fine.
+         */
+        post: operations["createCatalogItem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/households/{householdId}/catalog-items/{itemId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+                /** @description The catalog item's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                itemId: components["parameters"]["CatalogItemId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get one catalog item with the household's defaults
+         * @description A built-in item or one of this household's custom items, with the
+         *     household's effective defaults and whether each is overridden.
+         */
+        get: operations["getCatalogItem"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change the household's defaults for a catalog item
+         * @description Changes any of `categoryId`, `locationId` and `shelfLifeDays`.
+         *     Omitted fields are unchanged; `{}` returns the item unchanged.
+         *
+         *     - For a **custom** item, the item's own row changes. `categoryId` and
+         *       `locationId` cannot be `null`; `shelfLifeDays: null` clears the
+         *       shelf life.
+         *     - For a **built-in** item, `categoryId` and `locationId` set this
+         *       household's override; `null`, or the built-in default itself,
+         *       resets it to the built-in default. Other households are not
+         *       affected. `shelfLifeDays` cannot be changed (code
+         *       `not_overridable`).
+         *
+         *     The household's entries of the item take its new category (an
+         *     entry's category always comes from its item). A new default location
+         *     is only suggested for new entries; existing entries stay where they
+         *     are. No item event is recorded.
+         */
+        patch: operations["updateCatalogItem"];
+        trace?: never;
+    };
     "/categories": {
         parameters: {
             query?: never;
@@ -803,6 +878,56 @@ export interface components {
              * @example 7
              */
             shelfLifeDays: number | null;
+            /**
+             * @description True if this household has its own default category for this
+             *     built-in item. Always false for a custom item, whose defaults are
+             *     its own.
+             * @example false
+             */
+            categoryOverridden: boolean;
+            /**
+             * @description True if this household has its own default location for this
+             *     built-in item. Always false for a custom item.
+             * @example false
+             */
+            locationOverridden: boolean;
+        };
+        CreateCatalogItem: {
+            /**
+             * @description 1 to 60 characters after trimming and collapsing inner whitespace.
+             * @example Gochujang
+             */
+            name: string;
+            /** @example 9 */
+            categoryId: number;
+            /** @example 1 */
+            locationId: number;
+            /**
+             * @description Typical shelf life in days, 1 to 3650. Omitted or null means no suggestion.
+             * @example 365
+             */
+            shelfLifeDays?: number | null;
+        };
+        /** @description Any of the fields. Omitted fields are unchanged. */
+        UpdateCatalogItem: {
+            /**
+             * @description The new default category. `null` resets a built-in item to its
+             *     built-in default; a custom item cannot have `null`.
+             * @example 3
+             */
+            categoryId?: number | null;
+            /**
+             * @description The new default location. `null` resets a built-in item to its
+             *     built-in default; a custom item cannot have `null`.
+             * @example 2
+             */
+            locationId?: number | null;
+            /**
+             * @description Custom items only: the shelf life in days, 1 to 3650, or `null`
+             *     for none.
+             * @example 30
+             */
+            shelfLifeDays?: number | null;
         };
         CatalogItemList: {
             items: components["schemas"]["CatalogItem"][];
@@ -1011,6 +1136,27 @@ export interface components {
             };
         };
         /**
+         * @description The household does not exist, the caller is not a member of it, or the
+         *     item is neither a built-in item nor one of this household's custom
+         *     items (code `not_found`); the cases are indistinguishable.
+         */
+        CatalogItemNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "error": {
+                 *         "code": "not_found",
+                 *         "message": "Catalog item not found."
+                 *       }
+                 *     }
+                 */
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /**
          * @description `eventId` was already used for a different change (code
          *     `event_id_conflict`), or the entry `id` is already used by an entry
          *     for a different catalog item or household (code `entry_id_conflict`).
@@ -1038,6 +1184,8 @@ export interface components {
         HouseholdId: components["schemas"]["Id"];
         /** @description The pantry entry's ID. A value that is not a UUID gets 400 (code `bad_request`). */
         EntryId: components["schemas"]["Id"];
+        /** @description The catalog item's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+        CatalogItemId: components["schemas"]["Id"];
     };
     requestBodies: never;
     headers: never;
@@ -1753,6 +1901,167 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["HouseholdNotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createCatalogItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCatalogItem"];
+            };
+        };
+        responses: {
+            /** @description The new custom item (`isCustom` is true). */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogItem"];
+                };
+            };
+            /**
+             * @description The body is not valid JSON or a value has the wrong type, for
+             *     example a `shelfLifeDays` that is not a whole number (code
+             *     `bad_request`), `name` is not 1 to 60 characters after cleaning
+             *     (code `invalid_name`), `categoryId` is not a category (code
+             *     `invalid_category`), `locationId` is not a location (code
+             *     `invalid_location`), or `shelfLifeDays` is not 1 to 3650 (code
+             *     `invalid_shelf_life`).
+             */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "invalid_name",
+                     *         "message": "name must be 1 to 60 characters after trimming spaces."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["HouseholdNotFound"];
+            /**
+             * @description `name` matches a built-in item or one of this household's custom
+             *     items, ignoring case (code `name_taken`).
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "name_taken",
+                     *         "message": "An item with this name already exists."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getCatalogItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+                /** @description The catalog item's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                itemId: components["parameters"]["CatalogItemId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The item. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogItem"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["CatalogItemNotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateCatalogItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The household's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                householdId: components["parameters"]["HouseholdId"];
+                /** @description The catalog item's ID. A value that is not a UUID gets 400 (code `bad_request`). */
+                itemId: components["parameters"]["CatalogItemId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCatalogItem"];
+            };
+        };
+        responses: {
+            /** @description The item after the change. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogItem"];
+                };
+            };
+            /**
+             * @description The body is not valid JSON or a value has the wrong type (code
+             *     `bad_request`), `categoryId` is not a category or is `null` for a
+             *     custom item (code `invalid_category`), `locationId` is not a
+             *     location or is `null` for a custom item (code `invalid_location`),
+             *     `shelfLifeDays` is not 1 to 3650 or `null` (code
+             *     `invalid_shelf_life`), or `shelfLifeDays` is set for a built-in
+             *     item (code `not_overridable`).
+             */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "not_overridable",
+                     *         "message": "The shelf life of a built-in item cannot be changed."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["CatalogItemNotFound"];
             500: components["responses"]["InternalError"];
         };
     };
