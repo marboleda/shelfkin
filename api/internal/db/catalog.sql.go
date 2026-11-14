@@ -11,6 +11,152 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const catalogNameTaken = `-- name: CatalogNameTaken :one
+SELECT EXISTS (
+    SELECT 1 FROM catalog_items
+    WHERE (household_id IS NULL OR household_id = $1)
+      AND lower(name) = lower($2::text)
+)::boolean AS taken
+`
+
+type CatalogNameTakenParams struct {
+	HouseholdID pgtype.UUID
+	Name        string
+}
+
+// Whether name matches a built-in item or one of this household's custom
+// items, ignoring case. The unique index on (household_id, lower(name))
+// catches a custom name created concurrently; this catches the built-ins,
+// which the index does not cover.
+func (q *Queries) CatalogNameTaken(ctx context.Context, arg CatalogNameTakenParams) (bool, error) {
+	row := q.db.QueryRow(ctx, catalogNameTaken, arg.HouseholdID, arg.Name)
+	var taken bool
+	err := row.Scan(&taken)
+	return taken, err
+}
+
+const categoryExists = `-- name: CategoryExists :one
+
+SELECT EXISTS (SELECT 1 FROM categories WHERE id = $1)::boolean AS exists
+`
+
+// Custom items and household defaults (#18). The API checks the household
+// and the item before every write: row-level security (#10, #73) is the
+// second check behind it, not the way the API finds these cases.
+func (q *Queries) CategoryExists(ctx context.Context, id int16) (bool, error) {
+	row := q.db.QueryRow(ctx, categoryExists, id)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const deleteEmptyItemDefaults = `-- name: DeleteEmptyItemDefaults :exec
+DELETE FROM household_item_defaults
+WHERE household_id = $1
+  AND catalog_item_id = $2
+  AND category_id IS NULL
+  AND location_id IS NULL
+`
+
+type DeleteEmptyItemDefaultsParams struct {
+	HouseholdID   pgtype.UUID
+	CatalogItemID pgtype.UUID
+}
+
+// Removes the override row once neither column overrides anything.
+func (q *Queries) DeleteEmptyItemDefaults(ctx context.Context, arg DeleteEmptyItemDefaultsParams) error {
+	_, err := q.db.Exec(ctx, deleteEmptyItemDefaults, arg.HouseholdID, arg.CatalogItemID)
+	return err
+}
+
+const getCatalogItem = `-- name: GetCatalogItem :one
+SELECT e.catalog_item_id::uuid        AS catalog_item_id,
+       e.name::text                   AS name,
+       e.is_custom::boolean           AS is_custom,
+       e.category_id::smallint        AS category_id,
+       e.location_id::smallint        AS location_id,
+       e.shelf_life_days,
+       e.category_overridden::boolean AS category_overridden,
+       e.location_overridden::boolean AS location_overridden,
+       c.default_category_id,
+       c.default_location_id
+FROM effective_catalog_items e
+JOIN catalog_items c ON c.id = e.catalog_item_id
+WHERE e.household_id = $1 AND e.catalog_item_id = $2
+`
+
+type GetCatalogItemParams struct {
+	HouseholdID   pgtype.UUID
+	CatalogItemID pgtype.UUID
+}
+
+type GetCatalogItemRow struct {
+	CatalogItemID      pgtype.UUID
+	Name               string
+	IsCustom           bool
+	CategoryID         int16
+	LocationID         int16
+	ShelfLifeDays      pgtype.Int4
+	CategoryOverridden bool
+	LocationOverridden bool
+	DefaultCategoryID  int16
+	DefaultLocationID  int16
+}
+
+// One item as this household sees it (effective_catalog_items), with the
+// item's own defaults. No row if the household does not exist, the caller is
+// not a member, or the item is neither built-in nor this household's custom
+// item.
+func (q *Queries) GetCatalogItem(ctx context.Context, arg GetCatalogItemParams) (GetCatalogItemRow, error) {
+	row := q.db.QueryRow(ctx, getCatalogItem, arg.HouseholdID, arg.CatalogItemID)
+	var i GetCatalogItemRow
+	err := row.Scan(
+		&i.CatalogItemID,
+		&i.Name,
+		&i.IsCustom,
+		&i.CategoryID,
+		&i.LocationID,
+		&i.ShelfLifeDays,
+		&i.CategoryOverridden,
+		&i.LocationOverridden,
+		&i.DefaultCategoryID,
+		&i.DefaultLocationID,
+	)
+	return i, err
+}
+
+const insertCustomItem = `-- name: InsertCustomItem :one
+INSERT INTO catalog_items (
+    household_id, name, default_category_id, default_location_id, shelf_life_days, created_by
+) VALUES (
+    $1, $2, $3, $4, $5::integer, $6
+)
+RETURNING id
+`
+
+type InsertCustomItemParams struct {
+	HouseholdID   pgtype.UUID
+	Name          string
+	CategoryID    int16
+	LocationID    int16
+	ShelfLifeDays pgtype.Int4
+	CreatedBy     pgtype.UUID
+}
+
+func (q *Queries) InsertCustomItem(ctx context.Context, arg InsertCustomItemParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, insertCustomItem,
+		arg.HouseholdID,
+		arg.Name,
+		arg.CategoryID,
+		arg.LocationID,
+		arg.ShelfLifeDays,
+		arg.CreatedBy,
+	)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const listCategories = `-- name: ListCategories :many
 
 SELECT id, key, name
@@ -81,7 +227,8 @@ func (q *Queries) ListLocations(ctx context.Context) ([]ListLocationsRow, error)
 
 const searchCatalog = `-- name: SearchCatalog :many
 SELECT h.id AS household_id,
-       e.catalog_item_id, e.name, e.is_custom, e.category_id, e.location_id, e.shelf_life_days
+       e.catalog_item_id, e.name, e.is_custom, e.category_id, e.location_id, e.shelf_life_days,
+       e.category_overridden, e.location_overridden
 FROM households h
 CROSS JOIN LATERAL (
     SELECT lower($1::text) AS lq,
@@ -119,13 +266,15 @@ type SearchCatalogParams struct {
 }
 
 type SearchCatalogRow struct {
-	HouseholdID   pgtype.UUID
-	CatalogItemID pgtype.UUID
-	Name          pgtype.Text
-	IsCustom      pgtype.Bool
-	CategoryID    pgtype.Int2
-	LocationID    pgtype.Int2
-	ShelfLifeDays pgtype.Int4
+	HouseholdID        pgtype.UUID
+	CatalogItemID      pgtype.UUID
+	Name               pgtype.Text
+	IsCustom           pgtype.Bool
+	CategoryID         pgtype.Int2
+	LocationID         pgtype.Int2
+	ShelfLifeDays      pgtype.Int4
+	CategoryOverridden pgtype.Bool
+	LocationOverridden pgtype.Bool
 }
 
 // Type-ahead search for one household (#17), best match first: the built-in
@@ -182,6 +331,8 @@ func (q *Queries) SearchCatalog(ctx context.Context, arg SearchCatalogParams) ([
 			&i.CategoryID,
 			&i.LocationID,
 			&i.ShelfLifeDays,
+			&i.CategoryOverridden,
+			&i.LocationOverridden,
 		); err != nil {
 			return nil, err
 		}
@@ -191,4 +342,83 @@ func (q *Queries) SearchCatalog(ctx context.Context, arg SearchCatalogParams) ([
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateCustomItem = `-- name: UpdateCustomItem :execrows
+UPDATE catalog_items
+SET default_category_id = COALESCE($1::smallint, default_category_id),
+    default_location_id = COALESCE($2::smallint, default_location_id),
+    shelf_life_days     = CASE WHEN $3::boolean
+                               THEN $4::integer
+                               ELSE shelf_life_days END,
+    updated_at          = now()
+WHERE id = $5 AND household_id = $6
+`
+
+type UpdateCustomItemParams struct {
+	CategoryID    pgtype.Int2
+	LocationID    pgtype.Int2
+	SetShelfLife  bool
+	ShelfLifeDays pgtype.Int4
+	ID            pgtype.UUID
+	HouseholdID   pgtype.UUID
+}
+
+// A NULL category_id or location_id leaves that column as it is;
+// shelf_life_days is written only when set_shelf_life is true (NULL clears
+// it).
+func (q *Queries) UpdateCustomItem(ctx context.Context, arg UpdateCustomItemParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateCustomItem,
+		arg.CategoryID,
+		arg.LocationID,
+		arg.SetShelfLife,
+		arg.ShelfLifeDays,
+		arg.ID,
+		arg.HouseholdID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const upsertItemDefaults = `-- name: UpsertItemDefaults :exec
+INSERT INTO household_item_defaults (household_id, catalog_item_id, category_id, location_id, updated_by)
+VALUES ($1, $2, $3::smallint, $4::smallint, $5)
+ON CONFLICT (household_id, catalog_item_id) DO UPDATE
+SET category_id = CASE WHEN $6::boolean
+                       THEN EXCLUDED.category_id
+                       ELSE household_item_defaults.category_id END,
+    location_id = CASE WHEN $7::boolean
+                       THEN EXCLUDED.location_id
+                       ELSE household_item_defaults.location_id END,
+    updated_by  = EXCLUDED.updated_by,
+    updated_at  = now()
+`
+
+type UpsertItemDefaultsParams struct {
+	HouseholdID   pgtype.UUID
+	CatalogItemID pgtype.UUID
+	CategoryID    pgtype.Int2
+	LocationID    pgtype.Int2
+	UpdatedBy     pgtype.UUID
+	SetCategory   bool
+	SetLocation   bool
+}
+
+// Sets this household's override of a built-in item. Only the columns whose
+// set_* flag is true change; NULL means "use the built-in default". The API
+// passes NULL for a value equal to the built-in default. One statement, so
+// two members changing different columns at the same time both win.
+func (q *Queries) UpsertItemDefaults(ctx context.Context, arg UpsertItemDefaultsParams) error {
+	_, err := q.db.Exec(ctx, upsertItemDefaults,
+		arg.HouseholdID,
+		arg.CatalogItemID,
+		arg.CategoryID,
+		arg.LocationID,
+		arg.UpdatedBy,
+		arg.SetCategory,
+		arg.SetLocation,
+	)
+	return err
 }

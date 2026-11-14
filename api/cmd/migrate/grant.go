@@ -33,7 +33,8 @@ const appRole = "shelfkin_app"
 // So every membership row is revoked as granted by its own grantor (REVOKE
 // ... GRANTED BY), and the final check reads every row again. Changes the
 // runner cannot make, such as a membership granted by a Cloud SQL admin, make
-// it fail, naming the grantor and the one-time admin step in the README.
+// it fail, naming the grantor and the README section on moving shelfkin_api
+// off the Cloud SQL built-in user (#92).
 //
 // It is idempotent: when everything is already in place it changes nothing.
 func grantAppRole(ctx context.Context, sqlDB *sql.DB, apiRole string, out io.Writer) error {
@@ -278,8 +279,8 @@ func checkAPIRole(ctx context.Context, conn *sql.Conn, apiRole string) error {
 	}
 	return fmt.Errorf("%s can do more than %s: it %s.\n"+
 		"Migrations were applied, but the API must not be deployed like this. "+
-		"An admin must fix it once (README, \"Deploying the API\" > \"One-time admin step\"), then run the Deploy API workflow by hand.",
-		apiRole, appRole, strings.Join(problems, ", "))
+		"See %s for how to fix it, then run the Deploy API workflow by hand.",
+		apiRole, appRole, strings.Join(problems, ", "), movingSection)
 }
 
 // roleDependencies lists, by pg_shdepend deptype, every object that depends

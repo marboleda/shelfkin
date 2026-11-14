@@ -134,6 +134,19 @@ resource "google_cloud_run_v2_job" "migrate" {
           }
         }
 
+        # migrate up creates shelfkin_api or sets its password from this URL,
+        # and checks that it logs in (#92).
+        env {
+          name = "API_DATABASE_URL"
+
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.api_database_url.secret_id
+              version = "latest"
+            }
+          }
+        }
+
         volume_mounts {
           name       = "cloudsql"
           mount_path = local.cloudsql_mount
@@ -154,6 +167,7 @@ resource "google_cloud_run_v2_job" "migrate" {
     google_project_service.this,
     google_secret_manager_secret_version.migrator_database_url,
     google_secret_manager_secret_iam_member.migrate_runtime,
+    google_secret_manager_secret_iam_member.migrate_runtime_api_url,
     google_project_iam_member.migrate_runtime_sql_client,
   ]
 }

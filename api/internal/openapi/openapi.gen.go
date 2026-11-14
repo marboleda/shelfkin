@@ -20,6 +20,24 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for ExpiryStatus.
+const (
+	ExpiryStatusExpired ExpiryStatus = "expired"
+	ExpiryStatusSoon    ExpiryStatus = "soon"
+)
+
+// Valid indicates whether the value is a known member of the ExpiryStatus enum.
+func (e ExpiryStatus) Valid() bool {
+	switch e {
+	case ExpiryStatusExpired:
+		return true
+	case ExpiryStatusSoon:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for HealthStatus.
 const (
 	HealthStatusOk HealthStatus = "ok"
@@ -29,6 +47,36 @@ const (
 func (e HealthStatus) Valid() bool {
 	switch e {
 	case HealthStatusOk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ItemEventType.
+const (
+	ItemEventTypeEntryCreated        ItemEventType = "entry_created"
+	ItemEventTypeEntryDeleted        ItemEventType = "entry_deleted"
+	ItemEventTypeExpiryChanged       ItemEventType = "expiry_changed"
+	ItemEventTypeLevelChanged        ItemEventType = "level_changed"
+	ItemEventTypeLocationChanged     ItemEventType = "location_changed"
+	ItemEventTypePurchaseDateChanged ItemEventType = "purchase_date_changed"
+)
+
+// Valid indicates whether the value is a known member of the ItemEventType enum.
+func (e ItemEventType) Valid() bool {
+	switch e {
+	case ItemEventTypeEntryCreated:
+		return true
+	case ItemEventTypeEntryDeleted:
+		return true
+	case ItemEventTypeExpiryChanged:
+		return true
+	case ItemEventTypeLevelChanged:
+		return true
+	case ItemEventTypeLocationChanged:
+		return true
+	case ItemEventTypePurchaseDateChanged:
 		return true
 	default:
 		return false
@@ -106,6 +154,14 @@ type CatalogItem struct {
 	// Example: 2
 	CategoryId int `json:"categoryId"`
 
+	// CategoryOverridden True if this household has its own default category for this
+	// built-in item. Always false for a custom item, whose defaults are
+	// its own.
+	//
+	//
+	// Example: false
+	CategoryOverridden bool `json:"categoryOverridden"`
+
 	// Id A UUIDv7 identifier.
 	//
 	// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
@@ -120,6 +176,13 @@ type CatalogItem struct {
 	//
 	// Example: 2
 	LocationId int `json:"locationId"`
+
+	// LocationOverridden True if this household has its own default location for this
+	// built-in item. Always false for a custom item.
+	//
+	//
+	// Example: false
+	LocationOverridden bool `json:"locationOverridden"`
 
 	// Name Example: Milk
 	Name string `json:"name"`
@@ -157,6 +220,25 @@ type Category struct {
 type CategoryList struct {
 	// Items Every category, in display order.
 	Items []Category `json:"items"`
+}
+
+// CreateCatalogItem defines model for CreateCatalogItem.
+type CreateCatalogItem struct {
+	// CategoryId Example: 9
+	CategoryId int `json:"categoryId"`
+
+	// LocationId Example: 1
+	LocationId int `json:"locationId"`
+
+	// Name 1 to 60 characters after trimming and collapsing inner whitespace.
+	//
+	// Example: Gochujang
+	Name string `json:"name"`
+
+	// ShelfLifeDays Typical shelf life in days, 1 to 3650. Omitted or null means no suggestion.
+	//
+	// Example: 365
+	ShelfLifeDays *int `json:"shelfLifeDays,omitempty"`
 }
 
 // CreateEntry defines model for CreateEntry.
@@ -212,6 +294,16 @@ type CreateHousehold struct {
 // Example: 2026-02-14
 type Date = openapi_types.Date
 
+// EntryChange The old and new value of one field. A stock level or a `YYYY-MM-DD`
+// date is a string, a location ID a number, and no expiry date is null.
+type EntryChange struct {
+	// From Example: half
+	From interface{} `json:"from"`
+
+	// To Example: low
+	To interface{} `json:"to"`
+}
+
 // Error The error format every endpoint uses.
 type Error struct {
 	Error ErrorDetail `json:"error"`
@@ -233,6 +325,13 @@ type ErrorDetail struct {
 	// Example: Household not found.
 	Message string `json:"message"`
 }
+
+// ExpiryStatus Against `today`: `expired` when `expiresOn` is before it, `soon` when
+// `expiresOn` is from `today` to `today` + 3 days inclusive, and null
+// otherwise, when there is no expiry date, or when the level is `out`.
+//
+// Example: soon
+type ExpiryStatus string
 
 // Health defines model for Health.
 type Health struct {
@@ -309,6 +408,9 @@ type InviteList struct {
 	Invites []Invite `json:"invites"`
 }
 
+// ItemEventType The kind of change an item event records.
+type ItemEventType string
+
 // JoinInviteRequest defines model for JoinInviteRequest.
 type JoinInviteRequest struct {
 	// Code The invite code. Whitespace and dashes are ignored and letters may
@@ -328,6 +430,38 @@ type JoinInviteResult struct {
 
 	// Household A household, as seen by the signed-in user.
 	Household Household `json:"household"`
+}
+
+// LastChange The entry's most recent change, for labels like "Set to Low by Sam,
+// 2h ago". Null on the entry when it has no recorded change.
+type LastChange struct {
+	// ActorId The member who made the change, or null if their account was deleted.
+	//
+	// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+	ActorId *openapi_types.UUID `json:"actorId"`
+
+	// ActorName The actor's current `displayName`, also when they have since left
+	// the household. Null if their account was deleted.
+	//
+	//
+	// Example: Sam
+	ActorName *string `json:"actorName"`
+
+	// Changes The changed field, keyed by database column name: `level`,
+	// `location_id`, `purchased_on` or `expires_on`. Exactly one key for
+	// a `*_changed` event, empty for `entry_created`.
+	//
+	//
+	// Example: {"level":{"from":"half","to":"low"}}
+	Changes map[string]EntryChange `json:"changes"`
+
+	// OccurredAt A point in time, as an RFC 3339 string in UTC.
+	//
+	// Example: 2026-01-31T18:04:05Z
+	OccurredAt Timestamp `json:"occurredAt"`
+
+	// Type The kind of change an item event records.
+	Type ItemEventType `json:"type"`
 }
 
 // Location A built-in storage location.
@@ -389,6 +523,19 @@ type MemberList struct {
 // MemberRole A member's role in a household. Each household has exactly one owner.
 type MemberRole string
 
+// Pantry A household's pantry, grouped by catalog item.
+type Pantry struct {
+	// Groups One group per catalog item with at least one (matching) entry, sorted by name, case-insensitive.
+	Groups []PantryGroup `json:"groups"`
+
+	// Today Today's date in the caller's `timezone` (see `User`), the date
+	// `expiryStatus` is computed against.
+	//
+	//
+	// Example: 2026-02-14
+	Today openapi_types.Date `json:"today"`
+}
+
 // PantryEntry One purchase of a catalog item in a household's pantry, for example "Milk (Oct 20)".
 type PantryEntry struct {
 	// CatalogItemId A UUIDv7 identifier.
@@ -410,6 +557,85 @@ type PantryEntry struct {
 	//
 	// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
 	Id Id `json:"id"`
+
+	// Level How much of an entry is left. `out` entries stay in the pantry until deleted.
+	Level StockLevel `json:"level"`
+
+	// LocationId The ID of the location the entry is stored in.
+	//
+	// Example: 2
+	LocationId int `json:"locationId"`
+
+	// PurchasedOn A calendar date with no time of day, in `YYYY-MM-DD` form.
+	//
+	// Example: 2026-02-14
+	PurchasedOn Date `json:"purchasedOn"`
+
+	// UpdatedAt When the entry last changed. A change that sets a field to the
+	// value it already has does not count.
+	//
+	//
+	// Example: 2026-01-31T18:04:05Z
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// PantryGroup The entries of one catalog item, for example "Milk ×2".
+type PantryGroup struct {
+	// CatalogItemId A UUIDv7 identifier.
+	//
+	// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+	CatalogItemId Id `json:"catalogItemId"`
+
+	// CategoryId The item's effective category for this household (its override first).
+	//
+	// Example: 1
+	CategoryId int `json:"categoryId"`
+
+	// Entries At least one entry, sorted by `purchasedOn`, then `createdAt`.
+	Entries []PantryListEntry `json:"entries"`
+
+	// IsCustom True for a custom item of this household, false for a built-in item.
+	//
+	// Example: false
+	IsCustom bool `json:"isCustom"`
+
+	// Name Example: Milk
+	Name string `json:"name"`
+}
+
+// PantryListEntry A `PantryEntry` with its expiry status and its latest change.
+type PantryListEntry struct {
+	// CatalogItemId A UUIDv7 identifier.
+	//
+	// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+	CatalogItemId Id `json:"catalogItemId"`
+
+	// CreatedAt A point in time, as an RFC 3339 string in UTC.
+	//
+	// Example: 2026-01-31T18:04:05Z
+	CreatedAt Timestamp `json:"createdAt"`
+
+	// ExpiresOn The expiry date, or null if the entry has none.
+	//
+	// Example: 2026-02-14
+	ExpiresOn *openapi_types.Date `json:"expiresOn"`
+
+	// ExpiryStatus Against `today`: `expired` when `expiresOn` is before it, `soon` when
+	// `expiresOn` is from `today` to `today` + 3 days inclusive, and null
+	// otherwise, when there is no expiry date, or when the level is `out`.
+	//
+	//
+	// Example: soon
+	ExpiryStatus *ExpiryStatus `json:"expiryStatus"`
+
+	// Id A UUIDv7 identifier.
+	//
+	// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+	Id Id `json:"id"`
+
+	// LastChange The entry's most recent change, for labels like "Set to Low by Sam,
+	// 2h ago". Null on the entry when it has no recorded change.
+	LastChange *LastChange `json:"lastChange"`
 
 	// Level How much of an entry is left. `out` entries stay in the pantry until deleted.
 	Level StockLevel `json:"level"`
@@ -476,6 +702,30 @@ type TransferOwnership struct {
 	//
 	// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
 	UserId Id `json:"userId"`
+}
+
+// UpdateCatalogItem Any of the fields. Omitted fields are unchanged.
+type UpdateCatalogItem struct {
+	// CategoryId The new default category. `null` resets a built-in item to its
+	// built-in default; a custom item cannot have `null`.
+	//
+	//
+	// Example: 3
+	CategoryId nullable.Nullable[int] `json:"categoryId,omitempty"`
+
+	// LocationId The new default location. `null` resets a built-in item to its
+	// built-in default; a custom item cannot have `null`.
+	//
+	//
+	// Example: 2
+	LocationId nullable.Nullable[int] `json:"locationId,omitempty"`
+
+	// ShelfLifeDays Custom items only: the shelf life in days, 1 to 3650, or `null`
+	// for none.
+	//
+	//
+	// Example: 30
+	ShelfLifeDays nullable.Nullable[int] `json:"shelfLifeDays,omitempty"`
 }
 
 // UpdateEntry `eventId` and exactly one of the other fields.
@@ -563,6 +813,11 @@ type User struct {
 	Timezone string `json:"timezone"`
 }
 
+// CatalogItemId A UUIDv7 identifier.
+//
+// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+type CatalogItemId = Id
+
 // EntryId A UUIDv7 identifier.
 //
 // Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
@@ -575,6 +830,9 @@ type HouseholdId = Id
 
 // BadRequest The error format every endpoint uses.
 type BadRequest = Error
+
+// CatalogItemNotFound The error format every endpoint uses.
+type CatalogItemNotFound = Error
 
 // EntryConflict The error format every endpoint uses.
 type EntryConflict = Error
@@ -614,11 +872,31 @@ type DeleteEntryParams struct {
 	EventId string `form:"eventId" json:"eventId"`
 }
 
+// GetPantryParams defines parameters for GetPantry.
+type GetPantryParams struct {
+	// LocationId Only entries stored in one of these locations. Each value must be
+	// the ID of a location (an integer), else 400 (code `invalid_filter`).
+	// A plain string, so that any other value gets code `invalid_filter`.
+	LocationId *[]string `form:"locationId,omitempty" json:"locationId,omitempty"`
+
+	// CategoryId Only items whose effective category is one of these. Each value
+	// must be the ID of a category (an integer), else 400 (code
+	// `invalid_filter`). A plain string, so that any other value gets
+	// code `invalid_filter`.
+	CategoryId *[]string `form:"categoryId,omitempty" json:"categoryId,omitempty"`
+}
+
 // CreateHouseholdJSONRequestBody defines body for CreateHousehold for application/json ContentType.
 type CreateHouseholdJSONRequestBody = CreateHousehold
 
 // UpdateHouseholdJSONRequestBody defines body for UpdateHousehold for application/json ContentType.
 type UpdateHouseholdJSONRequestBody = UpdateHousehold
+
+// CreateCatalogItemJSONRequestBody defines body for CreateCatalogItem for application/json ContentType.
+type CreateCatalogItemJSONRequestBody = CreateCatalogItem
+
+// UpdateCatalogItemJSONRequestBody defines body for UpdateCatalogItem for application/json ContentType.
+type UpdateCatalogItemJSONRequestBody = UpdateCatalogItem
 
 // CreateEntryJSONRequestBody defines body for CreateEntry for application/json ContentType.
 type CreateEntryJSONRequestBody = CreateEntry
@@ -661,6 +939,15 @@ type ServerInterface interface {
 	// UpdateHousehold Rename a household
 	// (PATCH /households/{householdId})
 	UpdateHousehold(w http.ResponseWriter, r *http.Request, householdId HouseholdId)
+	// CreateCatalogItem Create a custom catalog item
+	// (POST /households/{householdId}/catalog-items)
+	CreateCatalogItem(w http.ResponseWriter, r *http.Request, householdId HouseholdId)
+	// GetCatalogItem Get one catalog item with the household's defaults
+	// (GET /households/{householdId}/catalog-items/{itemId})
+	GetCatalogItem(w http.ResponseWriter, r *http.Request, householdId HouseholdId, itemId CatalogItemId)
+	// UpdateCatalogItem Change the household's defaults for a catalog item
+	// (PATCH /households/{householdId}/catalog-items/{itemId})
+	UpdateCatalogItem(w http.ResponseWriter, r *http.Request, householdId HouseholdId, itemId CatalogItemId)
 	// SearchCatalog Type-ahead search of the household's catalog
 	// (GET /households/{householdId}/catalog/search)
 	SearchCatalog(w http.ResponseWriter, r *http.Request, householdId HouseholdId, params SearchCatalogParams)
@@ -688,6 +975,9 @@ type ServerInterface interface {
 	// RemoveMember Remove a member, or leave the household
 	// (DELETE /households/{householdId}/members/{userId})
 	RemoveMember(w http.ResponseWriter, r *http.Request, householdId HouseholdId, userId Id)
+	// GetPantry The household's whole pantry, grouped by item
+	// (GET /households/{householdId}/pantry)
+	GetPantry(w http.ResponseWriter, r *http.Request, householdId HouseholdId, params GetPantryParams)
 	// TransferOwnership Make another member the owner
 	// (POST /households/{householdId}/transfer-ownership)
 	TransferOwnership(w http.ResponseWriter, r *http.Request, householdId HouseholdId)
@@ -845,6 +1135,102 @@ func (siw *ServerInterfaceWrapper) UpdateHousehold(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.UpdateHousehold(w, r, householdId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateCatalogItem operation middleware
+func (siw *ServerInterfaceWrapper) CreateCatalogItem(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "householdId" -------------
+	var householdId HouseholdId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "householdId", r.PathValue("householdId"), &householdId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "householdId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateCatalogItem(w, r, householdId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetCatalogItem operation middleware
+func (siw *ServerInterfaceWrapper) GetCatalogItem(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "householdId" -------------
+	var householdId HouseholdId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "householdId", r.PathValue("householdId"), &householdId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "householdId", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "itemId" -------------
+	var itemId CatalogItemId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "itemId", r.PathValue("itemId"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "itemId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetCatalogItem(w, r, householdId, itemId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateCatalogItem operation middleware
+func (siw *ServerInterfaceWrapper) UpdateCatalogItem(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "householdId" -------------
+	var householdId HouseholdId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "householdId", r.PathValue("householdId"), &householdId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "householdId", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "itemId" -------------
+	var itemId CatalogItemId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "itemId", r.PathValue("itemId"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "itemId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateCatalogItem(w, r, householdId, itemId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1169,6 +1555,61 @@ func (siw *ServerInterfaceWrapper) RemoveMember(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
+// GetPantry operation middleware
+func (siw *ServerInterfaceWrapper) GetPantry(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "householdId" -------------
+	var householdId HouseholdId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "householdId", r.PathValue("householdId"), &householdId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "householdId", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetPantryParams
+
+	// ------------- Optional query parameter "locationId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "locationId", r.URL.Query(), &params.LocationId, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "locationId"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "locationId", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "categoryId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "categoryId", r.URL.Query(), &params.CategoryId, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "categoryId"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "categoryId", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetPantry(w, r, householdId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // TransferOwnership operation middleware
 func (siw *ServerInterfaceWrapper) TransferOwnership(w http.ResponseWriter, r *http.Request) {
 
@@ -1424,10 +1865,14 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/households/{householdId}/entries", wrapper.CreateEntry)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/households/{householdId}/entries/{entryId}", wrapper.DeleteEntry)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/households/{householdId}/entries/{entryId}", wrapper.UpdateEntry)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/households/{householdId}/pantry", wrapper.GetPantry)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/households/{householdId}/members", wrapper.ListMembers)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/households/{householdId}/members/{userId}", wrapper.RemoveMember)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/households/{householdId}/transfer-ownership", wrapper.TransferOwnership)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/households/{householdId}/catalog/search", wrapper.SearchCatalog)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/households/{householdId}/catalog-items", wrapper.CreateCatalogItem)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/households/{householdId}/catalog-items/{itemId}", wrapper.GetCatalogItem)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/households/{householdId}/catalog-items/{itemId}", wrapper.UpdateCatalogItem)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/categories", wrapper.ListCategories)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/locations", wrapper.ListLocations)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/households/{householdId}/invites", wrapper.ListInvites)
@@ -1439,6 +1884,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 }
 
 type BadRequestJSONResponse Error
+
+type CatalogItemNotFoundJSONResponse Error
 
 type EntryConflictJSONResponse Error
 
@@ -1915,6 +2362,262 @@ func (response UpdateHousehold404JSONResponse) VisitUpdateHouseholdResponse(w ht
 type UpdateHousehold500JSONResponse struct{ InternalErrorJSONResponse }
 
 func (response UpdateHousehold500JSONResponse) VisitUpdateHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCatalogItemRequestObject struct {
+	HouseholdId HouseholdId `json:"householdId"`
+	Body        *CreateCatalogItemJSONRequestBody
+}
+
+type CreateCatalogItemResponseObject interface {
+	VisitCreateCatalogItemResponse(w http.ResponseWriter) error
+}
+
+type CreateCatalogItem201JSONResponse CatalogItem
+
+func (response CreateCatalogItem201JSONResponse) VisitCreateCatalogItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCatalogItem400JSONResponse Error
+
+func (response CreateCatalogItem400JSONResponse) VisitCreateCatalogItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCatalogItem401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response CreateCatalogItem401JSONResponse) VisitCreateCatalogItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCatalogItem404JSONResponse struct{ HouseholdNotFoundJSONResponse }
+
+func (response CreateCatalogItem404JSONResponse) VisitCreateCatalogItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCatalogItem409JSONResponse Error
+
+func (response CreateCatalogItem409JSONResponse) VisitCreateCatalogItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCatalogItem500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response CreateCatalogItem500JSONResponse) VisitCreateCatalogItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCatalogItemRequestObject struct {
+	HouseholdId HouseholdId   `json:"householdId"`
+	ItemId      CatalogItemId `json:"itemId"`
+}
+
+type GetCatalogItemResponseObject interface {
+	VisitGetCatalogItemResponse(w http.ResponseWriter) error
+}
+
+type GetCatalogItem200JSONResponse CatalogItem
+
+func (response GetCatalogItem200JSONResponse) VisitGetCatalogItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCatalogItem400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response GetCatalogItem400JSONResponse) VisitGetCatalogItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCatalogItem401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetCatalogItem401JSONResponse) VisitGetCatalogItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCatalogItem404JSONResponse struct {
+	CatalogItemNotFoundJSONResponse
+}
+
+func (response GetCatalogItem404JSONResponse) VisitGetCatalogItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCatalogItem500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetCatalogItem500JSONResponse) VisitGetCatalogItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateCatalogItemRequestObject struct {
+	HouseholdId HouseholdId   `json:"householdId"`
+	ItemId      CatalogItemId `json:"itemId"`
+	Body        *UpdateCatalogItemJSONRequestBody
+}
+
+type UpdateCatalogItemResponseObject interface {
+	VisitUpdateCatalogItemResponse(w http.ResponseWriter) error
+}
+
+type UpdateCatalogItem200JSONResponse CatalogItem
+
+func (response UpdateCatalogItem200JSONResponse) VisitUpdateCatalogItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateCatalogItem400JSONResponse Error
+
+func (response UpdateCatalogItem400JSONResponse) VisitUpdateCatalogItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateCatalogItem401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response UpdateCatalogItem401JSONResponse) VisitUpdateCatalogItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateCatalogItem404JSONResponse struct {
+	CatalogItemNotFoundJSONResponse
+}
+
+func (response UpdateCatalogItem404JSONResponse) VisitUpdateCatalogItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateCatalogItem500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response UpdateCatalogItem500JSONResponse) VisitUpdateCatalogItemResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -2744,6 +3447,85 @@ func (response RemoveMember500JSONResponse) VisitRemoveMemberResponse(w http.Res
 	return err
 }
 
+type GetPantryRequestObject struct {
+	HouseholdId HouseholdId `json:"householdId"`
+	Params      GetPantryParams
+}
+
+type GetPantryResponseObject interface {
+	VisitGetPantryResponse(w http.ResponseWriter) error
+}
+
+type GetPantry200JSONResponse Pantry
+
+func (response GetPantry200JSONResponse) VisitGetPantryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPantry400JSONResponse Error
+
+func (response GetPantry400JSONResponse) VisitGetPantryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPantry401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetPantry401JSONResponse) VisitGetPantryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPantry404JSONResponse struct{ HouseholdNotFoundJSONResponse }
+
+func (response GetPantry404JSONResponse) VisitGetPantryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPantry500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetPantry500JSONResponse) VisitGetPantryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type TransferOwnershipRequestObject struct {
 	HouseholdId HouseholdId `json:"householdId"`
 	Body        *TransferOwnershipJSONRequestBody
@@ -3236,6 +4018,15 @@ type StrictServerInterface interface {
 	// UpdateHousehold Rename a household
 	// (PATCH /households/{householdId})
 	UpdateHousehold(ctx context.Context, request UpdateHouseholdRequestObject) (UpdateHouseholdResponseObject, error)
+	// CreateCatalogItem Create a custom catalog item
+	// (POST /households/{householdId}/catalog-items)
+	CreateCatalogItem(ctx context.Context, request CreateCatalogItemRequestObject) (CreateCatalogItemResponseObject, error)
+	// GetCatalogItem Get one catalog item with the household's defaults
+	// (GET /households/{householdId}/catalog-items/{itemId})
+	GetCatalogItem(ctx context.Context, request GetCatalogItemRequestObject) (GetCatalogItemResponseObject, error)
+	// UpdateCatalogItem Change the household's defaults for a catalog item
+	// (PATCH /households/{householdId}/catalog-items/{itemId})
+	UpdateCatalogItem(ctx context.Context, request UpdateCatalogItemRequestObject) (UpdateCatalogItemResponseObject, error)
 	// SearchCatalog Type-ahead search of the household's catalog
 	// (GET /households/{householdId}/catalog/search)
 	SearchCatalog(ctx context.Context, request SearchCatalogRequestObject) (SearchCatalogResponseObject, error)
@@ -3263,6 +4054,9 @@ type StrictServerInterface interface {
 	// RemoveMember Remove a member, or leave the household
 	// (DELETE /households/{householdId}/members/{userId})
 	RemoveMember(ctx context.Context, request RemoveMemberRequestObject) (RemoveMemberResponseObject, error)
+	// GetPantry The household's whole pantry, grouped by item
+	// (GET /households/{householdId}/pantry)
+	GetPantry(ctx context.Context, request GetPantryRequestObject) (GetPantryResponseObject, error)
 	// TransferOwnership Make another member the owner
 	// (POST /households/{householdId}/transfer-ownership)
 	TransferOwnership(ctx context.Context, request TransferOwnershipRequestObject) (TransferOwnershipResponseObject, error)
@@ -3506,6 +4300,100 @@ func (sh *strictHandler) UpdateHousehold(w http.ResponseWriter, r *http.Request,
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(UpdateHouseholdResponseObject); ok {
 		if err := validResponse.VisitUpdateHouseholdResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateCatalogItem operation middleware
+func (sh *strictHandler) CreateCatalogItem(w http.ResponseWriter, r *http.Request, householdId HouseholdId) {
+	var request CreateCatalogItemRequestObject
+
+	request.HouseholdId = householdId
+
+	var body CreateCatalogItemJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateCatalogItem(ctx, request.(CreateCatalogItemRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateCatalogItem")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateCatalogItemResponseObject); ok {
+		if err := validResponse.VisitCreateCatalogItemResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetCatalogItem operation middleware
+func (sh *strictHandler) GetCatalogItem(w http.ResponseWriter, r *http.Request, householdId HouseholdId, itemId CatalogItemId) {
+	var request GetCatalogItemRequestObject
+
+	request.HouseholdId = householdId
+	request.ItemId = itemId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetCatalogItem(ctx, request.(GetCatalogItemRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetCatalogItem")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetCatalogItemResponseObject); ok {
+		if err := validResponse.VisitGetCatalogItemResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateCatalogItem operation middleware
+func (sh *strictHandler) UpdateCatalogItem(w http.ResponseWriter, r *http.Request, householdId HouseholdId, itemId CatalogItemId) {
+	var request UpdateCatalogItemRequestObject
+
+	request.HouseholdId = householdId
+	request.ItemId = itemId
+
+	var body UpdateCatalogItemJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateCatalogItem(ctx, request.(UpdateCatalogItemRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateCatalogItem")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateCatalogItemResponseObject); ok {
+		if err := validResponse.VisitUpdateCatalogItemResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -3760,6 +4648,33 @@ func (sh *strictHandler) RemoveMember(w http.ResponseWriter, r *http.Request, ho
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RemoveMemberResponseObject); ok {
 		if err := validResponse.VisitRemoveMemberResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetPantry operation middleware
+func (sh *strictHandler) GetPantry(w http.ResponseWriter, r *http.Request, householdId HouseholdId, params GetPantryParams) {
+	var request GetPantryRequestObject
+
+	request.HouseholdId = householdId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetPantry(ctx, request.(GetPantryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetPantry")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetPantryResponseObject); ok {
+		if err := validResponse.VisitGetPantryResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
