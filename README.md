@@ -465,21 +465,21 @@ The next deploy from `main` replaces a rolled-back release. Viewing the release 
 
 ### Production checks after the first web deploy
 
-Run these once and record the results on #39:
+Run these once and record the results on #39. Sign-in, sign-up, password reset and the route guards use only Firebase Auth, so everything outside the last two groups works before the API is deployed. Until then, screens that load data from the API show load errors.
 
 - `curl -sI https://shelfkin-5da75.web.app/<path>` for `/`, `/settings`, `/entries/abc` and `/join/ABCDEFGH`: 200 with `cache-control: no-cache`. A hashed `/_expo/static/js/web/entry-*.js` has `immutable`.
 - The first run's summary shows the commit SHA and the release `sites/shelfkin-5da75/versions/<id>`, and its smoke checks step passed.
 - Signed out, opening `/settings` or `/entries/abc` in a fresh tab goes to `/sign-in?redirect=…` (the app's HTML, not a Hosting 404). `/nope` shows "Page not found".
+- A new user can sign up and sign in against the production Firebase project.
+- Signed in, opening `/`, `/settings` and `/entries/abc` in a fresh tab, and reloading, lands on that screen.
+- Send a real password-reset email from the sign-in screen. Its link goes to Firebase's default action handler on `<project_id>.firebaseapp.com`; confirm it opens, the new password can be set, and sign-in works with it. This matters because no default Hosting site should exist for the project (see [Outputs to GitHub Actions and EAS variables](#outputs-to-github-actions-and-eas-variables)).
 - The release history shows the `Commit <sha>` message, and a rollback (above) works.
 - Once #33 has landed:
   - `curl -sI` on `/.well-known/apple-app-site-association` and `/.well-known/assetlinks.json` shows 200, `content-type: application/json` and no redirect, and the body is the committed file.
   - Opening `/join/ABCDEFGH` in a fresh tab, and reloading, shows the invite screen. Until #33 it shows "Page not found".
 - Once the API is deployed:
-  - Signed in, opening `/`, `/settings` and `/entries/abc` in a fresh tab, and reloading, lands on that screen.
   - Settings shows "Server: Connected".
-  - A new user can sign up and sign in against the production Firebase project.
-  - The site also works at `https://shelfkin-5da75.firebaseapp.com`.
-  - Send a real password-reset email from the sign-in screen. Its link goes to Firebase's default action handler on `<project_id>.firebaseapp.com`; confirm it opens, the new password can be set, and sign-in works with it. This matters because no default Hosting site should exist for the project (see [Outputs to GitHub Actions and EAS variables](#outputs-to-github-actions-and-eas-variables)).
+  - The site also works at `https://shelfkin-5da75.firebaseapp.com`, including Settings showing "Server: Connected" there (both origins are allowed by CORS).
 
 ## Deploying the API
 
