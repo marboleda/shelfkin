@@ -7,6 +7,7 @@ import { Text, View } from 'react-native';
 import { useIsWideLayout } from '@/hooks/use-is-wide-layout';
 import { MIN_TOUCH_TARGET, SIDE_NAV_WIDTH, useTheme, useThemedStyles, type Theme } from '@/theme';
 
+import { HouseholdSwitcher } from './household-switcher';
 import { PressableLink } from './pressable-link';
 import { APP_NAME } from './screen';
 
@@ -116,6 +117,7 @@ export function SideNav({ activeLabel, insets }: NavProps) {
       ]}
     >
       <Text style={styles.brand}>{APP_NAME}</Text>
+      <HouseholdSwitcher placement="sideNav" />
       {NAV_ITEMS.map((item) => {
         const active = item.label === activeLabel;
         return (

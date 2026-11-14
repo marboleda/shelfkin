@@ -11,6 +11,7 @@ import { firebaseConfig } from '@/auth/config';
 import { ProfileSync } from '@/auth/profile';
 import { useAuth } from '@/auth/session';
 import { ConfigError } from '@/components/config-error';
+import { CurrentHouseholdProvider } from '@/household/current-household';
 import { getNavigationTheme, useTheme } from '@/theme';
 import { useAppFonts } from '@/theme/fonts';
 
@@ -53,7 +54,9 @@ export default function RootLayout() {
       ) : (
         <QueryProvider>
           <ProfileSync />
-          <AppRoutes />
+          <CurrentHouseholdProvider>
+            <AppRoutes />
+          </CurrentHouseholdProvider>
         </QueryProvider>
       )}
     </ThemeProvider>
