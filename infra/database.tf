@@ -50,6 +50,8 @@ resource "random_password" "migrator" {
   special = false
 }
 
+# The shelfkin_api password. There is no Cloud SQL user for it: it only goes
+# into api-database-url, and the migrate job sets it on the role (#92).
 resource "random_password" "api" {
   length  = 32
   special = false
@@ -67,13 +69,21 @@ resource "google_sql_user" "migrator" {
   deletion_policy = "ABANDON"
 }
 
-# The API and the expiry job log in as this user and switch to shelfkin_app
-# (#10). The grant is made in #38, after migrations have created the role.
-resource "google_sql_user" "api" {
-  name     = "shelfkin_api"
-  instance = google_sql_database_instance.main.name
-  type     = "BUILT_IN"
-  password = random_password.api.result
+# shelfkin_api, the login the API and the expiry job use before switching to
+# shelfkin_app (#10), is not a Cloud SQL user. Cloud SQL makes every built-in
+# user a member of cloudsqlsuperuser, granted as cloudsqladmin, and no role we
+# have can revoke that, so the #38 grant step rightly refuses such a login.
+# Instead the migrate job, as shelfkin_migrator, creates shelfkin_api with SQL
+# and keeps its password in step with api-database-url (api/cmd/migrate,
+# https://github.com/marboleda/shelfkin/issues/92).
+#
+# The old built-in user is forgotten from state without a Cloud SQL API call;
+# the README ("Moving shelfkin_api off the Cloud SQL built-in user") says how
+# it is then deleted by hand, once.
+removed {
+  from = google_sql_user.api
 
-  deletion_policy = "ABANDON"
+  lifecycle {
+    destroy = false
+  }
 }

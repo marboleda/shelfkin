@@ -37,7 +37,8 @@ resource "google_secret_manager_secret_iam_member" "api_runtime" {
   member    = google_service_account.api_runtime.member
 }
 
-# --- migrate-runtime: connect to Cloud SQL, read its own DATABASE_URL ---
+# --- migrate-runtime: connect to Cloud SQL, read its own DATABASE_URL and
+# the API's ---
 
 resource "google_project_iam_member" "migrate_runtime_sql_client" {
   project = var.project_id
@@ -47,6 +48,14 @@ resource "google_project_iam_member" "migrate_runtime_sql_client" {
 
 resource "google_secret_manager_secret_iam_member" "migrate_runtime" {
   secret_id = google_secret_manager_secret.migrator_database_url.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = google_service_account.migrate_runtime.member
+}
+
+# The migrate job reads the API's URL (API_DATABASE_URL) to create
+# shelfkin_api and set its password (#92).
+resource "google_secret_manager_secret_iam_member" "migrate_runtime_api_url" {
+  secret_id = google_secret_manager_secret.api_database_url.id
   role      = "roles/secretmanager.secretAccessor"
   member    = google_service_account.migrate_runtime.member
 }
