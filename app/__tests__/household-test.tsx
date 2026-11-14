@@ -23,7 +23,8 @@ jest.mock('expo-font', () => ({
 }));
 
 // Record where the switcher moves focus to.
-jest.mock('@/components/focus', () => ({ focusElement: jest.fn() }));
+// Native behaviour: focus returns as soon as the list closes (see household-focus-test for web).
+jest.mock('@/components/focus', () => ({ focusElement: jest.fn(), focusWaitsForModalDismiss: () => false }));
 const mockFocus = focusElement as jest.MockedFunction<typeof focusElement>;
 
 // Retry without delay, and keep the app's QueryClient to trigger household-scoped queries.
@@ -575,7 +576,7 @@ describe('side-nav switcher', () => {
     await press(await screen.findByLabelText(label('Home')));
     mockFocus.mockClear();
     // The backdrop covers the whole window outside the popover.
-    await press(screen.getAllByTestId('overlay-backdrop', { includeHiddenElements: true })[0]);
+    await fireEvent(screen.getAllByTestId('overlay-backdrop', { includeHiddenElements: true })[0], 'responderRelease');
 
     expect(screen.queryByTestId('household-popover')).toBeNull();
     expect(screen.getByLabelText(label('Home'))).toBeTruthy();

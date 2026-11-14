@@ -4,7 +4,7 @@
 // offers the create and join forms.
 
 import Feather from '@expo/vector-icons/Feather';
-import { useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 import { Modal, Pressable, ScrollView, Text, View, type ViewInstance } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -13,7 +13,7 @@ import { householdInitial, roleLabel, type Household } from '@/household/househo
 import { useSwitchHousehold } from '@/household/navigation';
 import { MIN_TOUCH_TARGET, useTheme, useThemedStyles, type Theme } from '@/theme';
 
-import { focusElement } from './focus';
+import { focusElement, focusWaitsForModalDismiss } from './focus';
 import { CreateHouseholdForm, JoinHouseholdForm } from './household-forms';
 
 export const HOUSEHOLD_LIST_LABEL = 'Your households';
@@ -39,6 +39,13 @@ export function HouseholdSwitcher({ placement }: { placement: Placement }) {
   const [anchor, setAnchor] = useState<Anchor | null>(null);
   const buttonRef = useRef<ViewInstance>(null);
   const restoreFocus = useRef(false);
+  // The mode as of the last commit, for the Modal's `onDismiss`.
+  const modeRef = useRef<Mode>(mode);
+  useLayoutEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
+  // The last form opened, so the dialog keeps its name while it closes.
+  const [lastForm, setLastForm] = useState<'create' | 'join'>('create');
   const switchHousehold = useSwitchHousehold();
 
   const open = useCallback(() => {
@@ -53,13 +60,19 @@ export function HouseholdSwitcher({ placement }: { placement: Placement }) {
     setMode('closed');
   }, []);
 
-  // Back on the switcher button after the list or a form closes, however it closed.
-  useEffect(() => {
-    if (mode === 'closed' && restoreFocus.current) {
+  // Back on the switcher button after the list or a form closes, however it
+  // closed. On web this waits for the Modal's `onDismiss`, which comes after the
+  // Modal has unmounted: while it is mounted, RN-Web's focus trap pulls focus
+  // back inside it, and then focus falls to <body> when it unmounts.
+  const returnFocus = useCallback(() => {
+    if (modeRef.current === 'closed' && restoreFocus.current) {
       restoreFocus.current = false;
       focusElement(buttonRef.current);
     }
-  }, [mode]);
+  }, []);
+  useEffect(() => {
+    if (mode === 'closed' && !focusWaitsForModalDismiss()) returnFocus();
+  }, [mode, returnFocus]);
 
   const choose = useCallback(
     (householdId: string) => {
@@ -73,8 +86,14 @@ export function HouseholdSwitcher({ placement }: { placement: Placement }) {
     <HouseholdList
       currentId={current.id}
       onChoose={choose}
-      onCreate={() => setMode('create')}
-      onJoin={() => setMode('join')}
+      onCreate={() => {
+        setLastForm('create');
+        setMode('create');
+      }}
+      onJoin={() => {
+        setLastForm('join');
+        setMode('join');
+      }}
     />
   );
   const form =
@@ -83,7 +102,7 @@ export function HouseholdSwitcher({ placement }: { placement: Placement }) {
     ) : mode === 'join' ? (
       <JoinHouseholdForm autoFocus onJoined={close} />
     ) : null;
-  const formTitle = mode === 'create' ? 'Create a household' : 'Join with a code';
+  const formTitle = lastForm === 'create' ? 'Create a household' : 'Join with a code';
 
   return (
     <>
@@ -95,15 +114,20 @@ export function HouseholdSwitcher({ placement }: { placement: Placement }) {
         onPress={open}
       />
       {placement === 'header' ? (
-        <BottomSheet visible={mode !== 'closed'} onClose={close} label={form ? formTitle : HOUSEHOLD_LIST_LABEL}>
+        <BottomSheet
+          visible={mode !== 'closed'}
+          onClose={close}
+          onDismiss={returnFocus}
+          label={form ? formTitle : HOUSEHOLD_LIST_LABEL}
+        >
           {form ? <FormPanel title={formTitle} onCancel={close} form={form} /> : list}
         </BottomSheet>
       ) : (
         <>
-          <Popover visible={mode === 'list'} anchor={anchor} onClose={close}>
+          <Popover visible={mode === 'list'} anchor={anchor} onClose={close} onDismiss={returnFocus}>
             {list}
           </Popover>
-          <CenteredDialog visible={form !== null} onClose={close} label={formTitle}>
+          <CenteredDialog visible={form !== null} onClose={close} onDismiss={returnFocus} label={formTitle}>
             {form ? <FormPanel title={formTitle} onCancel={close} form={form} /> : null}
           </CenteredDialog>
         </>
@@ -257,6 +281,8 @@ function FormPanel({ title, form, onCancel }: { title: string; form: ReactNode; 
 type OverlayProps = {
   visible: boolean;
   onClose: () => void;
+  /** Called once the overlay has finished closing and is gone. */
+  onDismiss: () => void;
   children: ReactNode;
 };
 
@@ -264,24 +290,28 @@ type OverlayProps = {
  * A full-window layer behind an overlay. Tapping or clicking it closes the
  * overlay. Not focusable or announced: screen reader users close with the
  * platform's escape gesture, the back button or Escape.
+ *
+ * A plain View with a touch responder, not a Pressable: on web a Pressable
+ * gets a `tabindex` (-1 at best), and RN-Web's Modal focus trap moves focus to
+ * the first element that accepts `focus()`, so it would land on the backdrop
+ * when Tab wraps around or a dialog opens.
  */
 function Backdrop({ onClose, dim }: { onClose: () => void; dim: boolean }) {
   const styles = useThemedStyles(createStyles);
   return (
-    <Pressable
+    <View
       testID="overlay-backdrop"
-      onPress={onClose}
+      onStartShouldSetResponder={() => true}
+      onResponderRelease={onClose}
       accessible={false}
       importantForAccessibility="no"
-      focusable={false}
-      tabIndex={-1}
       style={[styles.backdrop, dim && styles.backdropDim]}
     />
   );
 }
 
 /** The phone list: a sheet from the bottom of the window. */
-function BottomSheet({ visible, onClose, label, children }: OverlayProps & { label: string }) {
+function BottomSheet({ visible, onClose, onDismiss, label, children }: OverlayProps & { label: string }) {
   const styles = useThemedStyles(createStyles);
   const insets = useSafeAreaInsets();
   return (
@@ -290,6 +320,7 @@ function BottomSheet({ visible, onClose, label, children }: OverlayProps & { lab
       transparent
       animationType="slide"
       onRequestClose={onClose}
+      onDismiss={onDismiss}
       statusBarTranslucent
       navigationBarTranslucent
       aria-label={label}
@@ -314,14 +345,21 @@ function BottomSheet({ visible, onClose, label, children }: OverlayProps & { lab
 }
 
 /** The wide-layout list: a popover directly below the side-nav button. */
-function Popover({ visible, anchor, onClose, children }: OverlayProps & { anchor: Anchor | null }) {
+function Popover({ visible, anchor, onClose, onDismiss, children }: OverlayProps & { anchor: Anchor | null }) {
   const styles = useThemedStyles(createStyles);
   const { spacing } = useTheme();
   const position = anchor
     ? { top: anchor.y + anchor.height + spacing.xs, left: anchor.x, width: Math.max(anchor.width, POPOVER_WIDTH) }
     : { top: spacing.xxl * 3, left: spacing.md, width: POPOVER_WIDTH };
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose} aria-label={HOUSEHOLD_LIST_LABEL}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="none"
+      onRequestClose={onClose}
+      onDismiss={onDismiss}
+      aria-label={HOUSEHOLD_LIST_LABEL}
+    >
       <View style={styles.fill}>
         <Backdrop onClose={onClose} dim={false} />
         <View
@@ -341,10 +379,10 @@ function Popover({ visible, anchor, onClose, children }: OverlayProps & { anchor
 }
 
 /** The wide-layout create and join forms: a dialog in the middle of the window. */
-function CenteredDialog({ visible, onClose, label, children }: OverlayProps & { label: string }) {
+function CenteredDialog({ visible, onClose, onDismiss, label, children }: OverlayProps & { label: string }) {
   const styles = useThemedStyles(createStyles);
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} aria-label={label}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} onDismiss={onDismiss} aria-label={label}>
       <View style={styles.centeredLayer}>
         <Backdrop onClose={onClose} dim />
         <View
