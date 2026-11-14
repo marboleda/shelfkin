@@ -369,7 +369,7 @@ describe('current household', () => {
     expect(screen.queryByTestId('household-notice')).toBeNull();
   });
 
-  test('losing access to the only household goes to onboarding', async () => {
+  test('losing access to the only household goes to onboarding and says so', async () => {
     const api = answerHouseholds([HOME]);
     await renderRouter(APP_DIR, { initialUrl: '/' });
     expect(await screen.findByLabelText(label('Home'))).toBeTruthy();
@@ -387,6 +387,7 @@ describe('current household', () => {
     });
 
     expect(await screen.findByRole('heading', { name: 'Set up your pantry' })).toBeTruthy();
+    expect(screen.getByTestId('household-notice')).toHaveTextContent(/You no longer have access to Home/);
   });
 });
 
