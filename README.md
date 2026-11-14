@@ -468,10 +468,14 @@ The next deploy from `main` replaces a rolled-back release. Viewing the release 
 Run these once and record the results on #39:
 
 - `curl -sI https://shelfkin-5da75.web.app/<path>` for `/`, `/settings`, `/entries/abc` and `/join/ABCDEFGH`: 200 with `cache-control: no-cache`. A hashed `/_expo/static/js/web/entry-*.js` has `immutable`.
-- Opening each of those paths in a fresh tab, and reloading, lands on that screen. `/nope` shows "Page not found".
+- The first run's summary shows the commit SHA and the release `sites/shelfkin-5da75/versions/<id>`, and its smoke checks step passed.
+- Signed out, opening `/settings` or `/entries/abc` in a fresh tab goes to `/sign-in?redirect=…` (the app's HTML, not a Hosting 404). `/nope` shows "Page not found".
 - The release history shows the `Commit <sha>` message, and a rollback (above) works.
-- Once #33 has added them: `curl -sI` on `/.well-known/apple-app-site-association` and `/.well-known/assetlinks.json` shows 200, `content-type: application/json` and no redirect, and the body is the committed file.
+- Once #33 has landed:
+  - `curl -sI` on `/.well-known/apple-app-site-association` and `/.well-known/assetlinks.json` shows 200, `content-type: application/json` and no redirect, and the body is the committed file.
+  - Opening `/join/ABCDEFGH` in a fresh tab, and reloading, shows the invite screen. Until #33 it shows "Page not found".
 - Once the API is deployed:
+  - Signed in, opening `/`, `/settings` and `/entries/abc` in a fresh tab, and reloading, lands on that screen.
   - Settings shows "Server: Connected".
   - A new user can sign up and sign in against the production Firebase project.
   - The site also works at `https://shelfkin-5da75.firebaseapp.com`.
