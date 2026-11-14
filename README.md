@@ -309,7 +309,7 @@ CI runs `terraform fmt -check`, `terraform init -backend=false`, `terraform vali
 Notes for the workflows and the app:
 
 - Workload Identity only issues tokens to `marboleda/shelfkin` workflows on `refs/heads/main` triggered by `workflow_run` or `workflow_dispatch` (the deploy triggers of #38 and #39). A deploy workflow with any other trigger, such as `push` or `pull_request_target`, cannot authenticate; widen the condition in `infra/wif.tf` if one is needed.
-- The `authDomain` output is Firebase's default `<project_id>.firebaseapp.com`, which is **not** in the authorized domains (those are exactly `<hosting_site_id>.web.app`, `<hosting_site_id>.firebaseapp.com` and `localhost`). Email/password sign-in does not need it. Redirect or popup sign-in flows would, so #39 should either use `<hosting_site_id>.firebaseapp.com` as `authDomain` or add the default domain to `authorized_domains` in `infra/firebase.tf`.
+- The `authDomain` output is Firebase's default `<project_id>.firebaseapp.com`, which is **not** in the authorized domains (those are exactly `<hosting_site_id>.web.app`, `<hosting_site_id>.firebaseapp.com` and `localhost`). Decision (#39): the web build uses this default `authDomain` as is (`EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN` = `firebase_web_config.authDomain`). That is fine because the app only uses email/password (`signInWithEmailAndPassword`, `createUserWithEmailAndPassword`, and `sendPasswordResetEmail` with no `continueUrl`), with no popup or redirect sign-in, so the auth domain is never loaded as a page from the site. Adding a popup or redirect provider (Google, Apple) would need this revisited: either use `<hosting_site_id>.firebaseapp.com` as `authDomain` or add the default domain to `authorized_domains` in `infra/firebase.tf`.
 - Do not click "Get started" under Hosting in the Firebase console: it can create a default site named after the project and add its domains to the authorized domains. If a plan ever shows a change to `authorized_domains`, apply restores the list.
 
 ### IAM: Owner and Editor
@@ -429,12 +429,27 @@ Every deploy is a release in the site's history, labelled `Commit <sha>`. To go 
 - Or from the command line, copying an earlier version to the live channel (needs Firebase Hosting Admin):
 
   ```sh
-  npx firebase-tools@15.34.2 hosting:clone shelfkin-5da75:@<version id> shelfkin-5da75:live --project shelfkin-514420
+  # <version id> is the last part of sites/shelfkin-5da75/versions/<version id> (run summary or release history)
+  npx firebase-tools@15.34.2 hosting:clone shelfkin-5da75@<version id> shelfkin-5da75:live --project shelfkin-514420
   ```
 
 - Or revert the change on `main` and let CI deploy it.
 
 The next deploy from `main` replaces a rolled-back release. Viewing the release history needs at least Firebase Hosting Viewer on the project.
+
+### Production checks after the first web deploy
+
+Run these once and record the results on #39:
+
+- `curl -sI https://shelfkin-5da75.web.app/<path>` for `/`, `/settings`, `/entries/abc` and `/join/ABCDEFGH`: 200 with `cache-control: no-cache`. A hashed `/_expo/static/js/web/entry-*.js` has `immutable`.
+- Opening each of those paths in a fresh tab, and reloading, lands on that screen. `/nope` shows "Page not found".
+- The release history shows the `Commit <sha>` message, and a rollback (above) works.
+- Once #33 has added them: `curl -sI` on `/.well-known/apple-app-site-association` and `/.well-known/assetlinks.json` shows 200, `content-type: application/json` and no redirect, and the body is the committed file.
+- Once the API is deployed:
+  - Settings shows "Server: Connected".
+  - A new user can sign up and sign in against the production Firebase project.
+  - The site also works at `https://shelfkin-5da75.firebaseapp.com`.
+  - Send a real password-reset email from the sign-in screen. Its link goes to Firebase's default action handler on `<project_id>.firebaseapp.com`; confirm it opens, the new password can be set, and sign-in works with it. This matters because no default Hosting site should exist for the project (see [Outputs to GitHub Actions and EAS variables](#outputs-to-github-actions-and-eas-variables)).
 
 ## Deploying the API
 
