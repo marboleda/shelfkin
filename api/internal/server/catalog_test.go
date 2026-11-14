@@ -342,12 +342,13 @@ func TestSearchCatalogFields(t *testing.T) {
 	if len(out.Items) != 1 {
 		t.Fatalf("search = %s, want one item", b)
 	}
-	keys := make([]string, 0, 6)
+	keys := make([]string, 0, 8)
 	for k := range out.Items[0] {
 		keys = append(keys, k)
 	}
 	slices.Sort(keys)
-	if want := []string{"categoryId", "id", "isCustom", "locationId", "name", "shelfLifeDays"}; !reflect.DeepEqual(keys, want) {
+	// categoryOverridden and locationOverridden were added by #18.
+	if want := []string{"categoryId", "categoryOverridden", "id", "isCustom", "locationId", "locationOverridden", "name", "shelfLifeDays"}; !reflect.DeepEqual(keys, want) {
 		t.Errorf("item keys = %q, want %q", keys, want)
 	}
 	if v, ok := out.Items[0]["shelfLifeDays"]; !ok || v != nil {
