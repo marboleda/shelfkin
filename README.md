@@ -8,7 +8,7 @@ Shelfkin is an app for managing a household pantry: the ingredients a household 
 |---|---|
 | `api/` | Go HTTP API (deployed to Cloud Run) |
 | `infra/` | Terraform for the production GCP and Firebase project (see [Infrastructure](#infrastructure)) |
-| `app/` | Expo (React Native) app for web, iOS and Android, using Expo Router; screens live in `app/src/app/` |
+| `app/` | Expo (React Native) app for web, iOS and Android, using Expo Router; screens live in `app/src/app/`. The web build is served by Firebase Hosting (`firebase.json`, see [Deploying the web app](#deploying-the-web-app)) |
 | `openapi/` | The API contract, `openapi/openapi.yaml` (OpenAPI 3.0.3), that the Go server interface and the app's types are generated from (see [API spec and generated code](#api-spec-and-generated-code)) |
 | [`docs/`](docs/) | Product plan, data model and backlog |
 
@@ -309,7 +309,7 @@ CI runs `terraform fmt -check`, `terraform init -backend=false`, `terraform vali
 Notes for the workflows and the app:
 
 - Workload Identity only issues tokens to `marboleda/shelfkin` workflows on `refs/heads/main` triggered by `workflow_run` or `workflow_dispatch` (the deploy triggers of #38 and #39). A deploy workflow with any other trigger, such as `push` or `pull_request_target`, cannot authenticate; widen the condition in `infra/wif.tf` if one is needed.
-- The `authDomain` output is Firebase's default `<project_id>.firebaseapp.com`, which is **not** in the authorized domains (those are exactly `<hosting_site_id>.web.app`, `<hosting_site_id>.firebaseapp.com` and `localhost`). Email/password sign-in does not need it. Redirect or popup sign-in flows would, so #39 should either use `<hosting_site_id>.firebaseapp.com` as `authDomain` or add the default domain to `authorized_domains` in `infra/firebase.tf`.
+- The `authDomain` output is Firebase's default `<project_id>.firebaseapp.com`, which is **not** in the authorized domains (those are exactly `<hosting_site_id>.web.app`, `<hosting_site_id>.firebaseapp.com` and `localhost`). Decision (#39): the web build uses this default `authDomain` as is (`EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN` = `firebase_web_config.authDomain`). That is fine because the app only uses email/password (`signInWithEmailAndPassword`, `createUserWithEmailAndPassword`, and `sendPasswordResetEmail` with no `continueUrl`), with no popup or redirect sign-in, so the auth domain is never loaded as a page from the site. Adding a popup or redirect provider (Google, Apple) would need this revisited: either use `<hosting_site_id>.firebaseapp.com` as `authDomain` or add the default domain to `authorized_domains` in `infra/firebase.tf`.
 - Do not click "Get started" under Hosting in the Firebase console: it can create a default site named after the project and add its domains to the authorized domains. If a plan ever shows a change to `authorized_domains`, apply restores the list.
 
 ### IAM: Owner and Editor
@@ -404,6 +404,83 @@ This sets the new password on the Cloud SQL user and replaces the `migrator-data
 ### Destroying
 
 Cloud SQL has deletion protection on, so `terraform destroy` fails until it is turned off. Set both `deletion_protection = false` and `settings.deletion_protection_enabled = false` in `infra/database.tf`, run `terraform apply`, then `terraform destroy`. This deletes the database and its backups. A deleted Workload Identity pool keeps its ID reserved for 30 days. The state bucket, the project and its billing link are not managed by Terraform.
+
+## Deploying the web app
+
+`.github/workflows/deploy-web.yml` builds the Expo web app with `npx expo export --platform web` and publishes `app/dist` to Firebase Hosting, at `https://shelfkin-5da75.web.app` (and `https://shelfkin-5da75.firebaseapp.com`). It authenticates with Workload Identity Federation as `github-deployer`, the same as [Deploying the API](#deploying-the-api), and uses no Firebase CI token, key or secret. `firebase-tools` is pinned in the workflow (`FIREBASE_TOOLS_VERSION`).
+
+The Hosting config is in `firebase.json` and `.firebaserc`:
+
+- `app/app.json` sets `web.output` to `single`: the export is one `index.html` plus hashed bundles, and Expo Router picks the screen in the browser. Every path that is not a file is rewritten to `/index.html`, so `/settings`, `/entries/<id>` and `/join/<code>` open directly or on reload, and an unknown path shows the app's "Page not found" screen (Hosting returns 200 for it).
+- `/_expo/**`, `/assets/**` and `/.well-known/**` are never rewritten, so a missing bundle or association file is a real 404, not the app's HTML.
+- HTML and every other unhashed file are served with `Cache-Control: no-cache`, so a reload after a deploy gets the new version. Hashed files under `/_expo/` and `/assets/` get `public, max-age=31536000, immutable`.
+- `/.well-known/apple-app-site-association` and `/.well-known/assetlinks.json` are served as `application/json` from `app/public/.well-known/` (added in #33). `ignore` in `firebase.json` is empty on purpose: the default would drop dotfiles (`.well-known`) and `node_modules` paths (Expo puts font and image assets under `assets/node_modules/`).
+- `firebase.json` deploys the Hosting target `web`, and `.firebaserc` maps it to the site `shelfkin-5da75` in project `shelfkin-514420`. The workflow fails if that mapping differs from the `FIREBASE_HOSTING_SITE` variable.
+
+### What triggers a web deploy
+
+- **Automatically**, when the `CI` workflow succeeds for a push to `main`. It builds the exact commit CI tested. A failed CI run, a pull request (including from a fork) or any other branch deploys nothing. As with the API, a run whose commit is no longer the tip of `main` deploys nothing and says so in its summary; the newer commit deploys when its CI passes.
+- **By hand**: Actions > Deploy web > Run workflow, on `main` (or `gh workflow run deploy-web.yml --ref main`). It deploys the commit `main` points to. Other branches are refused.
+
+Only one web deploy runs at a time. It runs independently of the API deploy.
+
+### Actions variables
+
+Set these as repository Actions **variables** (Settings > Secrets and variables > Actions > Variables), from `terraform output` (see [Outputs to GitHub Actions and EAS variables](#outputs-to-github-actions-and-eas-variables)). None is a secret; the Firebase web API key ships in the bundle.
+
+| Variable | Value |
+|---|---|
+| `GCP_PROJECT_ID`, `GCP_WIF_PROVIDER`, `GCP_DEPLOYER_SA` | Shared with the API deploy |
+| `FIREBASE_HOSTING_SITE` | `hosting_site_id` (`shelfkin-5da75`) |
+| `EXPO_PUBLIC_API_URL` | `api_url`, the Cloud Run URL (same value as `API_URL`) |
+| `EXPO_PUBLIC_FIREBASE_API_KEY` | `firebase_web_config.apiKey` |
+| `EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN` | `firebase_web_config.authDomain` |
+| `EXPO_PUBLIC_FIREBASE_PROJECT_ID` | `firebase_web_config.projectId` |
+
+If any of them is missing or blank, the run fails before building, so a site that would only show the app's configuration error screen is never published. The build also forces `EXPO_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST` empty and fails if the configured values were not inlined into the bundle.
+
+### What a web deploy does
+
+1. Checks the variables and the Hosting target, checks out the commit, runs `npm ci` and `npx expo export --platform web` in `app/` with the variables above.
+2. Runs `firebase deploy --only hosting:web` with the message `Commit <sha>`, which creates a new release on the live channel.
+3. Smoke checks on `https://<site>.web.app`: `/`, `/settings`, `/entries/abc`, `/join/ABCDEFGH` and `/nope` return 200 with the app's HTML and `no-cache`; the entry bundle is `immutable`; each association file is either a 404 (with a warning, until #33 adds it) or 200 JSON. Any other result fails the run (the release is already live then; roll back below if needed).
+
+The run summary shows the commit SHA, the site and the Hosting release (`sites/<site>/versions/<version>`).
+
+### Rolling back the web app
+
+Every deploy is a release in the site's history, labelled `Commit <sha>`. To go back:
+
+- Firebase console > Hosting > `shelfkin-5da75` > Release history, find the last good release, then the three-dot menu > **Rollback**. This makes that version live again at once.
+- Or from the command line, copying an earlier version to the live channel (needs Firebase Hosting Admin):
+
+  ```sh
+  # <version id> is the last part of sites/shelfkin-5da75/versions/<version id> (run summary or release history)
+  npx firebase-tools@15.34.2 hosting:clone shelfkin-5da75@<version id> shelfkin-5da75:live --project shelfkin-514420
+  ```
+
+- Or revert the change on `main` and let CI deploy it.
+
+The next deploy from `main` replaces a rolled-back release. Viewing the release history needs at least Firebase Hosting Viewer on the project.
+
+### Production checks after the first web deploy
+
+Run these once and record the results on #39. Creating an account, sign-in, password reset and the route guards use only Firebase Auth, so everything outside the last two groups works before the API is deployed. Until then, screens that load data from the API show load errors (on Settings, the name and the Server line), and the name entered at sign-up is not saved: it stays in that browser and is sent with PATCH /me the next time the app starts there after the API is up.
+
+- `curl -sI https://shelfkin-5da75.web.app/<path>` for `/`, `/settings`, `/entries/abc` and `/join/ABCDEFGH`: 200 with `cache-control: no-cache`. A hashed `/_expo/static/js/web/entry-*.js` has `immutable`.
+- The first run's summary shows the commit SHA and the release `sites/shelfkin-5da75/versions/<id>`, and its smoke checks step passed.
+- Signed out, opening `/settings` or `/entries/abc` in a fresh tab goes to `/sign-in?redirect=…` (the app's HTML, not a Hosting 404). `/nope` shows "Page not found".
+- A new user can sign up and sign in against the production Firebase project.
+- Signed in, opening `/`, `/settings` and `/entries/abc` in a fresh tab, and reloading, lands on that screen.
+- Send a real password-reset email from the sign-in screen. Its link goes to Firebase's default action handler on `<project_id>.firebaseapp.com`; confirm it opens, the new password can be set, and sign-in works with it. This matters because no default Hosting site should exist for the project (see [Outputs to GitHub Actions and EAS variables](#outputs-to-github-actions-and-eas-variables)).
+- The release history shows the `Commit <sha>` message, and a rollback (above) works.
+- Once #33 has landed:
+  - `curl -sI` on `/.well-known/apple-app-site-association` and `/.well-known/assetlinks.json` shows 200, `content-type: application/json` and no redirect, and the body is the committed file.
+  - Opening `/join/ABCDEFGH` in a fresh tab, and reloading, shows the invite screen. Until #33 it shows "Page not found".
+- Once the API is deployed:
+  - Sign up a new user: Settings shows the name entered at sign-up (sent with PATCH /me after sign-up).
+  - Settings shows "Server: Connected".
+  - The site also works at `https://shelfkin-5da75.firebaseapp.com`, including Settings showing "Server: Connected" there (both origins are allowed by CORS).
 
 ## Deploying the API
 
