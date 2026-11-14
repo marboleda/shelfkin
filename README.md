@@ -465,7 +465,7 @@ The next deploy from `main` replaces a rolled-back release. Viewing the release 
 
 ### Production checks after the first web deploy
 
-Run these once and record the results on #39. Sign-in, sign-up, password reset and the route guards use only Firebase Auth, so everything outside the last two groups works before the API is deployed. Until then, screens that load data from the API show load errors.
+Run these once and record the results on #39. Creating an account, sign-in, password reset and the route guards use only Firebase Auth, so everything outside the last two groups works before the API is deployed. Until then, screens that load data from the API show load errors (on Settings, the name and the Server line), and the name entered at sign-up is not saved: it stays in that browser and is sent with PATCH /me the next time the app starts there after the API is up.
 
 - `curl -sI https://shelfkin-5da75.web.app/<path>` for `/`, `/settings`, `/entries/abc` and `/join/ABCDEFGH`: 200 with `cache-control: no-cache`. A hashed `/_expo/static/js/web/entry-*.js` has `immutable`.
 - The first run's summary shows the commit SHA and the release `sites/shelfkin-5da75/versions/<id>`, and its smoke checks step passed.
@@ -478,6 +478,7 @@ Run these once and record the results on #39. Sign-in, sign-up, password reset a
   - `curl -sI` on `/.well-known/apple-app-site-association` and `/.well-known/assetlinks.json` shows 200, `content-type: application/json` and no redirect, and the body is the committed file.
   - Opening `/join/ABCDEFGH` in a fresh tab, and reloading, shows the invite screen. Until #33 it shows "Page not found".
 - Once the API is deployed:
+  - Sign up a new user: Settings shows the name entered at sign-up (sent with PATCH /me after sign-up).
   - Settings shows "Server: Connected".
   - The site also works at `https://shelfkin-5da75.firebaseapp.com`, including Settings showing "Server: Connected" there (both origins are allowed by CORS).
 
