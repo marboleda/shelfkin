@@ -20,11 +20,38 @@ import (
 
 // fakeSender records every batch and answers with ticket(msg) for each
 // message, or with err for the whole batch when failBatch(msgs) is true.
+// Receipts records each request and answers with receipt(id) for each ticket
+// ID (an ok receipt for every ID when receipt is nil; no receipt when it
+// returns false), or with receiptErr.
 type fakeSender struct {
-	mu        sync.Mutex
-	batches   [][]expiry.Message
-	ticket    func(expiry.Message) expiry.Ticket
-	failBatch func([]expiry.Message) bool
+	mu         sync.Mutex
+	batches    [][]expiry.Message
+	ticket     func(expiry.Message) expiry.Ticket
+	failBatch  func([]expiry.Message) bool
+	receiptReq [][]string
+	receipt    func(id string) (expiry.Receipt, bool)
+	receiptErr error
+}
+
+func (f *fakeSender) Receipts(_ context.Context, ids []string) (map[string]expiry.Receipt, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(ids) > expiry.MaxReceiptBatchSize {
+		return nil, fmt.Errorf("fake: receipts request with %d IDs", len(ids))
+	}
+	f.receiptReq = append(f.receiptReq, slices.Clone(ids))
+	if f.receiptErr != nil {
+		return nil, f.receiptErr
+	}
+	out := map[string]expiry.Receipt{}
+	for _, id := range ids {
+		if f.receipt == nil {
+			out[id] = expiry.Receipt{Status: expiry.TicketOK}
+		} else if r, ok := f.receipt(id); ok {
+			out[id] = r
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeSender) Send(_ context.Context, msgs []expiry.Message) ([]expiry.Ticket, error) {
