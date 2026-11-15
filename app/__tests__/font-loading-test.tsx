@@ -71,7 +71,7 @@ describe('font loading', () => {
     expect(mockHide).not.toHaveBeenCalled();
     // No white panel behind the splash screen (or on web, which has none).
     expect(screen.getByTestId('fonts-loading')).toHaveStyle({ backgroundColor: colors.dark.background });
-    expect(screen.queryByRole('heading', { name: 'Pantry' })).toBeNull();
+    expect(screen.queryByLabelText('Switch household, current: Home')).toBeNull();
   });
 
   test('opens the app and hides the splash screen once fonts load', async () => {
@@ -79,7 +79,7 @@ describe('font loading', () => {
     await renderRouter(APP_DIR, { initialUrl: '/' });
 
     expect(screen.queryByTestId('fonts-loading')).toBeNull();
-    expect(screen.getByRole('heading', { name: 'Pantry' })).toBeTruthy();
+    expect(screen.getByLabelText('Switch household, current: Home')).toBeTruthy();
     expect(mockHide).toHaveBeenCalled();
   });
 
@@ -88,7 +88,7 @@ describe('font loading', () => {
     mockUseFonts.mockImplementation(() => [false, new Error('offline')]);
     await renderRouter(APP_DIR, { initialUrl: '/' });
 
-    expect(screen.getByRole('heading', { name: 'Pantry' })).toBeTruthy();
+    expect(screen.getByLabelText('Switch household, current: Home')).toBeTruthy();
     expect(screen.getByTestId('bottom-tab-bar')).toBeTruthy();
     expect(mockHide).toHaveBeenCalled();
     warn.mockRestore();
@@ -97,13 +97,13 @@ describe('font loading', () => {
   test('if fonts never settle, the app opens after the timeout instead of waiting forever', async () => {
     mockUseFonts.mockImplementation(() => [false, null]);
     await renderRouter(APP_DIR, { initialUrl: '/' });
-    expect(screen.queryByRole('heading', { name: 'Pantry' })).toBeNull();
+    expect(screen.queryByLabelText('Switch household, current: Home')).toBeNull();
 
     await act(async () => {
       jest.advanceTimersByTime(FONT_LOAD_TIMEOUT_MS);
     });
 
-    expect(screen.getByRole('heading', { name: 'Pantry' })).toBeTruthy();
+    expect(screen.getByLabelText('Switch household, current: Home')).toBeTruthy();
     expect(mockHide).toHaveBeenCalled();
   });
 });

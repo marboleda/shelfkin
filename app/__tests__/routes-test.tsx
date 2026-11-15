@@ -2,12 +2,12 @@ import { act, fireEvent } from '@testing-library/react-native';
 import { renderRouter, screen, testRouter } from 'expo-router/testing-library';
 import { Dimensions } from 'react-native';
 import { setupApiServer } from '../test-utils/api';
-import { mockFirebase, signedInApiHandlers, signInTestUser } from '../test-utils/auth';
+import { householdsHandler, mockFirebase, signedInApiHandlers, signInTestUser } from '../test-utils/auth';
 
 jest.setTimeout(60000);
 
 // These tests render the signed-in app: sign the test user in and answer its API calls.
-setupApiServer(...signedInApiHandlers());
+const server = setupApiServer(...signedInApiHandlers());
 beforeEach(() => {
   signInTestUser();
 });
@@ -39,19 +39,26 @@ describe('routes', () => {
     await renderRouter(APP_DIR, { initialUrl: '/' });
 
     expect(screen).toHavePathname('/');
-    expect(screen.getByRole('heading', { name: 'Pantry' })).toBeTruthy();
+    expect(screen.getByLabelText('Switch household, current: Home')).toBeTruthy();
   });
 
   test.each([
     ['/add', 'Add item'],
     ['/settings', 'Settings'],
-    ['/onboarding', 'Onboarding'],
     ['/entries/abc', 'Entry detail'],
   ])('%s opens the %s placeholder directly', async (url, heading) => {
     await renderRouter(APP_DIR, { initialUrl: url });
 
     expect(screen).toHavePathname(url);
     expect(screen.getByRole('heading', { name: heading })).toBeTruthy();
+  });
+
+  test('/onboarding opens directly for a user with no household', async () => {
+    server.use(householdsHandler([]));
+    await renderRouter(APP_DIR, { initialUrl: '/onboarding' });
+
+    expect(screen).toHavePathname('/onboarding');
+    expect(await screen.findByRole('heading', { name: 'Set up your pantry' })).toBeTruthy();
   });
 
   test('entry detail shows the id from the URL', async () => {
@@ -61,7 +68,8 @@ describe('routes', () => {
   });
 
   test.each(['/sign-in', '/sign-up', '/onboarding'])('%s has no tab bar or side nav', async (url) => {
-    if (url !== '/onboarding') mockFirebase.signOutElsewhere();
+    if (url === '/onboarding') server.use(householdsHandler([]));
+    else mockFirebase.signOutElsewhere();
     await renderRouter(APP_DIR, { initialUrl: url });
     expect(screen).toHavePathname(url);
 
@@ -78,7 +86,7 @@ describe('routes', () => {
       fireEvent.press(screen.getByText('Go to Pantry'));
     });
     expect(screen).toHavePathname('/');
-    expect(screen.getByRole('heading', { name: 'Pantry' })).toBeTruthy();
+    expect(screen.getByLabelText('Switch household, current: Home')).toBeTruthy();
   });
 });
 

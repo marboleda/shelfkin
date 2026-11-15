@@ -212,7 +212,8 @@ describe('theme on screen', () => {
     mockUseColorScheme.mockReturnValue('dark');
     await renderRouter('./src/app', { initialUrl: '/' });
 
-    const heading = screen.getByRole('heading', { name: 'Pantry' });
+    // Below 768 px the Pantry heading is the household switcher, showing the household's name.
+    const heading = screen.getByText('Home');
     expect(StyleSheet.flatten(heading.props.style).color).toBe(colors.dark.text);
     expect(StyleSheet.flatten(heading.props.style).fontFamily).toBe('Figtree_700Bold');
     expect(screen.getByTestId('bottom-tab-bar')).toHaveStyle({ backgroundColor: colors.dark.surface });
