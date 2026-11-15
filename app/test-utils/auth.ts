@@ -8,6 +8,7 @@ import type { components } from '@/api/schema';
 
 import { mockFirebase } from '../jest/firebase-auth-mock';
 import { apiUrl } from './api';
+import { locationsHandler, pantryHandler } from './pantry';
 
 export { mockFirebase };
 
@@ -54,9 +55,10 @@ export function householdsHandler(households: Household[] = [testHousehold()]) {
 }
 
 /**
- * `GET /me`, `PATCH /me` (echoing the changes), `GET /health` and
- * `GET /households` (one household, "Home"), for tests that render the
- * signed-in app but are not about the profile or households.
+ * `GET /me`, `PATCH /me` (echoing the changes), `GET /health`,
+ * `GET /households` (one household, "Home"), and an empty pantry with the
+ * test locations, for tests that render the signed-in app but are not about
+ * the profile, households or pantry.
  */
 export function signedInApiHandlers(me: User = testMe(), households: Household[] = [testHousehold()]) {
   let current = me;
@@ -68,5 +70,7 @@ export function signedInApiHandlers(me: User = testMe(), households: Household[]
       return HttpResponse.json(current);
     }),
     http.get(apiUrl('/health'), () => HttpResponse.json({ status: 'ok' })),
+    pantryHandler(),
+    locationsHandler(),
   ];
 }

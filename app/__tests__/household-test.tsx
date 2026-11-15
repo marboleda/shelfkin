@@ -440,7 +440,7 @@ describe('switcher placement', () => {
     expect(screen.queryByTestId('household-sheet')).toBeNull();
     expect(within(screen.getByTestId('screen-content')).getByLabelText(label('Home'))).toBeTruthy();
     expect(screen.queryByTestId('households-loading')).toBeNull();
-    expect(screen.getByText("Your household's items will appear here.")).toBeTruthy();
+    expect(await screen.findByText('Your pantry is empty')).toBeTruthy();
 
     await setWindowWidth(800);
     expect(within(screen.getByTestId('side-nav')).getByLabelText(label('Home'))).toBeTruthy();
