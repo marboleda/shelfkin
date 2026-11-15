@@ -1,0 +1,12 @@
+{
+  "projects": {
+    "default": "shelfkin-514420"
+  },
+  "targets": {
+    "shelfkin-514420": {
+      "hosting": {
+        "web": ["shelfkin-5da75"]
+      }
+    }
+  }
+}

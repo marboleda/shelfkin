@@ -1,0 +1,243 @@
+name: Deploy web
+
+# Builds the Expo web app (`npx expo export --platform web`) and publishes it
+# to Firebase Hosting. See "Deploying the web app" in the README.
+#
+# Only these two triggers: the Workload Identity provider from infra/wif.tf
+# admits only workflow_run and workflow_dispatch tokens on refs/heads/main.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+# One web deploy at a time. GitHub keeps at most one pending run per group and
+# replaces it with a newer one, so two merges in quick succession end with the
+# newer commit deployed.
+concurrency:
+  group: deploy-web
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  # Pinned; bump on purpose.
+  FIREBASE_TOOLS_VERSION: 15.34.2
+
+jobs:
+  # Decides whether to deploy, without any Google credentials.
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    # A workflow_run token carries refs/heads/main even when CI ran for a pull
+    # request (including one from a fork), so check where the tested commit
+    # came from: a successful CI run for a push to main in this repository.
+    # By hand, only on main.
+    if: >-
+      (github.event_name == 'workflow_run'
+        && github.event.workflow_run.conclusion == 'success'
+        && github.event.workflow_run.event == 'push'
+        && github.event.workflow_run.head_branch == 'main'
+        && github.event.workflow_run.head_repository.full_name == github.repository)
+      || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+      deploy: ${{ steps.sha.outputs.deploy }}
+    steps:
+      # The exact commit CI tested. By hand, the commit main pointed to when
+      # the run was started.
+      #
+      # CI runs for two quick merges can finish out of order. When main has
+      # moved on since this commit, its newer commit deploys when its own CI
+      # passes, so this run deploys nothing rather than going backwards.
+      - name: Pick the commit
+        id: sha
+        env:
+          SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" != workflow_run ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          main="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if [ "$main" = "$SHA" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipped deploying ${SHA}: it is no longer the tip of main (now ${main}), which deploys when its CI passes."
+            echo "Skipped deploying \`${SHA}\`: it is no longer the tip of \`main\` (now \`${main}\`), which deploys when its CI passes." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  deploy:
+    name: deploy
+    needs: check
+    if: needs.check.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SHA: ${{ needs.check.outputs.sha }}
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      SITE: ${{ vars.FIREBASE_HOSTING_SITE }}
+    steps:
+      # A missing variable stops the run here, before anything is built or
+      # deployed. (A production build without them would also show the app's
+      # configuration error screen, #24 and #25, so it must never ship.)
+      - name: Check the Actions variables
+        run: |
+          missing=0
+          for v in GCP_PROJECT_ID GCP_WIF_PROVIDER GCP_DEPLOYER_SA FIREBASE_HOSTING_SITE \
+            EXPO_PUBLIC_API_URL EXPO_PUBLIC_FIREBASE_API_KEY EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN EXPO_PUBLIC_FIREBASE_PROJECT_ID; do
+            if [ -z "$(printf '%s' "${!v}" | tr -d '[:space:]')" ]; then
+              echo "::error::Actions variable $v is not set (see \"Deploying the web app\" in the README)"
+              missing=1
+            fi
+          done
+          exit "$missing"
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          GCP_DEPLOYER_SA: ${{ vars.GCP_DEPLOYER_SA }}
+          FIREBASE_HOSTING_SITE: ${{ vars.FIREBASE_HOSTING_SITE }}
+          EXPO_PUBLIC_API_URL: ${{ vars.EXPO_PUBLIC_API_URL }}
+          EXPO_PUBLIC_FIREBASE_API_KEY: ${{ vars.EXPO_PUBLIC_FIREBASE_API_KEY }}
+          EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ vars.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN }}
+          EXPO_PUBLIC_FIREBASE_PROJECT_ID: ${{ vars.EXPO_PUBLIC_FIREBASE_PROJECT_ID }}
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SHA }}
+          persist-credentials: false
+
+      # firebase.json deploys the `web` target; .firebaserc maps it to a site.
+      # Fail rather than publish to a different site than the variables name.
+      - name: Check the Hosting target
+        run: |
+          mapped="$(jq -r --arg p "$PROJECT_ID" '.targets[$p].hosting.web // [] | join(",")' .firebaserc)"
+          if [ "$mapped" != "$SITE" ]; then
+            echo "::error::.firebaserc maps the web target of ${PROJECT_ID} to '${mapped}', but FIREBASE_HOSTING_SITE is '${SITE}'. Update one of them."
+            exit 1
+          fi
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install
+        working-directory: app
+        run: npm ci
+
+      # Production settings: Expo inlines the EXPO_PUBLIC_* values at build
+      # time. The emulator variable is forced empty so a production build can
+      # never point at the Auth emulator.
+      - name: Build the web app
+        working-directory: app
+        env:
+          NODE_ENV: production
+          EXPO_PUBLIC_API_URL: ${{ vars.EXPO_PUBLIC_API_URL }}
+          EXPO_PUBLIC_FIREBASE_API_KEY: ${{ vars.EXPO_PUBLIC_FIREBASE_API_KEY }}
+          EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ vars.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN }}
+          EXPO_PUBLIC_FIREBASE_PROJECT_ID: ${{ vars.EXPO_PUBLIC_FIREBASE_PROJECT_ID }}
+          EXPO_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST: ''
+        run: |
+          npx expo export --platform web --output-dir dist
+          test -f dist/index.html
+          # The values must be inlined into the bundle, or the site would show
+          # the configuration error screen.
+          for v in "$EXPO_PUBLIC_API_URL" "$EXPO_PUBLIC_FIREBASE_API_KEY" "$EXPO_PUBLIC_FIREBASE_PROJECT_ID"; do
+            if ! grep -rqF -- "$v" dist/_expo/static/js/web/; then
+              echo "::error::The web bundle does not contain a configured EXPO_PUBLIC_* value; it was not inlined."
+              exit 1
+            fi
+          done
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+
+      # firebase-tools uses the Application Default Credentials the auth step
+      # set up. No Firebase CI token, key or secret.
+      - name: Deploy to Firebase Hosting
+        id: deploy
+        run: |
+          npx --yes "firebase-tools@${FIREBASE_TOOLS_VERSION}" deploy \
+            --only hosting:web \
+            --project "$PROJECT_ID" \
+            --message "Commit ${SHA}" \
+            --non-interactive --json | tee deploy.json
+          jq -e '.status == "success"' deploy.json > /dev/null
+          # sites/<site>/versions/<version>
+          version="$(jq -r '.result.hosting | if type == "array" then .[0] else . end // ""' deploy.json)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke checks
+        run: |
+          set -u
+          fail=0
+          base="https://${SITE}.web.app"
+
+          header() { tr -d '\r' < "$1" | grep -i "^$2:" | tail -1 | cut -d' ' -f2- ; }
+
+          # Every app URL is the app's HTML, never a Hosting 404, and not cached.
+          for path in / /settings /entries/abc /join/ABCDEFGH /nope; do
+            code="$(curl -sS -o page.html -D page.h -w '%{http_code}' --retry 3 --retry-all-errors "${base}${path}")"
+            cc="$(header page.h cache-control)"
+            echo "GET ${path} -> ${code}, Cache-Control: ${cc}"
+            if [ "$code" != 200 ] || ! grep -q '<div id="root">' page.html || [ "$cc" != no-cache ]; then
+              echo "::error::GET ${path} returned ${code} (Cache-Control: ${cc}), want 200 with the app's HTML and no-cache"
+              fail=1
+            fi
+          done
+
+          # The entry bundle is immutable.
+          js="$(grep -o '/_expo/static/js/web/entry-[^"]*\.js' page.html | head -1)"
+          code="$(curl -sS -o /dev/null -D js.h -w '%{http_code}' "${base}${js}")"
+          cc="$(header js.h cache-control)"
+          echo "GET ${js} -> ${code}, Cache-Control: ${cc}"
+          if [ "$code" != 200 ] || [[ "$cc" != *immutable* ]]; then
+            echo "::error::GET ${js} returned ${code} (Cache-Control: ${cc}), want 200 and immutable"
+            fail=1
+          fi
+
+          # The association files come from #33. Until they exist the path is
+          # a 404 (never the app's HTML); once they exist they must be JSON.
+          for path in /.well-known/apple-app-site-association /.well-known/assetlinks.json; do
+            code="$(curl -sS -o wk.body -D wk.h -w '%{http_code}' "${base}${path}")"
+            ct="$(header wk.h content-type)"
+            echo "GET ${path} -> ${code}, Content-Type: ${ct}"
+            if [ "$code" = 404 ]; then
+              echo "::warning::${path} is not deployed yet (#33)"
+            elif [ "$code" != 200 ] || [[ "$ct" != application/json* ]] || ! jq -e . wk.body > /dev/null; then
+              echo "::error::GET ${path} returned ${code} (Content-Type: ${ct}), want 200 with JSON"
+              fail=1
+            fi
+          done
+
+          exit "$fail"
+
+      - name: Summary
+        if: always() && steps.deploy.outcome != 'skipped'
+        env:
+          VERSION: ${{ steps.deploy.outputs.version }}
+        run: |
+          {
+            echo "### Web deploy"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Commit | \`${SHA}\` |"
+            echo "| Hosting site | \`${SITE}\` (https://${SITE}.web.app) |"
+            echo "| Hosting release | \`${VERSION:-not released}\` |"
+            echo "| Release message | Commit ${SHA} |"
+          } >> "$GITHUB_STEP_SUMMARY"
