@@ -348,7 +348,9 @@ Firebase returns `USER_DISABLED` for a disabled account whatever password is giv
 To check without a browser, send the same request the Firebase JS SDK makes, with the web API key (`firebase_web_config.apiKey`, see [Outputs](#outputs-to-github-actions-and-eas-variables)):
 
 ```sh
-curl -sS -X POST "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$WEB_API_KEY"   -H 'Content-Type: application/json'   -d '{"email":"<throwaway email>","password":"<any password>","returnSecureToken":true}'
+curl -sS -X POST "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$WEB_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"<throwaway email>","password":"<any password>","returnSecureToken":true}'
 # "message": "USER_DISABLED"
 ```
 
