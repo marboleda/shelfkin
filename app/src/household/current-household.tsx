@@ -52,6 +52,12 @@ type HouseholdsContextValue = {
   adopt: (household: Household) => void;
   /** Reloads the list after a 404 for `householdId`, and switches away if it is gone. */
   reportHouseholdNotFound: (householdId: string) => Promise<void>;
+  /**
+   * Drops a household the user just left or deleted from the list and forgets
+   * its cached data. If it was current, the app falls back to the first
+   * household (or onboarding when none are left).
+   */
+  forget: (householdId: string) => void;
   notice: Notice | null;
   showNotice: (message: string) => void;
   dismissNotice: () => void;
@@ -152,6 +158,18 @@ export function CurrentHouseholdProvider({ children }: { children: ReactNode }) 
     [uid, queryClient, switchTo],
   );
 
+  const forget = useCallback(
+    (householdId: string) => {
+      setAdopted((previous) => (previous?.household.id === householdId ? null : previous));
+      queryClient.setQueryData<Household[]>(queryKeys.households.list(), (previous) =>
+        previous?.filter((item) => item.id !== householdId),
+      );
+      queryClient.removeQueries({ queryKey: queryKeys.households.detail(householdId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.households.list(), exact: true });
+    },
+    [queryClient],
+  );
+
   // Messages belong to the user they were shown to.
   const [noticeState, setNotice] = useState<(Notice & { uid: string | null }) | null>(null);
   const notice = noticeState && noticeState.uid === uid ? noticeState : null;
@@ -239,8 +257,8 @@ export function CurrentHouseholdProvider({ children }: { children: ReactNode }) 
   }, [uid, households, selectionLoaded, current, list.isError, list.error, refetch, isFetching]);
 
   const value = useMemo(
-    () => ({ state, switchTo, adopt, reportHouseholdNotFound, notice, showNotice, dismissNotice }),
-    [state, switchTo, adopt, reportHouseholdNotFound, notice, showNotice, dismissNotice],
+    () => ({ state, switchTo, adopt, reportHouseholdNotFound, forget, notice, showNotice, dismissNotice }),
+    [state, switchTo, adopt, reportHouseholdNotFound, forget, notice, showNotice, dismissNotice],
   );
 
   return <HouseholdsContext.Provider value={value}>{children}</HouseholdsContext.Provider>;

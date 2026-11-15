@@ -45,6 +45,7 @@ function Shell() {
       >
         <Tabs.Screen name="index" options={{ title: 'Pantry' }} />
         <Tabs.Screen name="settings" options={{ title: 'Settings' }} />
+        <Tabs.Screen name="settings/household" options={{ title: 'Household' }} />
         <Tabs.Screen name="add" options={{ title: 'Add item' }} />
         <Tabs.Screen name="entries/[id]" options={{ title: 'Entry detail' }} />
       </Tabs>

@@ -22,7 +22,7 @@ type NavItem = {
 
 export const NAV_ITEMS: NavItem[] = [
   { label: 'Pantry', href: '/', icon: 'package', routes: ['index', 'add', 'entries/[id]'] },
-  { label: 'Settings', href: '/settings', icon: 'settings', routes: ['settings'] },
+  { label: 'Settings', href: '/settings', icon: 'settings', routes: ['settings', 'settings/household'] },
 ];
 
 /**
