@@ -43,7 +43,8 @@ func (q *Queries) DeleteHousehold(ctx context.Context, id pgtype.UUID) (int64, e
 }
 
 const getHousehold = `-- name: GetHousehold :one
-SELECT h.id, h.name, m.role, h.created_at
+SELECT h.id, h.name, m.role, h.created_at,
+    (SELECT count(*) FROM household_members c WHERE c.household_id = h.id)::int AS member_count
 FROM households h
 JOIN household_members m ON m.household_id = h.id
 WHERE h.id = $1 AND m.user_id = $2
@@ -55,14 +56,15 @@ type GetHouseholdParams struct {
 }
 
 type GetHouseholdRow struct {
-	ID        pgtype.UUID
-	Name      string
-	Role      MemberRole
-	CreatedAt pgtype.Timestamptz
+	ID          pgtype.UUID
+	Name        string
+	Role        MemberRole
+	CreatedAt   pgtype.Timestamptz
+	MemberCount int32
 }
 
-// One household with the caller's role. No row if it does not exist or the
-// caller is not a member.
+// One household with the caller's role and member count. No row if it does
+// not exist or the caller is not a member.
 func (q *Queries) GetHousehold(ctx context.Context, arg GetHouseholdParams) (GetHouseholdRow, error) {
 	row := q.db.QueryRow(ctx, getHousehold, arg.ID, arg.UserID)
 	var i GetHouseholdRow
@@ -71,12 +73,14 @@ func (q *Queries) GetHousehold(ctx context.Context, arg GetHouseholdParams) (Get
 		&i.Name,
 		&i.Role,
 		&i.CreatedAt,
+		&i.MemberCount,
 	)
 	return i, err
 }
 
 const listHouseholds = `-- name: ListHouseholds :many
-SELECT h.id, h.name, m.role, h.created_at
+SELECT h.id, h.name, m.role, h.created_at,
+    (SELECT count(*) FROM household_members c WHERE c.household_id = h.id)::int AS member_count
 FROM households h
 JOIN household_members m ON m.household_id = h.id
 WHERE m.user_id = $1
@@ -84,14 +88,18 @@ ORDER BY lower(h.name), h.id
 `
 
 type ListHouseholdsRow struct {
-	ID        pgtype.UUID
-	Name      string
-	Role      MemberRole
-	CreatedAt pgtype.Timestamptz
+	ID          pgtype.UUID
+	Name        string
+	Role        MemberRole
+	CreatedAt   pgtype.Timestamptz
+	MemberCount int32
 }
 
-// The caller's households with the caller's role, sorted by name
-// case-insensitively (the ID breaks ties between duplicate names).
+// The caller's households with the caller's role and member count, sorted by
+// name case-insensitively (the ID breaks ties between duplicate names). The
+// count is a subquery in this one statement, so listing never runs a query per
+// household; it uses the household_members primary key (household_id first).
+// RLS lets the caller see every member of their own households.
 func (q *Queries) ListHouseholds(ctx context.Context, userID pgtype.UUID) ([]ListHouseholdsRow, error) {
 	rows, err := q.db.Query(ctx, listHouseholds, userID)
 	if err != nil {
@@ -106,6 +114,7 @@ func (q *Queries) ListHouseholds(ctx context.Context, userID pgtype.UUID) ([]Lis
 			&i.Name,
 			&i.Role,
 			&i.CreatedAt,
+			&i.MemberCount,
 		); err != nil {
 			return nil, err
 		}
@@ -121,7 +130,8 @@ const renameHousehold = `-- name: RenameHousehold :one
 UPDATE households
 SET name = $1, updated_at = now()
 WHERE id = $2
-RETURNING id, name, created_at
+RETURNING id, name, created_at,
+    (SELECT count(*) FROM household_members c WHERE c.household_id = households.id)::int AS member_count
 `
 
 type RenameHouseholdParams struct {
@@ -130,15 +140,21 @@ type RenameHouseholdParams struct {
 }
 
 type RenameHouseholdRow struct {
-	ID        pgtype.UUID
-	Name      string
-	CreatedAt pgtype.Timestamptz
+	ID          pgtype.UUID
+	Name        string
+	CreatedAt   pgtype.Timestamptz
+	MemberCount int32
 }
 
 // Owner only (checked by the API and by the households_update policy).
 func (q *Queries) RenameHousehold(ctx context.Context, arg RenameHouseholdParams) (RenameHouseholdRow, error) {
 	row := q.db.QueryRow(ctx, renameHousehold, arg.Name, arg.ID)
 	var i RenameHouseholdRow
-	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.MemberCount,
+	)
 	return i, err
 }
