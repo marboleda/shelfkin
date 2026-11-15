@@ -7,14 +7,19 @@
 //
 // It handles every user with push_enabled and a push token whose local hour
 // is 9 at --now (default: the current time), sending one summary push per
-// household with items expiring within 3 days. --dry-run logs what would be
-// sent and deleted, and sends and writes nothing.
+// household with items expiring within 3 days. Before that it fetches Expo's
+// receipts for pushes sent at least 15 minutes earlier, deleting tokens Expo
+// reports as DeviceNotRegistered, and deletes tokens not seen for 90 days
+// (#47). --dry-run logs what would be sent and deleted, and sends and writes
+// nothing.
 //
 // It reads DATABASE_URL (required) and LOG_LEVEL like the API server
 // (api/internal/config), plus:
 //
 //	EXPO_PUSH_URL      the Expo push send endpoint (default
-//	                   https://exp.host/--/api/v2/push/send); override it for tests
+//	                   https://exp.host/--/api/v2/push/send); override it for tests.
+//	                   Receipts are fetched from the same URL with its last path
+//	                   segment replaced by getReceipts
 //	EXPO_ACCESS_TOKEN  optional; sent as a bearer token when set
 //
 // It logs JSON to stdout, ending with one "expiry job finished" line, and
