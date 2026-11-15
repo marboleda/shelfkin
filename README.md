@@ -243,7 +243,7 @@ If the Hosting site ID is taken when first applied, pick another, then update `t
 - A Google account with Owner on the target project, or permission to create one
 - Billing Account User on the billing account (to link it) and Billing Account Costs Manager or Administrator (to create the budget)
 - [gcloud CLI](https://cloud.google.com/sdk/docs/install) and [Terraform 1.14.3](https://developer.hashicorp.com/terraform/install)
-- `bash` and `curl` on `PATH`, and `gcloud` logged in with `gcloud auth login` (not only application-default credentials). `terraform apply` runs a bash script that turns on email enumeration protection with `curl` and `gcloud auth print-access-token` (see [Email enumeration protection](#email-enumeration-protection)). macOS and Linux have both. On Windows, install [Git for Windows](https://git-scm.com/download/win) and run `terraform` from Git Bash, so `bash` is Git's and not WSL's `C:\Windows\System32\bash.exe` (which cannot see the Windows `gcloud`)
+- `bash` and `curl` 7.76 or later on `PATH` (the email-privacy `PATCH` uses `curl --fail-with-body`, which older versions reject with an "unknown option" error), and `gcloud` logged in with `gcloud auth login` (not only application-default credentials). `terraform apply` runs a bash script that turns on email enumeration protection with `curl` and `gcloud auth print-access-token` (see [Email enumeration protection](#email-enumeration-protection)). Current macOS and Linux have both (check with `curl --version`; macOS 11 ships 7.64, which is too old). On Windows, install [Git for Windows](https://git-scm.com/download/win) and run `terraform` from Git Bash, so `bash` is Git's and not WSL's `C:\Windows\System32\bash.exe` (which cannot see the Windows `gcloud`)
 - Admin on `marboleda/shelfkin`, to add the GitHub Actions variables. No repository secrets are needed
 
 ### One-time bootstrap
@@ -332,7 +332,7 @@ log_id("identitytoolkit.googleapis.com/requests")
 "USER_DISABLED"
 ```
 
-Then narrow it to sign-ins: the entry's method name ends in `SignInWithPassword`. The field paths below are expected but not yet confirmed against a real entry (nobody but the owner can see production logs). After the first apply, the owner opens the first real entry, corrects these paths and the query if needed, and removes this sentence:
+Then narrow it to sign-ins. In a real entry `jsonPayload.methodName` is `google.cloud.identitytoolkit.v1.AuthenticationService.SignInWithPassword` and `jsonPayload.status` is `{code: 3, message: "USER_DISABLED"}` (confirmed in production on #86):
 
 ```
 resource.type="identitytoolkit_project"
@@ -341,11 +341,22 @@ jsonPayload.methodName:"SignInWithPassword"
 jsonPayload.status.message:"USER_DISABLED"
 ```
 
-**Checking it in production.** In the Firebase console (Authentication > Users), add a throwaway user and disable it. Sign in with it on the production web app: the screen shows "Email or password is incorrect". Within a few minutes the query above shows the entry with the user's email. Then delete the throwaway user.
+Firebase returns `USER_DISABLED` for a disabled account whatever password is given, correct or not, even with [email enumeration protection](#email-enumeration-protection) on. So someone calling the Auth REST API directly can tell that a disabled account exists. Firebase controls this, not Shelfkin. The app UI does not reveal it: it shows "Email or password is incorrect" either way.
+
+**Checking it in production.** In the Firebase console (Authentication > Users), add a throwaway user and disable it. Sign in with it on the production web app at `https://shelfkin-5da75.web.app` (see [Deploying the web app](#deploying-the-web-app)): the screen shows "Email or password is incorrect". Within a few minutes the query above shows the entry with the user's email. Then delete the throwaway user.
+
+To check without a browser, send the same request the Firebase JS SDK makes, with the web API key (`firebase_web_config.apiKey`, see [Outputs](#outputs-to-github-actions-and-eas-variables)):
+
+```sh
+curl -sS -X POST "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$WEB_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"<throwaway email>","password":"<any password>","returnSecureToken":true}'
+# "message": "USER_DISABLED"
+```
 
 **Cost.** Request logs go to the `_Default` log bucket, which keeps them for 30 days. Cloud Logging includes 50 GiB per project per month for free, then charges per GiB ingested. Shelfkin's Auth traffic is far below that, but every Auth request is logged: sign-in, sign-up, token refresh and account lookup. If the volume ever matters, add an exclusion filter to the `_Default` sink that drops successful `identitytoolkit.googleapis.com/requests` entries and keeps only errors.
 
-**PII.** Each entry contains the user's email address and the caller's IP address. Firebase does not log passwords; the owner confirms this in the first real entry and records it here. Anyone with `roles/logging.viewer` (or Owner or Editor) on the project can read the entries. They are deleted after the 30-day retention, and nothing exports them anywhere else.
+**PII.** Each entry contains the user's email address and the caller's IP address. `jsonPayload.request` holds the email (and `returnSecureToken`) but **no password**, and `requestMetadata` holds the caller IP (confirmed in production on #86). Anyone with `roles/logging.viewer` (or Owner or Editor) on the project can read the entries. They are deleted after the 30-day retention, and nothing exports them anywhere else.
 
 ### Email enumeration protection
 
