@@ -3,7 +3,7 @@ import { renderRouter, screen } from 'expo-router/testing-library';
 import { http, HttpResponse } from 'msw';
 
 import { apiUrl, setupApiServer } from '../test-utils/api';
-import { signInTestUser, TEST_EMAIL, testMe } from '../test-utils/auth';
+import { householdsHandler, signInTestUser, TEST_EMAIL, testMe } from '../test-utils/auth';
 
 jest.setTimeout(60000);
 
@@ -19,7 +19,10 @@ const mockTimeZone = jest.fn(() => 'America/Toronto');
 jest.mock('@/auth/timezone', () => ({ deviceTimeZone: () => mockTimeZone() }));
 
 const APP_DIR = './src/app';
-const server = setupApiServer(http.get(apiUrl('/health'), () => HttpResponse.json({ status: 'ok' })));
+const server = setupApiServer(
+  http.get(apiUrl('/health'), () => HttpResponse.json({ status: 'ok' })),
+  householdsHandler(),
+);
 
 type Me = ReturnType<typeof testMe>;
 

@@ -73,7 +73,7 @@ describe('signed out', () => {
     await signInWithForm();
 
     await waitFor(() => expect(screen).toHavePathname('/'));
-    expect(await screen.findByRole('heading', { name: 'Pantry' })).toBeTruthy();
+    expect(await screen.findByLabelText('Switch household, current: Home')).toBeTruthy();
     // Back does not return to the sign-in screen.
     expect(testRouter.canGoBack()).toBe(false);
   });
@@ -103,7 +103,7 @@ describe('signed in', () => {
     await renderRouter(APP_DIR, { initialUrl: url });
 
     await waitFor(() => expect(screen).toHavePathname('/'));
-    expect(await screen.findByRole('heading', { name: 'Pantry' })).toBeTruthy();
+    expect(await screen.findByLabelText('Switch household, current: Home')).toBeTruthy();
   });
 
   test('Sign out runs the before-sign-out tasks, clears the query cache and lands on /sign-in', async () => {

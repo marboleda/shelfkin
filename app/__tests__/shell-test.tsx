@@ -5,12 +5,12 @@ import { Dimensions, StyleSheet, useColorScheme } from 'react-native';
 import { documentTitle, safeAreaPadding } from '@/components/screen';
 import { colors, CONTENT_MAX_WIDTH } from '@/theme';
 import { setupApiServer } from '../test-utils/api';
-import { mockFirebase, signedInApiHandlers, signInTestUser } from '../test-utils/auth';
+import { householdsHandler, mockFirebase, signedInApiHandlers, signInTestUser } from '../test-utils/auth';
 
 jest.setTimeout(60000);
 
 // These tests render the signed-in app: sign the test user in and answer its API calls.
-setupApiServer(...signedInApiHandlers());
+const server = setupApiServer(...signedInApiHandlers());
 beforeEach(() => {
   signInTestUser();
 });
@@ -45,7 +45,7 @@ const ROUTES = [
   ['/entries/abc', 'Entry detail'],
   ['/settings', 'Settings'],
   ['/sign-in', 'Sign in'],
-  ['/onboarding', 'Onboarding'],
+  ['/onboarding', 'Set up your pantry'],
   ['/nope', 'Page not found'],
 ] as const;
 
@@ -65,7 +65,12 @@ describe('dark mode', () => {
     mockUseColorScheme.mockReturnValue('dark');
     // /sign-in is only shown to signed-out users.
     if (url === '/sign-in') mockFirebase.signOutElsewhere();
+    // /onboarding is only shown to users with no household.
+    if (url === '/onboarding') server.use(householdsHandler([]));
+    // Below 768 px Pantry's heading is the household switcher; at 768 px and wider it is "Pantry".
+    if (url === '/') await setWindowWidth(1024);
     await renderRouter(APP_DIR, { initialUrl: url });
+    await screen.findByRole('heading', { name: heading });
 
     expect(screen.getByTestId('screen')).toHaveStyle({ backgroundColor: colors.dark.background });
     const headingEl = screen.getByRole('heading', { name: heading });
