@@ -61,3 +61,13 @@ output "hosting_site_id" {
   description = "Firebase Hosting site ID."
   value       = google_firebase_hosting_site.web.site_id
 }
+
+output "expiry_job_name" {
+  description = "Cloud Run job (and Cloud Scheduler job) that sends expiry notifications (#40)."
+  value       = google_cloud_run_v2_job.expiry.name
+}
+
+output "scheduler_region" {
+  description = "Region of the Cloud Scheduler job that starts the expiry job."
+  value       = google_cloud_scheduler_job.expiry.region
+}

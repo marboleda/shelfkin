@@ -3,6 +3,7 @@ import { renderRouter, screen, testRouter } from 'expo-router/testing-library';
 import { Dimensions } from 'react-native';
 import { setupApiServer } from '../test-utils/api';
 import { householdsHandler, mockFirebase, signedInApiHandlers, signInTestUser } from '../test-utils/auth';
+import { pantryHandler, testEntry, testGroup, testPantry } from '../test-utils/pantry';
 
 jest.setTimeout(60000);
 
@@ -106,14 +107,17 @@ describe('Pantry navigation', () => {
     expect(screen).toHavePathname('/');
   });
 
-  test('the sample row opens /entries/sample, and its back control returns to Pantry', async () => {
+  test('a pantry row opens its entry, and its back control returns to Pantry', async () => {
+    const entry = testEntry();
+    server.use(pantryHandler(testPantry([testGroup('Milk', [entry])])));
     await renderRouter(APP_DIR, { initialUrl: '/' });
 
+    const row = await screen.findByText('Milk');
     await act(async () => {
-      fireEvent.press(screen.getByText('Sample entry'));
+      fireEvent.press(row);
     });
-    expect(screen).toHavePathname('/entries/sample');
-    expect(screen.getByTestId('entry-id')).toHaveTextContent('sample');
+    expect(screen).toHavePathname(`/entries/${entry.id}`);
+    expect(screen.getByTestId('entry-id')).toHaveTextContent(entry.id);
 
     await act(async () => {
       fireEvent.press(screen.getByLabelText('Back to Pantry'));

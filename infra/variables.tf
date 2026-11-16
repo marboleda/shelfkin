@@ -59,3 +59,25 @@ variable "github_repository" {
     error_message = "github_repository must be owner/name, e.g. marboleda/shelfkin."
   }
 }
+
+variable "alert_email" {
+  description = "Email address that alerts (the expiry job failing or not running, #40) are sent to."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[^@ ]+@[^@ ]+[.][^@ ]+$", var.alert_email))
+    error_message = "alert_email must be an email address."
+  }
+}
+
+variable "scheduler_region" {
+  description = "Region for the Cloud Scheduler job that starts the expiry job. Leave null to use region; set it only if Cloud Scheduler is not offered in region."
+  type        = string
+  default     = null
+}
+
+variable "expo_access_token_enabled" {
+  description = "Pass the expo-access-token secret to the expiry job as EXPO_ACCESS_TOKEN. Turn on only after adding a version to the secret by hand, and only if Expo's enhanced push security is on (README, \"Expiry job in production\")."
+  type        = bool
+  default     = false
+}
