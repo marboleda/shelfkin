@@ -8,7 +8,10 @@ import { renderRouter, screen, testRouter } from 'expo-router/testing-library';
 import { http, HttpResponse } from 'msw';
 import { StrictMode } from 'react';
 
+import { apiClient } from '@/api/client';
+import { ApiError } from '@/api/errors';
 import { signOut } from '@/auth/session';
+import { isDefiniteJoinError } from '@/components/join-invite';
 import {
   PENDING_INVITE_KEY,
   PENDING_INVITE_MESSAGE,
@@ -56,7 +59,7 @@ function answerHouseholds(households: ReturnType<typeof testHousehold>[]) {
   server.use(http.get(apiUrl('/households'), () => HttpResponse.json({ households })));
 }
 
-type JoinReply = { status: number; body: unknown } | 'network';
+type JoinReply = { status: number; body: unknown } | { status: number; text: string } | 'network';
 
 /** Answers `POST /invites/join`, recording each code sent. Replies are used in order; the last one repeats. */
 function fakeJoin(...replies: JoinReply[]) {
@@ -66,6 +69,7 @@ function fakeJoin(...replies: JoinReply[]) {
       api.codes.push(((await request.json()) as { code: string }).code);
       const reply = replies[Math.min(api.codes.length - 1, replies.length - 1)] ?? joined(CABIN);
       if (reply === 'network') return HttpResponse.error();
+      if ('text' in reply) return HttpResponse.text(reply.text, { status: reply.status });
       return HttpResponse.json(reply.body as object, { status: reply.status });
     }),
   );
@@ -91,6 +95,73 @@ async function signInWithForm() {
 async function storedCode() {
   return AsyncStorage.getItem(PENDING_INVITE_KEY);
 }
+
+const UNAUTHORIZED = apiError(401, 'unauthorized');
+const SESSION_ENDED = 'Your session has ended. Please sign in again.';
+const TOO_MANY = 'Too many requests. Please wait a moment and try again.';
+
+/** Waits for /sign-in after an ended session, with both the session-ended and the pending-invite messages. */
+async function expectSessionEndedWithInvite() {
+  await waitFor(() => expect(screen).toHavePathname('/sign-in'));
+  expect(await screen.findByTestId('session-ended')).toHaveTextContent(SESSION_ENDED);
+  expect(await screen.findByText(PENDING_INVITE_MESSAGE)).toBeTruthy();
+}
+
+/** Signs in again after an ended session: exactly one more join opens The Cabin and clears the code. */
+async function signInAgainAndJoin(api: { codes: string[] }, sentBefore: number) {
+  await signInWithForm();
+  expect(await screen.findByLabelText(switcherLabel('The Cabin'))).toBeTruthy();
+  expect(screen).toHavePathname('/');
+  expect(screen.getByTestId('household-notice')).toHaveTextContent(/You joined The Cabin/);
+  expect(api.codes).toEqual(Array(sentBefore + 1).fill('K7QM4XPA'));
+  expect(await storedCode()).toBeNull();
+}
+
+const unauthorized401 = () =>
+  HttpResponse.json({ error: { code: 'unauthorized', message: 'nope' } }, { status: 401 });
+
+/** A request on Pantry gets 401, and so does its retry with a refreshed token: the session ends. */
+async function endSessionWithHouseholds401() {
+  server.use(
+    http.get(apiUrl('/households'), unauthorized401, { once: true }),
+    http.get(apiUrl('/households'), unauthorized401, { once: true }),
+  );
+  await act(async () => {
+    await apiClient.GET('/households');
+  });
+  await waitFor(() => expect(screen).toHavePathname('/sign-in'));
+  expect(await screen.findByTestId('session-ended')).toHaveTextContent(SESSION_ENDED);
+}
+
+describe('isDefiniteJoinError', () => {
+  const httpError = (status: number, code?: string) => new ApiError('http', `HTTP ${status}`, { status, code });
+
+  test.each([
+    [400, 'bad_request'],
+    [404, 'invite_not_found'],
+    [410, 'invite_revoked'],
+    [410, 'invite_expired'],
+  ])('%i %s is definite', (status, code) => {
+    expect(isDefiniteJoinError(httpError(status, code))).toBe(true);
+  });
+
+  test.each<[string, unknown]>([
+    ['401 unauthorized', httpError(401, 'unauthorized')],
+    ['403', httpError(403, 'forbidden')],
+    ['404 not_found', httpError(404, 'not_found')],
+    ['404 with no code', httpError(404)],
+    ['408', httpError(408)],
+    ['429 http', httpError(429, 'resource_exhausted')],
+    ['429 unexpected', new ApiError('unexpected', 'HTTP 429 with a body that is not JSON', { status: 429 })],
+    ['500', httpError(500, 'internal')],
+    ['network', new ApiError('network', 'down')],
+    ['400 invite_not_found (mismatched)', httpError(400, 'invite_not_found')],
+    ['410 bad_request (mismatched)', httpError(410, 'bad_request')],
+    ['not an ApiError', new Error('invite_not_found')],
+  ])('%s is not definite', (_name, error) => {
+    expect(isDefiniteJoinError(error)).toBe(false);
+  });
+});
 
 describe('signed in', () => {
   beforeEach(() => {
@@ -203,6 +274,110 @@ describe('signed in', () => {
     expect(api.codes).toEqual(['K7QM4XPA', 'K7QM4XPA']);
   });
 
+  test('a 401 that ends the session keeps the code, and signing in again joins once', async () => {
+    // The join and the client's retry with a refreshed token both get 401.
+    const api = fakeJoin(UNAUTHORIZED, UNAUTHORIZED, joined(CABIN));
+    await renderRouter(APP_DIR, { initialUrl: '/join/K7QM4XPA' });
+
+    await expectSessionEndedWithInvite();
+    // Kept although this user had no pending code before.
+    expect(await storedCode()).toBe('K7QM4XPA');
+    expect(api.codes).toEqual(['K7QM4XPA', 'K7QM4XPA']);
+
+    await signInAgainAndJoin(api, 2);
+  });
+
+  test('a 401 that does not end the session keeps the code, says the session expired and offers Retry', async () => {
+    const user = signInTestUser();
+    // The token refresh fails, so the client returns the first 401 without signing out.
+    user.getIdToken.mockImplementation(async (forceRefresh?: boolean) => {
+      if (forceRefresh) throw new Error('offline');
+      return `token-${user.uid}-1`;
+    });
+    const api = fakeJoin(UNAUTHORIZED, joined(CABIN));
+    await renderRouter(APP_DIR, { initialUrl: '/join/K7QM4XPA' });
+
+    expect(await screen.findByText('Your session has expired. Please sign in again.')).toBeTruthy();
+    expect(screen).toHavePathname('/join/K7QM4XPA');
+    expect(screen.getByRole('heading', { name: "Couldn't join the household" })).toBeTruthy();
+    expect(await storedCode()).toBe('K7QM4XPA');
+
+    await fireEvent.press(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByLabelText(switcherLabel('The Cabin'))).toBeTruthy();
+    expect(api.codes).toEqual(['K7QM4XPA', 'K7QM4XPA']);
+    expect(await storedCode()).toBeNull();
+  });
+
+  test('after a 401 that did not end the session, leaving and a later ended session clear the code', async () => {
+    const user = signInTestUser();
+    let refreshFails = true;
+    user.getIdToken.mockImplementation(async (forceRefresh?: boolean) => {
+      if (forceRefresh && refreshFails) throw new Error('offline');
+      return `token-${user.uid}-1`;
+    });
+    const api = fakeJoin(UNAUTHORIZED, joined(CABIN));
+    await renderRouter(APP_DIR, { initialUrl: '/join/K7QM4XPA' });
+    expect(await screen.findByText('Your session has expired. Please sign in again.')).toBeTruthy();
+    expect(await storedCode()).toBe('K7QM4XPA');
+
+    // The user leaves the Retry screen for Pantry, and a later request ends the session.
+    await act(async () => {
+      router.replace('/');
+    });
+    expect(await screen.findByLabelText(switcherLabel('Home'))).toBeTruthy();
+    refreshFails = false;
+    await endSessionWithHouseholds401();
+
+    expect(await storedCode()).toBeNull();
+    expect(screen.queryByText(PENDING_INVITE_MESSAGE)).toBeNull();
+    await signInWithForm();
+    expect(await screen.findByLabelText(switcherLabel('Home'))).toBeTruthy();
+    expect(api.codes).toEqual(['K7QM4XPA']);
+  });
+
+  test('the kept code is used once: after the join fails again, a later ended session clears it', async () => {
+    const api = fakeJoin(UNAUTHORIZED, UNAUTHORIZED, apiError(500, 'internal'), joined(CABIN));
+    await renderRouter(APP_DIR, { initialUrl: '/join/K7QM4XPA' });
+    await expectSessionEndedWithInvite();
+    expect(await storedCode()).toBe('K7QM4XPA');
+
+    // Signing in again joins, and that join gets a 500.
+    await signInWithForm();
+    expect(await screen.findByText('The server ran into a problem. Please try again in a moment.')).toBeTruthy();
+    expect(api.codes).toHaveLength(3);
+    expect(await storedCode()).toBe('K7QM4XPA');
+
+    // The user leaves for Pantry, and a later request ends the session.
+    await act(async () => {
+      router.replace('/');
+    });
+    expect(await screen.findByLabelText(switcherLabel('Home'))).toBeTruthy();
+    await endSessionWithHouseholds401();
+
+    expect(await storedCode()).toBeNull();
+    await signInWithForm();
+    expect(await screen.findByLabelText(switcherLabel('Home'))).toBeTruthy();
+    expect(api.codes).toHaveLength(3);
+  });
+
+  test('a session that ends on another request clears a stale code, so signing in again does not join', async () => {
+    const api = fakeJoin(joined(CABIN));
+    await renderRouter(APP_DIR, { initialUrl: '/' });
+    expect(await screen.findByLabelText(switcherLabel('Home'))).toBeTruthy();
+
+    // A code left on the device, then a request on Pantry whose refreshed token is rejected too.
+    await AsyncStorage.setItem(PENDING_INVITE_KEY, 'K7QM4XPA');
+    resetPendingInviteForTests();
+    await endSessionWithHouseholds401();
+
+    expect(await storedCode()).toBeNull();
+    expect(screen.queryByText(PENDING_INVITE_MESSAGE)).toBeNull();
+
+    await signInWithForm();
+    expect(await screen.findByLabelText(switcherLabel('Home'))).toBeTruthy();
+    expect(api.codes).toEqual([]);
+  });
+
   test('/join/ with no code says the link is incomplete, with a link to Pantry', async () => {
     const api = fakeJoin();
     await renderRouter(APP_DIR, { initialUrl: '/join/' });
@@ -301,6 +476,65 @@ describe('signed out', () => {
     expect(await screen.findByText('This invite has expired. Ask for a new one.')).toBeTruthy();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Go to Pantry' })).toBeTruthy());
     expect(await storedCode()).toBeNull();
+  });
+
+  test('a 401 after signing in ends the session, keeps the code, and signing in again joins once', async () => {
+    mockFirebase.addAccount(TEST_EMAIL, TEST_PASSWORD);
+    const api = fakeJoin(UNAUTHORIZED, UNAUTHORIZED, joined(CABIN));
+    await renderRouter(APP_DIR, { initialUrl: '/join/K7QM4XPA' });
+    await waitFor(() => expect(screen).toHavePathname('/sign-in'));
+    await signInWithForm();
+
+    await waitFor(() => expect(api.codes).toHaveLength(2));
+    await expectSessionEndedWithInvite();
+    expect(await storedCode()).toBe('K7QM4XPA');
+
+    await signInAgainAndJoin(api, 2);
+  });
+
+  test.each<[string, JoinReply, string]>([
+    ['429 with a JSON body', apiError(429, 'resource_exhausted'), TOO_MANY],
+    ['429 with a plain-text body', { status: 429, text: 'Rate exceeded.' }, TOO_MANY],
+    ['403', apiError(403, 'forbidden'), "You don't have access to this."],
+    ['404 not_found', apiError(404, 'not_found'), "We couldn't find that. It may have been removed."],
+    ['500', apiError(500, 'internal'), 'The server ran into a problem. Please try again in a moment.'],
+    ['502 with an HTML body', { status: 502, text: '<html>Bad Gateway</html>' }, 'The server ran into a problem. Please try again in a moment.'],
+  ])('%s keeps the code and offers Retry, which joins', async (_name, reply, message) => {
+    mockFirebase.addAccount(TEST_EMAIL, TEST_PASSWORD);
+    const api = fakeJoin(reply, joined(CABIN));
+    await renderRouter(APP_DIR, { initialUrl: '/join/K7QM4XPA' });
+    await waitFor(() => expect(screen).toHavePathname('/sign-in'));
+    await signInWithForm();
+
+    expect(await screen.findByText(message)).toBeTruthy();
+    expect(screen.getByRole('heading', { name: "Couldn't join the household" })).toBeTruthy();
+    expect(await storedCode()).toBe('K7QM4XPA');
+    // Nothing is retried automatically.
+    expect(api.codes).toEqual(['K7QM4XPA']);
+
+    await fireEvent.press(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByLabelText(switcherLabel('The Cabin'))).toBeTruthy();
+    expect(api.codes).toEqual(['K7QM4XPA', 'K7QM4XPA']);
+    expect(await storedCode()).toBeNull();
+  });
+
+  test.each([
+    ['bad_request', 400, "That didn't work. Check the details and try again."],
+    ['invite_not_found', 404, "That code doesn't match an invite. Check it and try again."],
+    ['invite_revoked', 410, 'This invite is no longer valid. Ask for a new one.'],
+    ['invite_expired', 410, 'This invite has expired. Ask for a new one.'],
+  ])('%s clears the code and offers no Retry', async (code, status, message) => {
+    mockFirebase.addAccount(TEST_EMAIL, TEST_PASSWORD);
+    const api = fakeJoin(apiError(status, code));
+    await renderRouter(APP_DIR, { initialUrl: '/join/K7QM4XPA' });
+    await waitFor(() => expect(screen).toHavePathname('/sign-in'));
+    await signInWithForm();
+
+    expect(await screen.findByText(message)).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Go to Pantry' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(await storedCode()).toBeNull();
+    expect(api.codes).toEqual(['K7QM4XPA']);
   });
 
   test('signing out clears the code, so a later sign-in does not join', async () => {

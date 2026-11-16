@@ -56,6 +56,7 @@ describe('userMessage', () => {
     ['401', new ApiError('http', 'HTTP 401', { status: 401 })],
     ['403', new ApiError('http', 'HTTP 403', { status: 403 })],
     ['404', new ApiError('http', 'HTTP 404', { status: 404 })],
+    ['429', new ApiError('unexpected', 'HTTP 429 with a body that is not JSON', { status: 429 })],
     ['500', new ApiError('http', 'HTTP 500', { status: 500, code: 'internal' })],
     ['502 html', new ApiError('unexpected', 'HTTP 502 with a body that is not JSON', { status: 502 })],
     ['unexpected', new ApiError('unexpected', 'Could not read the response')],
@@ -68,6 +69,12 @@ describe('userMessage', () => {
     expect(message.length).toBeGreaterThan(0);
     expect(message.length).toBeLessThan(80);
     expect(message).not.toMatch(/\d{3}|HTTP|Error|\n/);
+  });
+
+  test('a 429 asks the user to wait, whatever the body', () => {
+    const text = 'Too many requests. Please wait a moment and try again.';
+    expect(userMessage(new ApiError('http', 'HTTP 429', { status: 429, code: 'resource_exhausted' }))).toBe(text);
+    expect(userMessage(new ApiError('unexpected', 'HTTP 429 with a body that is not JSON', { status: 429 }))).toBe(text);
   });
 
   test('network errors say the server cannot be reached', () => {

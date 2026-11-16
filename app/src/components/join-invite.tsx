@@ -11,7 +11,8 @@ import { isApiError } from '@/api/errors';
 import { useHouseholds } from '@/household/current-household';
 import { joinErrorMessage } from '@/household/households';
 import { useJoinHouseholdMutation } from '@/household/mutations';
-import { clearPendingInvite } from '@/household/pending-invite';
+import { getAuthState } from '@/auth/session';
+import { clearPendingInvite, releaseKeptPendingInvite, savePendingInvite } from '@/household/pending-invite';
 import { useTheme, useThemedStyles, type Theme } from '@/theme';
 
 import { Button } from './button';
@@ -24,12 +25,34 @@ export const JOINING_TITLE = 'Joining…';
 export const JOIN_FAILED_TITLE = "Couldn't join the household";
 export const INCOMPLETE_LINK_TITLE = 'This invite link is incomplete';
 
+// The only join errors that are about the invite itself, each with its status.
+const DEFINITE_JOIN_ERRORS = new Map<string, number>([
+  ['bad_request', 400],
+  ['invite_not_found', 404],
+  ['invite_revoked', 410],
+  ['invite_expired', 410],
+]);
+
 /**
- * An error that will not go away by trying again (not found, expired, revoked
- * or another 4xx), as opposed to a network error or a 5xx.
+ * A definite answer about the invite, which trying again will not change. Only
+ * these clear the pending code: 400 `bad_request`, 404 `invite_not_found`,
+ * 410 `invite_revoked` and 410 `invite_expired`, each with its own status
+ * (#26: branch on the error `code`, never on the status alone).
+ *
+ * Everything else is about the session, the network or the server, and keeps
+ * the code with Retry: a 401 means the session ended or the token could not be
+ * refreshed, so signing in again should still join; a 429 comes from Cloud Run
+ * or the front end when no instance is free. Likewise 403, any other 4xx or
+ * code, 5xx, a body that is not JSON and a network error.
  */
 export function isDefiniteJoinError(error: unknown): boolean {
-  return isApiError(error) && error.status !== undefined && error.status >= 400 && error.status < 500;
+  if (!isApiError(error) || error.kind !== 'http' || error.code === undefined) return false;
+  const status = DEFINITE_JOIN_ERRORS.get(error.code);
+  return status !== undefined && status === error.status;
+}
+
+function isUnauthorized(error: unknown): boolean {
+  return isApiError(error) && error.status === 401;
 }
 
 /**
@@ -37,7 +60,9 @@ export function isDefiniteJoinError(error: unknown): boolean {
  * the link (the API ignores case, spaces and dashes). On success the household
  * becomes current and Pantry replaces this screen, with "You joined <name>" or
  * "You're already a member of <name>". A definite error offers Pantry (or
- * onboarding for a user with no household); a network error offers Retry.
+ * onboarding for a user with no household); any other error keeps the code
+ * and offers Retry. A 401 saves the code so that it survives the sign-out of
+ * an ended session, and signing in again opens this screen and joins.
  */
 export function JoinInviteScreen({ code }: { code: string }) {
   const styles = useThemedStyles(createStyles);
@@ -46,19 +71,39 @@ export function JoinInviteScreen({ code }: { code: string }) {
   // A ref, not state: it is set before React can render or run the effect again
   // (including the second effect run in development's Strict Mode).
   const started = useRef(false);
+  const mounted = useRef(false);
 
   function send() {
-    join.mutate(code, {
-      onSuccess: () => {
+    // A new attempt: an earlier 401's mark no longer applies.
+    releaseKeptPendingInvite();
+    // mutateAsync rather than mutate's callbacks: those are skipped once the
+    // screen unmounts, which an ended session's sign-out can do before the
+    // error arrives, and the 401 save below must always happen.
+    join.mutateAsync(code).then(
+      () => {
         void clearPendingInvite();
         // Replaced, so Back does not return here or join again.
-        router.replace('/');
+        if (mounted.current) router.replace('/');
       },
-      onError: (error) => {
+      (error: unknown) => {
         if (isDefiniteJoinError(error)) void clearPendingInvite();
+        else if (isUnauthorized(error) && (mounted.current || getAuthState().status === 'signedOut')) {
+          // Kept for the sign-out of the session this 401 may have ended. Not
+          // when the user already left this screen while still signed in.
+          void savePendingInvite(code, { keepOnEndedSession: true });
+        }
       },
-    });
+    );
   }
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      // Left while signed in (not an ended session): forget the 401's mark.
+      releaseKeptPendingInvite();
+    };
+  }, []);
 
   useEffect(() => {
     if (started.current) return;
@@ -72,7 +117,7 @@ export function JoinInviteScreen({ code }: { code: string }) {
     return <JoinFailed message={joinErrorMessage(join.error)} code={code} offerCode={isNotFound(join.error)} />;
   }
   if (join.isError) {
-    // A network error or a 5xx: the code is kept, and Retry sends it again.
+    // Not about the invite (network, 401, 429, 5xx…): the code is kept, and Retry sends it again.
     return (
       <Screen title={JOIN_FAILED_TITLE}>
         <View testID="join-error" style={styles.body}>
