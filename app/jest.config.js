@@ -43,14 +43,17 @@ const ESM_PACKAGES = [
 module.exports = {
   preset: 'jest-expo',
   testEnvironment: '<rootDir>/jest/environment.js',
-  setupFilesAfterEnv: ['<rootDir>/jest/setup-fetch.js', '<rootDir>/jest/setup-auth.js'],
-  // Tests never reach Firebase or the device's storage: these in-memory fakes
-  // stand in for them (see jest/firebase-auth-mock.ts for the test controls).
+  setupFilesAfterEnv: ['<rootDir>/jest/setup-fetch.js', '<rootDir>/jest/setup-auth.js', '<rootDir>/jest/setup-push.js'],
+  // Tests never reach Firebase, the device's storage or its notifications:
+  // these in-memory fakes stand in for them (see jest/firebase-auth-mock.ts and
+  // jest/expo-notifications-mock.ts for the test controls).
   moduleNameMapper: {
     '^firebase/auth$': '<rootDir>/jest/firebase-auth-mock.ts',
     '^firebase/app$': '<rootDir>/jest/firebase-app-mock.ts',
     '^@react-native-async-storage/async-storage$':
       '@react-native-async-storage/async-storage/jest/async-storage-mock',
+    '^expo-notifications$': '<rootDir>/jest/expo-notifications-mock.ts',
+    '^expo-device$': '<rootDir>/jest/expo-device-mock.ts',
   },
   // expo-router's renderRouter() turns on fake timers. Leave Node's I/O
   // scheduling real so Node's fetch and MSW can still answer requests.

@@ -9,9 +9,13 @@ import { MIN_TOUCH_TARGET, useTheme, useThemedStyles, type Theme } from '@/theme
 
 import { Button } from './button';
 import { FormMessage } from './form-message';
+import { NotificationsSection } from './notifications-section';
 import { TextField } from './text-field';
 
-/** The Account section on Settings: name (editable), email and Sign out. */
+/**
+ * The Account section on Settings: name (editable), email and Sign out.
+ * The Notifications section (expiry reminders) comes right before it.
+ */
 export function AccountSection() {
   const styles = useThemedStyles(createStyles);
   const theme = useTheme();
@@ -55,77 +59,80 @@ export function AccountSection() {
   }
 
   return (
-    <View testID="account-section" style={styles.section}>
-      <Text role="heading" aria-level={2} style={styles.sectionTitle}>
-        Account
-      </Text>
-      <View style={styles.card}>
-        {editing ? (
-          <View style={styles.editRow}>
-            <TextField
-              label="Name"
-              testID="account-name-input"
-              value={draft}
-              onChangeText={setDraft}
-              error={nameError}
-              maxLength={NAME_MAX_LENGTH + 20}
-              autoCapitalize="words"
-              autoComplete="name"
-              textContentType="name"
-              returnKeyType="done"
-              onSubmitEditing={saveName}
-              autoFocus
-            />
-            {updateName.isError ? <FormMessage tone="error" message={userMessage(updateName.error)} /> : null}
-            <View style={styles.editActions}>
-              <Button label="Save" busy={updateName.isPending} onPress={saveName} />
-              <Button label="Cancel" variant="secondary" disabled={updateName.isPending} onPress={() => setEditing(false)} />
-            </View>
-          </View>
-        ) : (
-          <Pressable
-            testID="account-name"
-            onPress={startEditing}
-            disabled={!me.data}
-            accessibilityRole="button"
-            accessibilityLabel={me.data ? `Name, ${me.data.displayName}. Edit` : 'Name'}
-            style={styles.row}
-          >
-            <Text style={styles.rowLabel}>Name</Text>
-            {me.data ? (
-              <Text testID="account-name-value" style={styles.rowValue}>
-                {me.data.displayName}
-              </Text>
-            ) : me.isError ? (
-              <Text style={styles.rowProblem}>{userMessage(me.error)}</Text>
-            ) : (
-              <View style={styles.rowValue}>
-                <ActivityIndicator size="small" color={theme.colors.mutedText} />
+    <>
+      <NotificationsSection />
+      <View testID="account-section" style={styles.section}>
+        <Text role="heading" aria-level={2} style={styles.sectionTitle}>
+          Account
+        </Text>
+        <View style={styles.card}>
+          {editing ? (
+            <View style={styles.editRow}>
+              <TextField
+                label="Name"
+                testID="account-name-input"
+                value={draft}
+                onChangeText={setDraft}
+                error={nameError}
+                maxLength={NAME_MAX_LENGTH + 20}
+                autoCapitalize="words"
+                autoComplete="name"
+                textContentType="name"
+                returnKeyType="done"
+                onSubmitEditing={saveName}
+                autoFocus
+              />
+              {updateName.isError ? <FormMessage tone="error" message={userMessage(updateName.error)} /> : null}
+              <View style={styles.editActions}>
+                <Button label="Save" busy={updateName.isPending} onPress={saveName} />
+                <Button label="Cancel" variant="secondary" disabled={updateName.isPending} onPress={() => setEditing(false)} />
               </View>
-            )}
-            {me.data ? <Text style={styles.rowAction}>Edit</Text> : null}
+            </View>
+          ) : (
+            <Pressable
+              testID="account-name"
+              onPress={startEditing}
+              disabled={!me.data}
+              accessibilityRole="button"
+              accessibilityLabel={me.data ? `Name, ${me.data.displayName}. Edit` : 'Name'}
+              style={styles.row}
+            >
+              <Text style={styles.rowLabel}>Name</Text>
+              {me.data ? (
+                <Text testID="account-name-value" style={styles.rowValue}>
+                  {me.data.displayName}
+                </Text>
+              ) : me.isError ? (
+                <Text style={styles.rowProblem}>{userMessage(me.error)}</Text>
+              ) : (
+                <View style={styles.rowValue}>
+                  <ActivityIndicator size="small" color={theme.colors.mutedText} />
+                </View>
+              )}
+              {me.data ? <Text style={styles.rowAction}>Edit</Text> : null}
+            </Pressable>
+          )}
+          <View style={[styles.row, styles.divider]}>
+            <Text style={styles.rowLabel}>Email</Text>
+            <Text testID="account-email" style={styles.rowValue}>
+              {email ?? ''}
+            </Text>
+          </View>
+          <Pressable
+            onPress={handleSignOut}
+            disabled={signingOut}
+            accessibilityRole="button"
+            accessibilityLabel="Sign out"
+            accessibilityState={{ disabled: signingOut, busy: signingOut }}
+            style={[styles.row, styles.divider]}
+          >
+            <Text style={styles.signOut}>Sign out</Text>
+            {signingOut ? <ActivityIndicator size="small" color={theme.colors.mutedText} /> : null}
           </Pressable>
-        )}
-        <View style={[styles.row, styles.divider]}>
-          <Text style={styles.rowLabel}>Email</Text>
-          <Text testID="account-email" style={styles.rowValue}>
-            {email ?? ''}
-          </Text>
         </View>
-        <Pressable
-          onPress={handleSignOut}
-          disabled={signingOut}
-          accessibilityRole="button"
-          accessibilityLabel="Sign out"
-          accessibilityState={{ disabled: signingOut, busy: signingOut }}
-          style={[styles.row, styles.divider]}
-        >
-          <Text style={styles.signOut}>Sign out</Text>
-          {signingOut ? <ActivityIndicator size="small" color={theme.colors.mutedText} /> : null}
-        </Pressable>
+        {signOutError ? <FormMessage tone="error" message={signOutError} /> : null}
       </View>
-      {signOutError ? <FormMessage tone="error" message={signOutError} /> : null}
-    </View>
+    </>
   );
 }
 
