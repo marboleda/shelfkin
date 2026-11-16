@@ -248,6 +248,12 @@ type PantryEntry struct {
 	UpdatedAt     pgtype.Timestamptz
 }
 
+type PushTicket struct {
+	ID      string
+	TokenID pgtype.UUID
+	SentAt  pgtype.Timestamptz
+}
+
 type PushToken struct {
 	ID         pgtype.UUID
 	UserID     pgtype.UUID

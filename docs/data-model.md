@@ -2,7 +2,7 @@
 
 *Draft — October 26, 2026*
 
-Postgres (Cloud SQL). Tables that hold household data are scoped by row-level security (see [Access control](#access-control)): `households` by its own `id`, and the other household tables by their `household_id` column. `expiry_notifications` has no household column; like `users` and `push_tokens`, it is scoped by the API.
+Postgres (Cloud SQL). Tables that hold household data are scoped by row-level security (see [Access control](#access-control)): `households` by its own `id`, and the other household tables by their `household_id` column. `expiry_notifications` has no household column; like `users` and `push_tokens`, it is scoped by the API. `push_tickets` is used only by the expiry job.
 
 ## Conventions
 
@@ -18,7 +18,7 @@ Postgres (Cloud SQL). Tables that hold household data are scoped by row-level se
 users ─┬─< household_members >─── households ─┬─< household_invites
        │                                       ├─< catalog_items (custom) ──< pantry_entries
        │                                       ├─< household_item_defaults >── catalog_items (built-in)
-       ├─< push_tokens                         ├─< pantry_entries
+       ├─< push_tokens ──< push_tickets        ├─< pantry_entries
        │                                       └─< item_events
        └─ (actor on entries / events)
 
@@ -50,9 +50,21 @@ One row per device that can receive pushes. Deleting a device's token (on sign-o
 | `user_id` | uuid FK → users, on delete cascade, not null | |
 | `token` | text, unique, not null | Expo push token |
 | `platform` | text | `ios` / `android` / `web`; validated by the API, not the database |
-| `created_at`, `last_seen_at` | timestamptz, not null, default `now()` | Prune stale tokens using `last_seen_at` and Expo's delivery receipts |
+| `created_at`, `last_seen_at` | timestamptz, not null, default `now()` | The expiry job deletes tokens whose `last_seen_at` is more than 90 days old, and tokens whose delivery receipt says `DeviceNotRegistered` (#47) |
 
 - **Indexes:** `(user_id)` (non-unique) for per-user token lookups and for the `on delete cascade` when a user is deleted; Postgres does not index foreign-key columns on its own. Added by a later migration in #21.
+
+### `push_tickets`
+
+Expo push tickets waiting for their delivery receipt (#47). When Expo accepts a push it returns a ticket ID; the receipt for it is ready about 15 minutes later. The expiry job stores one row per accepted push and, on later runs, fetches the receipts and deletes the row.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | text PK | Expo's ticket ID |
+| `token_id` | uuid FK → push_tokens, on delete cascade, not null | The token the push was sent to; deleting the token deletes its tickets |
+| `sent_at` | timestamptz, not null, default `now()` | Set by the job to its run time |
+
+- **Indexes:** `(token_id)` for the `on delete cascade`; `(sent_at)` for finding tickets due for a receipt and tickets that aged out.
 
 ### `households`
 
@@ -208,7 +220,7 @@ Stops the nightly job from sending the same alert twice.
   - `household_item_defaults`: `catalog_item_id` must be a built-in item; custom items keep their defaults on their own row.
 
   A missing item and another household's item both fail with the same RLS error (`42501`), so the error does not show whether an ID exists. The `USING` clauses are unchanged, so these checks apply only to new and updated rows.
-- `users`, `push_tokens` and `expiry_notifications` have no RLS (they hold no household data) and are scoped by the API: every query filters by the caller's user ID.
+- `users`, `push_tokens` and `expiry_notifications` have no RLS (they hold no household data) and are scoped by the API: every query filters by the caller's user ID. `push_tickets` has no RLS either; only the expiry job reads and writes it.
 - Owner-only actions (create or revoke invites, remove a member, rename or delete the household) are checked in the API, with a stricter RLS policy as a second check. Transfer ownership is also owner-only, but it goes through `transfer_ownership` (below) because RLS would block it.
 - `shelfkin_app` cannot insert into `households` or `household_members`, or update `household_members`, directly. Three narrow privileged (`SECURITY DEFINER`) functions do this instead. Each reads the caller from `app.user_id`, fails if it is not set, has a fixed `search_path`, and `shelfkin_app` has `EXECUTE` on it and nothing more:
   - `create_household(name)` creates a household together with the caller's `owner` row (#14).
@@ -219,3 +231,4 @@ Stops the nightly job from sending the same alert twice.
 
 - **"Expiring soon":** `expires_on <= today + 3 days` (a constant in v1; it could become a per-user setting later).
 - **Nightly job:** for each user with `push_enabled`, at about 9am in their `timezone`, find soon-to-expire entries in their households that are not `out`, skip ones already in `expiry_notifications`, then send one summary push per household.
+- **Receipts and stale tokens (#47):** the job stores the ticket ID of every push Expo accepts in `push_tickets`. Each run first fetches the receipts for tickets at least 15 minutes old, at most 1,000 IDs per request. A `DeviceNotRegistered` receipt deletes the token; any other receipt error is logged with the ticket ID and the token is kept. A ticket is deleted once its receipt is processed, or after 24 hours without one. Each run also deletes tokens whose `last_seen_at` is more than 90 days old (the app refreshes it on start, #34). Errors in the tickets themselves, at send time, are handled when sending (#22).
