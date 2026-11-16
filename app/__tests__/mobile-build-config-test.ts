@@ -52,6 +52,13 @@ describe('eas.json', () => {
     expect(profile.environment).toBe('development');
   });
 
+  test('development: expo-dev-client is a dependency, so the profile builds with --non-interactive', () => {
+    // Without it, eas build stops ("Install expo-dev-client manually") or
+    // installs it interactively and leaves package.json changed.
+    const packageJson = jest.requireActual('../package.json') as { dependencies: Record<string, string> };
+    expect(packageJson.dependencies['expo-dev-client']).toMatch(/^~\d+\.\d+\.\d+$/);
+  });
+
   test('preview: an internal build without the development client, using the EAS preview environment', () => {
     const profile = easJson.build.preview;
     expect(profile.developmentClient).toBeUndefined();

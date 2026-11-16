@@ -52,6 +52,7 @@
         }
       ],
       "expo-localization",
+      "expo-status-bar",
       [
         "expo-notifications",
         {
