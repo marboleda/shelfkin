@@ -34,6 +34,7 @@ export default function SignInScreen() {
   const passwordRef = useRef<TextInputInstance>(null);
 
   const sessionEnded = auth.status === 'signedOut' && auth.sessionEnded;
+  const accountDeleted = auth.status === 'signedOut' && auth.accountDeleted;
   const redirect = typeof params[REDIRECT_PARAM] === 'string' ? params[REDIRECT_PARAM] : undefined;
 
   async function submit() {
@@ -81,7 +82,10 @@ export default function SignInScreen() {
   return (
     <Screen title="Sign in" accessory={<AuthHeader />}>
       {pendingInvite ? <FormMessage testID="pending-invite" tone="info" message={PENDING_INVITE_MESSAGE} /> : null}
-      {sessionEnded && !formError && !notice ? (
+      {accountDeleted && !formError && !notice ? (
+        <FormMessage testID="account-deleted" tone="info" message={AUTH_MESSAGES.accountDeleted} />
+      ) : null}
+      {sessionEnded && !accountDeleted && !formError && !notice ? (
         <FormMessage testID="session-ended" tone="info" message={AUTH_MESSAGES.sessionEnded} />
       ) : null}
       {formError ? <FormMessage testID="form-error" tone="error" message={formError} /> : null}

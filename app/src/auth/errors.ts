@@ -10,6 +10,7 @@ export const AUTH_MESSAGES = {
   weakPassword: 'Choose a stronger password',
   generic: 'Something went wrong. Please try again.',
   sessionEnded: 'Your session has ended. Please sign in again.',
+  accountDeleted: 'Your account has been deleted.',
 } as const;
 
 /** Shown after "Forgot password?", the same whether or not the account exists. */

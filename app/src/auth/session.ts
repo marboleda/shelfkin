@@ -4,7 +4,9 @@
 //
 // Sign-out hook points (used by #34, #35 and #46):
 // - `addBeforeSignOutTask(task)` runs `task` before Firebase signs out, while
-//   the user's ID token still works (e.g. to remove the push token).
+//   the user's ID token still works (e.g. to remove the push token). After the
+//   account was deleted (#46) the token no longer works, and the task is told
+//   so (`accountDeleted`) to skip its API calls.
 // - `onSignedOut(listener)` runs after the user is signed out, however that
 //   happened: the Sign out button, a session that ended, or another browser tab.
 
@@ -29,18 +31,33 @@ export type AuthUser = {
 
 export type AuthState =
   | { status: 'loading' }
-  | { status: 'signedOut'; /** True when the user was signed in earlier in this app run. */ signedOutInSession: boolean; sessionEnded: boolean }
+  | {
+      status: 'signedOut';
+      /** True when the user was signed in earlier in this app run. */
+      signedOutInSession: boolean;
+      sessionEnded: boolean;
+      /** True when the user was signed out because they deleted their account (#46). */
+      accountDeleted: boolean;
+    }
   | { status: 'signedIn'; user: AuthUser };
 
 type Task = () => void | Promise<void>;
+
+export type SignOutContext = {
+  /** The account was just deleted: the API no longer accepts the user's token, so do not call it. */
+  accountDeleted: boolean;
+};
+
+type BeforeSignOutTask = (context: SignOutContext) => void | Promise<void>;
 
 let snapshot: AuthState = { status: 'loading' };
 let started = false;
 let wasSignedIn = false;
 let sessionEnded = false;
+let accountDeleted = false;
 let signOutInFlight: Promise<void> | null = null;
 const subscribers = new Set<() => void>();
-const beforeSignOutTasks = new Set<Task>();
+const beforeSignOutTasks = new Set<BeforeSignOutTask>();
 const signedOutListeners = new Set<Task>();
 
 function emit() {
@@ -60,9 +77,10 @@ function handleUser(user: User | null) {
     }
     wasSignedIn = true;
     sessionEnded = false;
+    accountDeleted = false;
     setSnapshot({ status: 'signedIn', user: { uid: user.uid, email: user.email } });
   } else {
-    setSnapshot({ status: 'signedOut', signedOutInSession: wasSignedIn, sessionEnded });
+    setSnapshot({ status: 'signedOut', signedOutInSession: wasSignedIn, sessionEnded, accountDeleted });
   }
   if (previous.status === 'signedIn' && (!user || user.uid !== previous.user.uid)) {
     for (const listener of [...signedOutListeners]) {
@@ -105,7 +123,7 @@ export function getAuthState(): AuthState {
 }
 
 /** Registers a task to run before every sign-out. Returns a function that removes it. */
-export function addBeforeSignOutTask(task: Task): () => void {
+export function addBeforeSignOutTask(task: BeforeSignOutTask): () => void {
   beforeSignOutTasks.add(task);
   return () => {
     beforeSignOutTasks.delete(task);
@@ -167,13 +185,18 @@ export async function sendPasswordReset(email: string): Promise<void> {
  * Runs the before-sign-out tasks, then signs out of Firebase. The layouts then
  * send the user to /sign-in, and the `onSignedOut` listeners clear cached data.
  * A task that fails does not stop the sign-out.
+ *
+ * `accountDeleted`: the API has just deleted the account (`DELETE /me`). The
+ * tasks are told not to call the API, and /sign-in says the account was deleted.
  */
-export function signOut(options: { sessionEnded?: boolean } = {}): Promise<void> {
+export function signOut(options: { sessionEnded?: boolean; accountDeleted?: boolean } = {}): Promise<void> {
   if (options.sessionEnded) sessionEnded = true;
+  if (options.accountDeleted) accountDeleted = true;
   if (!signOutInFlight) {
     signOutInFlight = (async () => {
       try {
-        const results = await Promise.allSettled([...beforeSignOutTasks].map((task) => task()));
+        const context: SignOutContext = { accountDeleted };
+        const results = await Promise.allSettled([...beforeSignOutTasks].map((task) => task(context)));
         for (const result of results) {
           if (result.status === 'rejected') console.warn('A before-sign-out task failed', result.reason);
         }
@@ -190,6 +213,7 @@ export function signOut(options: { sessionEnded?: boolean } = {}): Promise<void>
 export function resetAuthSessionForTests() {
   wasSignedIn = false;
   sessionEnded = false;
+  accountDeleted = false;
   signOutInFlight = null;
   beforeSignOutTasks.clear();
 }
