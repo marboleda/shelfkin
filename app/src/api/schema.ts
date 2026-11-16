@@ -39,7 +39,33 @@ export interface paths {
         get: operations["getMe"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Permanently delete the signed-in user's account
+         * @description Deletes the caller's Shelfkin user and their Firebase Auth account, in
+         *     one transaction:
+         *
+         *     - Every household the caller owns and is the only member of is
+         *       deleted, with its entries, events, custom items and invites.
+         *     - The caller's memberships and push tokens are deleted.
+         *     - Entries, events, households, invites and custom items the caller
+         *       created or changed in households that remain are kept, with the
+         *       caller replaced by `null` (for example `actorName: null` in the
+         *       pantry).
+         *
+         *     If the caller owns a household that has other members, nothing is
+         *     deleted and the response is 409 (code `must_transfer_ownership`)
+         *     listing those households: ownership must be transferred first.
+         *
+         *     The Firebase user is deleted last. If that fails, nothing is deleted
+         *     and the response is 503 (code `account_deletion_failed`), so the call
+         *     can be retried. A Firebase user that is already gone counts as
+         *     deleted.
+         *
+         *     Afterwards, requests with an ID token issued before the deletion
+         *     (still valid for up to an hour) get 401; they do not create a new
+         *     account.
+         */
+        delete: operations["deleteMe"];
         options?: never;
         head?: never;
         /**
@@ -626,7 +652,8 @@ export interface components {
              * @description A stable, machine-readable error code, for example `bad_request`,
              *     `unauthorized`, `forbidden`, `not_found`, `method_not_allowed`,
              *     `internal`, `database_unavailable`, `invalid_display_name`,
-             *     `invalid_timezone`, `invalid_name` or `owner_only`.
+             *     `invalid_timezone`, `invalid_name`, `owner_only`,
+             *     `must_transfer_ownership` or `account_deletion_failed`.
              * @example not_found
              */
             code: string;
@@ -635,6 +662,32 @@ export interface components {
              * @example Household not found.
              */
             message: string;
+        };
+        /**
+         * @description The `Error` format with the households whose ownership must be
+         *     transferred before the account can be deleted (`DELETE /me`, 409).
+         */
+        DeleteAccountConflict: {
+            error: {
+                /**
+                 * @description Always `must_transfer_ownership`.
+                 * @example must_transfer_ownership
+                 */
+                code: string;
+                /**
+                 * @description Readable text naming the households. It may change; branch on `code` instead.
+                 * @example Transfer ownership of "Home" to another member before deleting your account.
+                 */
+                message: string;
+                /** @description The households the caller owns that have other members, sorted by name (case-insensitive). Never empty. */
+                households: components["schemas"]["HouseholdRef"][];
+            };
+        };
+        /** @description A household's ID and name. */
+        HouseholdRef: {
+            id: components["schemas"]["Id"];
+            /** @example Home */
+            name: string;
         };
         Health: {
             /** @enum {string} */
@@ -1387,6 +1440,73 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             500: components["responses"]["InternalError"];
+        };
+    };
+    deleteMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account was deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            /**
+             * @description The caller owns at least one household that has other members (code
+             *     `must_transfer_ownership`). `households` lists them, sorted by name,
+             *     and the message names them. Nothing was deleted.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "must_transfer_ownership",
+                     *         "message": "Transfer ownership of \"Home\" to another member before deleting your account.",
+                     *         "households": [
+                     *           {
+                     *             "id": "0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80",
+                     *             "name": "Home"
+                     *           }
+                     *         ]
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["DeleteAccountConflict"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+            /**
+             * @description The Firebase account could not be deleted (code
+             *     `account_deletion_failed`). Nothing was deleted; try again later.
+             */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": {
+                     *         "code": "account_deletion_failed",
+                     *         "message": "Your account could not be deleted right now. Nothing was deleted; try again later."
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     patchMe: {

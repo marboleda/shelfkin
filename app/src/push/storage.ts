@@ -48,3 +48,12 @@ export async function saveDevicePush(uid: string, state: DevicePushState): Promi
     console.warn('Could not save the device notification setting', error);
   }
 }
+
+/** Forgets what this user chose for this device, e.g. after their account was deleted (#46). */
+export async function clearDevicePush(uid: string): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(devicePushKey(uid));
+  } catch (error) {
+    console.warn('Could not clear the device notification setting', error);
+  }
+}

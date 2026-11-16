@@ -83,6 +83,10 @@ func (fakeAPI) PatchMe(context.Context, openapi.PatchMeRequestObject) (openapi.P
 	return nil, errNotImplemented
 }
 
+func (fakeAPI) DeleteMe(context.Context, openapi.DeleteMeRequestObject) (openapi.DeleteMeResponseObject, error) {
+	return nil, errNotImplemented
+}
+
 func (fakeAPI) RegisterPushToken(context.Context, openapi.RegisterPushTokenRequestObject) (openapi.RegisterPushTokenResponseObject, error) {
 	return nil, errNotImplemented
 }

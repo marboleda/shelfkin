@@ -109,6 +109,68 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
+    delete:
+      operationId: deleteMe
+      summary: Permanently delete the signed-in user's account
+      description: |
+        Deletes the caller's Shelfkin user and their Firebase Auth account, in
+        one transaction:
+
+        - Every household the caller owns and is the only member of is
+          deleted, with its entries, events, custom items and invites.
+        - The caller's memberships and push tokens are deleted.
+        - Entries, events, households, invites and custom items the caller
+          created or changed in households that remain are kept, with the
+          caller replaced by `null` (for example `actorName: null` in the
+          pantry).
+
+        If the caller owns a household that has other members, nothing is
+        deleted and the response is 409 (code `must_transfer_ownership`)
+        listing those households: ownership must be transferred first.
+
+        The Firebase user is deleted last. If that fails, nothing is deleted
+        and the response is 503 (code `account_deletion_failed`), so the call
+        can be retried. A Firebase user that is already gone counts as
+        deleted.
+
+        Afterwards, requests with an ID token issued before the deletion
+        (still valid for up to an hour) get 401; they do not create a new
+        account.
+      responses:
+        '204':
+          description: The account was deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: |
+            The caller owns at least one household that has other members (code
+            `must_transfer_ownership`). `households` lists them, sorted by name,
+            and the message names them. Nothing was deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteAccountConflict'
+              example:
+                error:
+                  code: must_transfer_ownership
+                  message: Transfer ownership of "Home" to another member before deleting your account.
+                  households:
+                    - id: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+                      name: Home
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: |
+            The Firebase account could not be deleted (code
+            `account_deletion_failed`). Nothing was deleted; try again later.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: account_deletion_failed
+                  message: Your account could not be deleted right now. Nothing was deleted; try again later.
   /me/push-tokens:
     post:
       operationId: registerPushToken
@@ -1120,13 +1182,54 @@ components:
             A stable, machine-readable error code, for example `bad_request`,
             `unauthorized`, `forbidden`, `not_found`, `method_not_allowed`,
             `internal`, `database_unavailable`, `invalid_display_name`,
-            `invalid_timezone`, `invalid_name` or `owner_only`.
+            `invalid_timezone`, `invalid_name`, `owner_only`,
+            `must_transfer_ownership` or `account_deletion_failed`.
           type: string
           example: not_found
         message:
           description: Readable text describing the error. It may change; branch on `code` instead.
           type: string
           example: Household not found.
+    DeleteAccountConflict:
+      description: |
+        The `Error` format with the households whose ownership must be
+        transferred before the account can be deleted (`DELETE /me`, 409).
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+            - households
+          properties:
+            code:
+              description: Always `must_transfer_ownership`.
+              type: string
+              example: must_transfer_ownership
+            message:
+              description: Readable text naming the households. It may change; branch on `code` instead.
+              type: string
+              example: Transfer ownership of "Home" to another member before deleting your account.
+            households:
+              description: The households the caller owns that have other members, sorted by name (case-insensitive). Never empty.
+              type: array
+              items:
+                $ref: '#/components/schemas/HouseholdRef'
+    HouseholdRef:
+      description: A household's ID and name.
+      type: object
+      required:
+        - id
+        - name
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        name:
+          type: string
+          example: Home
     Health:
       type: object
       required:

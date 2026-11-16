@@ -269,3 +269,26 @@ func TestAuthenticateRunsAsAppRole(t *testing.T) {
 		t.Errorf("err = %v, want permission denied from running as shelfkin_app", err)
 	}
 }
+
+// TestAuthenticateDeletedAccount: a valid token of a Firebase user whose
+// account was deleted (listed in deleted_accounts) is rejected as invalid and
+// creates no user; other users are unaffected.
+func TestAuthenticateDeletedAccount(t *testing.T) {
+	pool := dbtest.New(t)
+	v := authtest.NewVerifier()
+	a := auth.NewAuthenticator(v, pool)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `INSERT INTO deleted_accounts (firebase_uid) VALUES ('gone')`); err != nil {
+		t.Fatal(err)
+	}
+	_, err := a.Authenticate(ctx, v.Issue(auth.Token{UID: "gone", Name: "Gone"}))
+	if !errors.Is(err, auth.ErrAccountDeleted) || !errors.Is(err, auth.ErrInvalidToken) {
+		t.Errorf("Authenticate for a deleted account: err = %v, want ErrAccountDeleted (an ErrInvalidToken)", err)
+	}
+	if rows := usersFor(t, pool, "gone"); len(rows) != 0 {
+		t.Errorf("got %d users rows for a deleted account, want 0", len(rows))
+	}
+	if _, err := a.Authenticate(ctx, v.Issue(auth.Token{UID: "other", Name: "Other"})); err != nil {
+		t.Errorf("Authenticate for another user: %v", err)
+	}
+}

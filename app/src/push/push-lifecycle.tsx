@@ -11,7 +11,7 @@ import type { components } from '@/api/schema';
 import { addBeforeSignOutTask, getAuthState, useAuth } from '@/auth/session';
 
 import { ensureAndroidChannel, isNativeApp } from './device';
-import { registerOnStart, unregisterBeforeSignOut } from './registration';
+import { forgetDeviceAfterAccountDeleted, registerOnStart, unregisterBeforeSignOut } from './registration';
 
 type Me = components['schemas']['User'];
 
@@ -45,7 +45,8 @@ function currentProfile(queryClient: QueryClient): Promise<Me> {
  * - On each app start and sign-in, registers this device's token again when
  *   reminders are on for the account and this device, and permission is granted.
  * - Registers again when the OS hands the app a new push token.
- * - Deletes this device's token before every sign-out.
+ * - Deletes this device's token before every sign-out (after the account was
+ *   deleted, only forgets it: the API already deleted it).
  */
 export function PushLifecycle() {
   const auth = useAuth();
@@ -55,9 +56,14 @@ export function PushLifecycle() {
   useEffect(() => {
     if (!isNativeApp()) return;
     ensureAndroidChannel().catch((error) => console.warn('Could not create the notification channel', error));
-    return addBeforeSignOutTask(async () => {
+    return addBeforeSignOutTask(async ({ accountDeleted }) => {
       const state = getAuthState();
-      if (state.status === 'signedIn') await unregisterBeforeSignOut(state.user.uid);
+      if (state.status !== 'signedIn') return;
+      if (accountDeleted) {
+        await forgetDeviceAfterAccountDeleted(state.user.uid);
+      } else {
+        await unregisterBeforeSignOut(state.user.uid);
+      }
     });
   }, []);
 

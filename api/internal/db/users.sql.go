@@ -34,6 +34,39 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (pgtype.
 	return id, err
 }
 
+const deleteAccount = `-- name: DeleteAccount :many
+SELECT household_id::uuid AS household_id, household_name::text AS household_name
+FROM public.delete_account()
+`
+
+type DeleteAccountRow struct {
+	HouseholdID   pgtype.UUID
+	HouseholdName string
+}
+
+// Deletes the caller (app.user_id) and the households they own alone, or,
+// when they own a household that has other members, deletes nothing and
+// returns those households. See the delete_account migration.
+func (q *Queries) DeleteAccount(ctx context.Context) ([]DeleteAccountRow, error) {
+	rows, err := q.db.Query(ctx, deleteAccount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DeleteAccountRow
+	for rows.Next() {
+		var i DeleteAccountRow
+		if err := rows.Scan(&i.HouseholdID, &i.HouseholdName); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getUser = `-- name: GetUser :one
 SELECT id, display_name, email, timezone, push_enabled
 FROM users
@@ -61,6 +94,17 @@ func (q *Queries) GetUser(ctx context.Context, id pgtype.UUID) (GetUserRow, erro
 	return i, err
 }
 
+const getUserFirebaseUID = `-- name: GetUserFirebaseUID :one
+SELECT firebase_uid FROM users WHERE id = $1
+`
+
+func (q *Queries) GetUserFirebaseUID(ctx context.Context, id pgtype.UUID) (string, error) {
+	row := q.db.QueryRow(ctx, getUserFirebaseUID, id)
+	var firebase_uid string
+	err := row.Scan(&firebase_uid)
+	return firebase_uid, err
+}
+
 const getUserIdentityByFirebaseUID = `-- name: GetUserIdentityByFirebaseUID :one
 SELECT id, email FROM users WHERE firebase_uid = $1
 `
@@ -78,6 +122,20 @@ func (q *Queries) GetUserIdentityByFirebaseUID(ctx context.Context, firebaseUid 
 	var i GetUserIdentityByFirebaseUIDRow
 	err := row.Scan(&i.ID, &i.Email)
 	return i, err
+}
+
+const isAccountDeleted = `-- name: IsAccountDeleted :one
+SELECT EXISTS (SELECT 1 FROM deleted_accounts WHERE firebase_uid = $1)::boolean AS deleted
+`
+
+// Whether the Firebase user's Shelfkin account was deleted within the last
+// day (see the delete_account migration). The auth middleware checks it
+// before creating a user, so an old ID token cannot recreate the account.
+func (q *Queries) IsAccountDeleted(ctx context.Context, firebaseUid string) (bool, error) {
+	row := q.db.QueryRow(ctx, isAccountDeleted, firebaseUid)
+	var deleted bool
+	err := row.Scan(&deleted)
+	return deleted, err
 }
 
 const updateUserEmail = `-- name: UpdateUserEmail :exec

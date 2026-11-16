@@ -23,7 +23,8 @@ resource "google_service_account" "github_deployer" {
   depends_on = [google_project_service.this]
 }
 
-# --- api-runtime: connect to Cloud SQL, read its own DATABASE_URL ---
+# --- api-runtime: connect to Cloud SQL, read its own DATABASE_URL, delete
+# Firebase users ---
 
 resource "google_project_iam_member" "api_runtime_sql_client" {
   project = var.project_id
@@ -35,6 +36,14 @@ resource "google_secret_manager_secret_iam_member" "api_runtime" {
   secret_id = google_secret_manager_secret.api_database_url.id
   role      = "roles/secretmanager.secretAccessor"
   member    = google_service_account.api_runtime.member
+}
+
+# DELETE /me deletes the caller's Firebase Auth user with the Admin SDK (#46),
+# which needs firebaseauth.users.delete. Verifying ID tokens needs no role.
+resource "google_project_iam_member" "api_runtime_firebase_auth_admin" {
+  project = var.project_id
+  role    = "roles/firebaseauth.admin"
+  member  = google_service_account.api_runtime.member
 }
 
 # --- migrate-runtime: connect to Cloud SQL, read its own DATABASE_URL and

@@ -294,6 +294,25 @@ type CreateHousehold struct {
 // Example: 2026-02-14
 type Date = openapi_types.Date
 
+// DeleteAccountConflict The `Error` format with the households whose ownership must be
+// transferred before the account can be deleted (`DELETE /me`, 409).
+type DeleteAccountConflict struct {
+	Error struct {
+		// Code Always `must_transfer_ownership`.
+		//
+		// Example: must_transfer_ownership
+		Code string `json:"code"`
+
+		// Households The households the caller owns that have other members, sorted by name (case-insensitive). Never empty.
+		Households []HouseholdRef `json:"households"`
+
+		// Message Readable text naming the households. It may change; branch on `code` instead.
+		//
+		// Example: Transfer ownership of "Home" to another member before deleting your account.
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
 // EntryChange The old and new value of one field. A stock level or a `YYYY-MM-DD`
 // date is a string, a location ID a number, and no expiry date is null.
 type EntryChange struct {
@@ -314,7 +333,8 @@ type ErrorDetail struct {
 	// Code A stable, machine-readable error code, for example `bad_request`,
 	// `unauthorized`, `forbidden`, `not_found`, `method_not_allowed`,
 	// `internal`, `database_unavailable`, `invalid_display_name`,
-	// `invalid_timezone`, `invalid_name` or `owner_only`.
+	// `invalid_timezone`, `invalid_name`, `owner_only`,
+	// `must_transfer_ownership` or `account_deletion_failed`.
 	//
 	//
 	// Example: not_found
@@ -370,6 +390,17 @@ type Household struct {
 // HouseholdList defines model for HouseholdList.
 type HouseholdList struct {
 	Households []Household `json:"households"`
+}
+
+// HouseholdRef A household's ID and name.
+type HouseholdRef struct {
+	// Id A UUIDv7 identifier.
+	//
+	// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
+	Id Id `json:"id"`
+
+	// Name Example: Home
+	Name string `json:"name"`
 }
 
 // Id A UUIDv7 identifier.
@@ -992,6 +1023,9 @@ type ServerInterface interface {
 	// ListLocations List the storage locations
 	// (GET /locations)
 	ListLocations(w http.ResponseWriter, r *http.Request)
+	// DeleteMe Permanently delete the signed-in user's account
+	// (DELETE /me)
+	DeleteMe(w http.ResponseWriter, r *http.Request)
 	// GetMe Get the signed-in user's profile
 	// (GET /me)
 	GetMe(w http.ResponseWriter, r *http.Request)
@@ -1669,6 +1703,20 @@ func (siw *ServerInterfaceWrapper) ListLocations(w http.ResponseWriter, r *http.
 	handler.ServeHTTP(w, r)
 }
 
+// DeleteMe operation middleware
+func (siw *ServerInterfaceWrapper) DeleteMe(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteMe(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetMe operation middleware
 func (siw *ServerInterfaceWrapper) GetMe(w http.ResponseWriter, r *http.Request) {
 
@@ -1858,6 +1906,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	}
 
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/health", wrapper.GetHealth)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/me", wrapper.DeleteMe)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/me", wrapper.GetMe)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/me", wrapper.PatchMe)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/me/push-tokens", wrapper.RegisterPushToken)
@@ -3779,6 +3828,77 @@ func (response ListLocations500JSONResponse) VisitListLocationsResponse(w http.R
 	return err
 }
 
+type DeleteMeRequestObject struct {
+}
+
+type DeleteMeResponseObject interface {
+	VisitDeleteMeResponse(w http.ResponseWriter) error
+}
+
+type DeleteMe204Response struct {
+}
+
+func (response DeleteMe204Response) VisitDeleteMeResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteMe401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteMe401JSONResponse) VisitDeleteMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteMe409JSONResponse DeleteAccountConflict
+
+func (response DeleteMe409JSONResponse) VisitDeleteMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteMe500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response DeleteMe500JSONResponse) VisitDeleteMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteMe503JSONResponse Error
+
+func (response DeleteMe503JSONResponse) VisitDeleteMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetMeRequestObject struct {
 }
 
@@ -4071,6 +4191,9 @@ type StrictServerInterface interface {
 	// ListLocations List the storage locations
 	// (GET /locations)
 	ListLocations(ctx context.Context, request ListLocationsRequestObject) (ListLocationsResponseObject, error)
+	// DeleteMe Permanently delete the signed-in user's account
+	// (DELETE /me)
+	DeleteMe(ctx context.Context, request DeleteMeRequestObject) (DeleteMeResponseObject, error)
 	// GetMe Get the signed-in user's profile
 	// (GET /me)
 	GetMe(ctx context.Context, request GetMeRequestObject) (GetMeResponseObject, error)
@@ -4768,6 +4891,30 @@ func (sh *strictHandler) ListLocations(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ListLocationsResponseObject); ok {
 		if err := validResponse.VisitListLocationsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteMe operation middleware
+func (sh *strictHandler) DeleteMe(w http.ResponseWriter, r *http.Request) {
+	var request DeleteMeRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteMe(ctx, request.(DeleteMeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteMe")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteMeResponseObject); ok {
+		if err := validResponse.VisitDeleteMeResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

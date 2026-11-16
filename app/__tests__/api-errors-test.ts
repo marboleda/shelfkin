@@ -11,6 +11,11 @@ describe('errorFromResponse', () => {
     });
   });
 
+  test('keeps the parsed body, for error responses with more than code and message', () => {
+    const body = { error: { code: 'must_transfer_ownership', message: 'Transfer first.', households: [{ id: 'a', name: 'Home' }] } };
+    expect(errorFromResponse(409, body).body).toEqual(body);
+  });
+
   test('an empty body gives an http error with only the status', () => {
     expect(errorFromResponse(404, undefined)).toMatchObject({ kind: 'http', status: 404, code: undefined });
   });
