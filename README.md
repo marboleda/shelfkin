@@ -320,7 +320,7 @@ CI runs `terraform fmt -check`, `terraform init -backend=false`, `terraform vali
 | `firebase_web_config.authDomain` | `EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN` (#39) | `EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN` (#41) |
 | `firebase_web_config.projectId` | `EXPO_PUBLIC_FIREBASE_PROJECT_ID` (#39) | `EXPO_PUBLIC_FIREBASE_PROJECT_ID` (#41) |
 | `firebase_android_app_id` | | `google-services.json` file variable (#41), downloaded with `firebase apps:sdkconfig android <id>` |
-| `firebase_apple_app_id` | | Used by #41 for the iOS config and push |
+| `firebase_apple_app_id` | | Not needed by the app: it signs in with the Firebase JS SDK, and iOS push goes through APNs with the key stored in EAS (see [Mobile releases](#mobile-releases)) |
 
 `artifact_registry_repository` (the image path prefix), `cloudsql_connection_name` and `hosting_url` are for reference: #38 derives image names from the project and region variables. The Firebase web API key is not a secret; it ships in the web bundle.
 
@@ -724,6 +724,145 @@ Then connect as `shelfkin_api` (`user=shelfkin_api`; its password is in the `api
 BEGIN; SET LOCAL ROLE shelfkin_app; RESET ROLE; SELECT FROM household_members; ROLLBACK;
 BEGIN; SET LOCAL ROLE shelfkin_app; RESET ROLE; SELECT FROM users; ROLLBACK;
 ```
+
+## Mobile releases
+
+The iOS and Android apps are built and signed in the cloud with [EAS Build](https://docs.expo.dev/build/introduction/) and uploaded to TestFlight and Google Play internal testing with [EAS Submit](https://docs.expo.dev/submit/introduction/). Nothing is built in CI, and over-the-air updates (`eas update`) are not used in v1. Run EAS CLI from `app/` as `npx eas-cli@latest <command>` (see [app/AGENTS.md](app/AGENTS.md)). `ios/` and `android/` are generated at build time and never committed.
+
+The configuration lives in:
+
+| File | What it holds |
+|---|---|
+| `app/eas.json` | The `development`, `preview` and `production` build profiles, `appVersionSource: remote`, and the submit profile (Android track `internal`) |
+| `app/package.json` | `expo-dev-client`, which the `development` profile (`developmentClient: true`) builds into the app. Without it, `eas build --profile development --non-interactive` stops with "Install expo-dev-client manually", and an interactive build offers to install it and leaves `package.json` changed |
+| `app/app.json` | Static native config: name, version `1.0.0`, bundle identifier and package `com.marboleda.shelfkin`, icons and splash, `ios.config.usesNonExemptEncryption: false`, unlocked orientation (tablets rotate, #23), universal links and app links (#33) and push (`expo-notifications`). `owner` and `extra.eas.projectId` are added by `eas init` (see [One-time setup](#one-time-setup)) |
+| `app/app.config.js` | Build-time values from EAS environment variables: `android.googleServicesFile` from the `GOOGLE_SERVICES_JSON` file variable. On an EAS preview or production build it also stops the build at the start when a required variable is missing or the Auth emulator is set, instead of producing an app that only shows "App not configured" |
+
+`app/__tests__/mobile-build-config-test.ts` checks all three, and CI's `app` job also resolves the full native config (`npx expo config --type introspect`).
+
+### Accounts needed
+
+- An **Expo account** that owns the EAS project. It runs `eas init`, `eas build`, `eas credentials` and `eas submit`, and manages the EAS environment variables.
+- **Apple Developer Program** membership (paid) with the Account Holder or Admin role, so EAS can create the bundle ID, the distribution certificate, provisioning profiles and the APNs key. Also **App Store Connect** access, and an **App Store Connect API key** (Issuer ID, Key ID, `.p8`) stored in EAS for `eas submit`.
+- A **Google Play Console** developer account (one-time fee, identity verified) with the app created for package `com.marboleda.shelfkin`, and a **Google Cloud service account** JSON key with release rights in Play Console, stored in EAS for `eas submit`.
+- Access to the **Firebase project** from [Infrastructure](#infrastructure) (#37), to download `google-services.json` and create the FCM V1 service account key.
+- At least one physical **iPhone** and one **Android phone**.
+
+Credentials are managed by EAS: the iOS distribution certificate, provisioning profiles and APNs key, the Android upload keystore, the FCM V1 key and both store submission keys are stored on Expo's servers, and `npx eas-cli@latest credentials` shows them. None of them is committed. `app/.gitignore` ignores `google-services.json`, `GoogleService-Info.plist`, `*.p8`, `*.p12`, `*.jks`, `*.keystore`, `*.mobileprovision`, service account keys and `credentials.json`. If you download one to upload it, delete the local copy afterwards.
+
+### Build profiles
+
+| Profile | What it is | Distribution | EAS environment | API and sign-in |
+|---|---|---|---|---|
+| `development` | Development client (`expo-dev-client`): loads JavaScript from `npx expo start` on your computer | Internal (install from the build page) | `development` | The local API and Auth emulator, from your `app/.env.local` (see [app/README.md](app/README.md#sign-in-and-the-auth-emulator)). Metro inlines `EXPO_PUBLIC_*` when it serves the bundle, so these values are not stored in EAS |
+| `preview` | A release build for testing on your own phone. Android builds an APK | Internal (install from the build page) | `preview` | The production API and the production Firebase project |
+| `production` | The store build. Android builds an AAB. EAS increments the build number on every build | Store (TestFlight, Play internal testing) | `production` | The production API and the production Firebase project |
+
+### EAS environment variables
+
+Set these in the EAS project (expo.dev > the project > Environment variables, or `eas env:set`), from `terraform output` (see [Outputs to GitHub Actions and EAS variables](#outputs-to-github-actions-and-eas-variables)). They are the same values the web deploy uses. The `EXPO_PUBLIC_*` values end up in the app bundle and are not secrets, so make them **plain text** or **sensitive**, not **secret**: EAS CLI cannot read secret variables when it resolves the build config on your computer.
+
+| Variable | `development` | `preview` | `production` | Value |
+|---|---|---|---|---|
+| `EXPO_PUBLIC_API_URL` | Not set | Required | Required | `api_url`, the Cloud Run URL |
+| `EXPO_PUBLIC_FIREBASE_API_KEY` | Not set | Required | Required | `firebase_web_config.apiKey` |
+| `EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN` | Not set | Required | Required | `firebase_web_config.authDomain` |
+| `EXPO_PUBLIC_FIREBASE_PROJECT_ID` | Not set | Required | Required | `firebase_web_config.projectId` |
+| `EXPO_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST` | Not set (it goes in `app/.env.local`) | **Must not be set** | **Must not be set** | |
+| `GOOGLE_SERVICES_JSON` (file, secret) | Recommended (push on Android development builds) | Required for Android | Required for Android | `google-services.json` of the Firebase Android app (`firebase_android_app_id`) |
+
+```sh
+cd app
+for env in preview production; do
+  npx eas-cli@latest env:set --environment "$env" --visibility plaintext \
+    --name EXPO_PUBLIC_API_URL --value "$(terraform -chdir=../infra output -raw api_url)"
+done
+# ...and the same for the three EXPO_PUBLIC_FIREBASE_* values (terraform -chdir=../infra output firebase_web_config)
+
+# google-services.json: download it, upload it as a secret file variable, then delete the local copy
+npx firebase-tools@15.34.2 apps:sdkconfig android "$(terraform -chdir=../infra output -raw firebase_android_app_id)" \
+  --project "$(terraform -chdir=../infra output -raw project_id)" --out google-services.json
+npx eas-cli@latest env:set --type file --visibility secret --name GOOGLE_SERVICES_JSON --value ./google-services.json \
+  --environment development --environment preview --environment production
+rm google-services.json
+```
+
+Check with `npx eas-cli@latest env:list --environment production` (and `preview`). An Android development build without `GOOGLE_SERVICES_JSON` still builds, but cannot get a push token. iOS needs no Firebase file: the app signs in with the Firebase JS SDK, and push goes through APNs with the key stored in EAS.
+
+### One-time setup
+
+Done once by the owner, in this order. Record the results on #41.
+
+1. **Link the EAS project.** In `app/`, run `npx eas-cli@latest login`, then `npx eas-cli@latest init`. It creates the project and writes `owner` and `extra.eas.projectId` into `app/app.json`. If it says it cannot change a dynamic config, add both to `app.json` by hand: `"owner": "<expo account>"` next to `"slug"`, and `"extra": { "eas": { "projectId": "<id>" } }`. Commit the change in a PR. The push code (`src/push/device.ts`) needs the project ID to get Expo push tokens.
+2. **Environment variables**, as in the table above.
+3. **iOS credentials.** Run `npx eas-cli@latest credentials -p ios`, profile `production`. Sign in with the Apple Developer account and let EAS create the distribution certificate and provisioning profile for `com.marboleda.shelfkin`. Then, under Push Notifications, set up (generate) an APNs key. EAS turns on the Push Notifications capability for the bundle ID from the `aps-environment` entitlement that `expo-notifications` adds. Also add an App Store Connect API key (App Store Connect > Users and Access > Integrations, App Manager role) under "App Store Connect: Manage your API Key", for `eas submit`.
+4. **Android credentials.** Run `npx eas-cli@latest credentials -p android`, profile `production`, and let EAS generate the upload keystore. Then Google Service Account > "Manage your Google Service Account Key for Push Notifications (FCM V1)" > upload the key created in the Firebase console (Project settings > Service accounts > Generate new private key). Delete the downloaded key file afterwards.
+5. **Google Play Console.** Create the app (package `com.marboleda.shelfkin`) and the internal testing track. Google requires the **first AAB to be uploaded by hand**: build it (`npx eas-cli@latest build -p android --profile production`), download the `.aab` from the build page and upload it in Testing > Internal testing > Create new release. **Finish the release**: add release notes, Next > Save, then roll it out to internal testing (Play Console may first ask you to complete the app's setup tasks on the Dashboard). Until the app has a rolled-out release, Play treats it as a draft app and accepts only draft releases, so `eas submit -p android` fails with "Only releases with status draft may be created on draft app". The submit profile does not set `releaseStatus`, so it creates `completed` releases and needs this first rollout. Then create a Google Cloud service account with a JSON key, invite it in Play Console (Users and permissions) with release rights for the app, and add the key with `npx eas-cli@latest credentials -p android` > Google Service Account > "Manage your Google Service Account Key for submissions". From then on, `eas submit -p android` uploads Android builds and releases them to internal testing.
+6. **Record the signing values** for universal links and app links in [the table below](#signing-values-for-universal-links-and-app-links), and replace the placeholders in `app/public/.well-known/` in a PR (#33).
+
+### Building
+
+From `app/`:
+
+```sh
+npx eas-cli@latest build --profile development --platform all   # or --platform ios / android
+npx eas-cli@latest build --profile preview --platform all
+npx eas-cli@latest build --profile production --platform all
+```
+
+The `development` profile needs `expo-dev-client`, which is already in `app/package.json`, so EAS does not stop to install it and the build also works with `--non-interactive`. EAS prints a link to the build page, and the build is also listed under the project on expo.dev. A preview or production build that fails while reading the app config with "This build is missing its configuration" lists the EAS variables to fix.
+
+### Installing preview and development builds on a phone
+
+- **Android:** open the build page on the phone (or scan its QR code) and install the APK. Allow installs from the browser when Android asks.
+- **iOS:** internal builds only install on registered devices. Register each iPhone once with `npx eas-cli@latest device:create` (it gives a link to open on the phone, which installs a profile), then build again so the provisioning profile includes it. On iOS 16 and later, turn on Settings > Privacy & Security > Developer Mode. Open the build page on the iPhone and install.
+- **Development build:** after installing, run `npx expo start` in `app/` on the same network and open the project from the development client: the Shelfkin app shows the `expo-dev-client` launcher, which lists dev servers on the network (or scan the QR code that `npx expo start` prints). To use the local API and Auth emulator, `app/.env.local` must use your computer's LAN IP for both `EXPO_PUBLIC_API_URL` and `EXPO_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST` (see [app/README.md](app/README.md#sign-in-and-the-auth-emulator)).
+
+### Submitting to TestFlight and Google Play internal testing
+
+```sh
+npx eas-cli@latest submit -p ios --latest       # the latest production build to App Store Connect and TestFlight
+npx eas-cli@latest submit -p android --latest   # the latest production AAB to the internal testing track
+# or build and submit in one go:
+npx eas-cli@latest build --profile production --platform all --auto-submit
+```
+
+The first `eas submit -p ios` can create the app in App Store Connect. The build sets `ITSAppUsesNonExemptEncryption` to `false`, so App Store Connect does not ask about export compliance. Processing takes a few minutes before the build shows in TestFlight.
+
+### Adding testers
+
+- **TestFlight:** App Store Connect > the app > TestFlight > Internal Testing. Create a group and add people who are users of the App Store Connect team (any role). Internal testers need no Beta App Review. They install the TestFlight app and accept the invitation.
+- **Google Play internal testing:** Play Console > Testing > Internal testing > Testers. Add an email list (up to 100 testers) and copy the opt-in link. Testers open the link with that Google account, accept, and install from Google Play.
+
+### Versions and build numbers
+
+The version people see is `version` in `app/app.json` (`1.0.0`). Build numbers (`ios.buildNumber`, `android.versionCode`) are kept by EAS (`appVersionSource: remote`), and the `production` profile increments them on every build, so they are not in `app.json`. Show them with `npx eas-cli@latest build:version:get`. If a store already has a higher build number (for example, a build uploaded without EAS), set it once with `npx eas-cli@latest build:version:set -p <ios|android>`.
+
+### Signing values for universal links and app links
+
+#33's association files need these values. They are public and committed. Until they are known, `app/public/.well-known/` holds the `*_PLACEHOLDER_SEE_ISSUE_41` values (see [app/README.md](app/README.md#invite-links)).
+
+| Value | Where to find it | Recorded value | Goes into |
+|---|---|---|---|
+| Apple Team ID | developer.apple.com > Account > Membership details (10 characters), or `npx eas-cli@latest credentials -p ios` | Not recorded yet | `apple-app-site-association`: replaces `APPLE_TEAM_ID_PLACEHOLDER_SEE_ISSUE_41` in `appIDs` and `appID` |
+| SHA-256 of the Android **upload key** | `npx eas-cli@latest credentials -p android` > the production keystore ("SHA256 Fingerprint") | Not recorded yet | `assetlinks.json`: replaces `UPLOAD_KEY_SHA256_PLACEHOLDER_SEE_ISSUE_41` |
+| SHA-256 of the **Google Play app signing key** | Play Console > the app > Test and release > App integrity > App signing ("App signing key certificate", SHA-256) | Not recorded yet | `assetlinks.json`: replaces `PLAY_APP_SIGNING_KEY_SHA256_PLACEHOLDER_SEE_ISSUE_41` |
+
+Fingerprints are upper-case hex pairs separated by colons (`AB:CD:…`, 32 pairs), which `__tests__/association-files-test.ts` checks. Play re-signs every build with the app signing key, so app links fail verification without its fingerprint. iOS reads the association file when the app is installed or updated, so after the web deploy publishes the new values, reinstall the app before checking links.
+
+### Production checks after the first mobile builds
+
+Run these once and record the results on #41. Then run the deferred device checks of #33 and #34 with the same builds, and record those on their issues.
+
+- `npx eas-cli@latest credentials -p ios` shows the APNs key for `com.marboleda.shelfkin`, and `-p android` shows the FCM V1 service account key. In the Apple Developer portal, the identifier has Push Notifications enabled.
+- A **development** build installs on a phone, loads JavaScript from `npx expo start`, and signs up and loads data against the local API and Auth emulator.
+- A **preview** build installs from the build page, and Settings shows "Server: Connected" (#24).
+- The **production** iOS build, uploaded with `eas submit`, is in TestFlight for the internal group. A tester installs it on an iPhone, signs up and sees an empty pantry.
+- The **production** Android AAB is on the internal testing track. A tester installs it from the opt-in link, signs up and sees an empty pantry.
+- TestFlight and Play Console show version 1.0.0 for both builds, and a second production build gets a higher build number.
+- App Store Connect accepted the build without orientation or iPad multitasking errors, and did not ask about export compliance.
+- The icon, the Android adaptive (and themed) icon, and the splash in light and dark mode look right on both phones.
+- The three signing values above are recorded, and the association files are updated.
 
 ## Expiry job in production
 

@@ -3,14 +3,19 @@
     "name": "Shelfkin",
     "slug": "shelfkin",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "com.marboleda.shelfkin",
+      "config": {
+        "usesNonExemptEncryption": false
+      },
       "associatedDomains": ["applinks:shelfkin-5da75.web.app"]
     },
     "android": {
+      "package": "com.marboleda.shelfkin",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -37,12 +42,17 @@
         "expo-splash-screen",
         {
           "backgroundColor": "#F7F6F2",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
           "dark": {
-            "backgroundColor": "#141513"
+            "backgroundColor": "#141513",
+            "image": "./assets/splash-icon.png"
           }
         }
       ],
       "expo-localization",
+      "expo-status-bar",
       [
         "expo-notifications",
         {
