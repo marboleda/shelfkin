@@ -88,6 +88,7 @@ jobs:
       API_URL: ${{ vars.API_URL }}
       SERVICE: shelfkin-api
       MIGRATE_JOB: shelfkin-migrate
+      EXPIRY_JOB: shelfkin-expiry-job
       # The login the API connects as; the migrate job grants shelfkin_app to
       # it (api/cmd/migrate/grant.go).
       API_DB_ROLE: shelfkin_api
@@ -197,11 +198,33 @@ jobs:
 
           exit "$fail"
 
+      # The expiry job (#40) runs the same image. Only the image changes; its
+      # command, env and schedule stay as Terraform set them. Skipped, with a
+      # warning, until `terraform apply` has created the job.
+      - name: Update the expiry job
+        id: expiry
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
+        run: |
+          found="$(gcloud run jobs list \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --filter="metadata.name=${EXPIRY_JOB}" --format='value(metadata.name)')"
+          if [ "$found" != "$EXPIRY_JOB" ]; then
+            echo "::warning::Cloud Run job ${EXPIRY_JOB} does not exist yet (apply infra/ first); its image was not updated."
+            echo "updated=skipped (no job)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gcloud run jobs update "$EXPIRY_JOB" \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --image "$IMAGE" --quiet
+          echo "updated=yes" >> "$GITHUB_OUTPUT"
+
       - name: Summary
         if: always() && steps.image.outputs.digest != ''
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
           REVISION: ${{ steps.deploy.outputs.revision }}
+          EXPIRY: ${{ steps.expiry.outputs.updated }}
         run: |
           {
             echo "### API deploy"
@@ -211,4 +234,5 @@ jobs:
             echo "| Commit | \`${SHA}\` |"
             echo "| Image digest | \`${DIGEST}\` |"
             echo "| Cloud Run revision | \`${REVISION:-not deployed}\` |"
+            echo "| \`${EXPIRY_JOB}\` image updated | ${EXPIRY:-no} |"
           } >> "$GITHUB_STEP_SUMMARY"
