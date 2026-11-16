@@ -107,6 +107,8 @@ describe('Notifications section', () => {
     // The device switch only shows while the account switch is on.
     expect(deviceSwitch()).toBeNull();
     expect(screen.queryByTestId('push-web-note')).toBeNull();
+    // activeThumbColor is a react-native-web prop: phones get thumbColor alone.
+    expect(accountSwitch().props.activeThumbColor).toBeUndefined();
   });
 
   test('turning it on asks for permission, registers the token, sets pushEnabled, and both switches show on', async () => {
@@ -235,6 +237,8 @@ describe('Notifications section', () => {
     await openSettings();
 
     expect(screen.getByTestId('push-web-note')).toHaveTextContent('Reminders are sent to the Shelfkin app on your phone');
+    // react-native-web would otherwise paint the thumb of a switch that is on in its own teal.
+    expect(accountSwitch().props.activeThumbColor).toBeTruthy();
     await toggle('push-account-switch', true);
 
     await waitFor(() => expect(api.log).toEqual(['PATCH /me {"pushEnabled":true}']));

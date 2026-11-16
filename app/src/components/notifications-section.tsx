@@ -1,4 +1,4 @@
-import { ActivityIndicator, Switch, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Switch, Text, View } from 'react-native';
 
 import { openSystemSettings } from '@/push/device';
 import { BLOCKED_MESSAGE, usePushSettings } from '@/push/use-push-settings';
@@ -35,6 +35,9 @@ export function NotificationsSection() {
     trackColor: { false: theme.colors.mutedText, true: theme.colors.primary },
     thumbColor: theme.colors.surface,
     ios_backgroundColor: theme.colors.mutedText,
+    // react-native-web ignores thumbColor while the switch is on and uses its own
+    // teal default unless given activeThumbColor (not in React Native's Switch types).
+    ...(Platform.OS === 'web' ? ({ activeThumbColor: theme.colors.surface } as object) : {}),
   };
 
   return (
