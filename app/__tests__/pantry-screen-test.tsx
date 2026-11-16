@@ -5,6 +5,7 @@ import { http, HttpResponse } from 'msw';
 import { Dimensions, StyleSheet } from 'react-native';
 
 import { queryKeys } from '@/api/query-keys';
+import { householdRowLabel } from '@/components/household-switcher';
 import { colors, CONTENT_MAX_WIDTH } from '@/theme';
 import { apiUrl, setupApiServer } from '../test-utils/api';
 import { signedInApiHandlers, signInTestUser, testHousehold, testMe } from '../test-utils/auth';
@@ -210,7 +211,7 @@ describe('rows', () => {
     expect(screen.getByTestId(`pantry-entry-${MILK_OLD.id}`)).toBeTruthy();
 
     await press(screen.getByLabelText('Switch household, current: Cabin'));
-    await press(screen.getByLabelText('Home, Owner'));
+    await press(screen.getByLabelText(householdRowLabel(HOME, false)));
 
     await screen.findByLabelText('Switch household, current: Home');
     expect(await screen.findByRole('button', { name: /^Milk, 2 entries/ })).toBeTruthy();
