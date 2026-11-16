@@ -4,6 +4,7 @@ import { http, HttpResponse } from 'msw';
 import { Pressable, Text } from 'react-native';
 
 import { ApiError } from '@/api/errors';
+import { householdRowDetail, householdRowLabel, memberCountLabel } from '@/components/household-switcher';
 import { householdIdOfKey, queryKeys } from '@/api/query-keys';
 import { CurrentHouseholdProvider, useHouseholdKeys, useHouseholds } from '@/household/current-household';
 import {
@@ -43,6 +44,21 @@ describe('household rules', () => {
   test('roles read Owner or Member', () => {
     expect(roleLabel('owner')).toBe('Owner');
     expect(roleLabel('member')).toBe('Member');
+  });
+
+  test('switcher rows read "<Role> · <n> member(s)", singular for one', () => {
+    expect(memberCountLabel(1)).toBe('1 member');
+    expect(memberCountLabel(2)).toBe('2 members');
+    expect(memberCountLabel(12)).toBe('12 members');
+    expect(householdRowDetail(testHousehold({ role: 'owner', memberCount: 3 }))).toBe('Owner · 3 members');
+    expect(householdRowDetail(testHousehold({ role: 'member', memberCount: 2 }))).toBe('Member · 2 members');
+    expect(householdRowDetail(testHousehold({ role: 'owner', memberCount: 1 }))).toBe('Owner · 1 member');
+    expect(householdRowLabel(testHousehold({ name: 'Home', role: 'owner', memberCount: 3 }), true)).toBe(
+      'Home, Owner, 3 members, current',
+    );
+    expect(householdRowLabel(testHousehold({ name: 'Cabin', role: 'member', memberCount: 1 }), false)).toBe(
+      'Cabin, Member, 1 member',
+    );
   });
 
   test('the name is trimmed and must be 1 to 50 characters', () => {

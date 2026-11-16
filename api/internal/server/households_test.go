@@ -3,13 +3,18 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/marboleda/shelfkin/api/db/dbtest"
 	"github.com/marboleda/shelfkin/api/internal/auth"
+	"github.com/marboleda/shelfkin/api/internal/auth/authtest"
 	"github.com/marboleda/shelfkin/api/internal/openapi"
 )
 
@@ -62,10 +67,11 @@ func TestValidateHouseholdName(t *testing.T) {
 
 // household is a decoded Household response.
 type household struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Role      string    `json:"role"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Role        string    `json:"role"`
+	CreatedAt   time.Time `json:"createdAt"`
+	MemberCount int       `json:"memberCount"`
 }
 
 // req sends method path with token and body ("" for none) and returns the
@@ -175,19 +181,19 @@ func TestCreateListGetHousehold(t *testing.T) {
 
 	before := time.Now().Add(-time.Minute)
 	home := s.create(t, sam, "Home")
-	if home.Name != "Home" || home.Role != "owner" || home.ID == "" {
-		t.Errorf("POST /households = %+v, want name Home, role owner", home)
+	if home.Name != "Home" || home.Role != "owner" || home.ID == "" || home.MemberCount != 1 {
+		t.Errorf("POST /households = %+v, want name Home, role owner, memberCount 1", home)
 	}
 	if home.CreatedAt.Before(before) || home.CreatedAt.After(time.Now().Add(time.Minute)) {
 		t.Errorf("createdAt = %v, want about now", home.CreatedAt)
 	}
 
-	// The response has exactly the four fields.
+	// The response has exactly the five fields.
 	resp, b := s.req(t, http.MethodGet, "/households/"+home.ID, sam, "")
 	var raw map[string]any
 	wantStatus(t, resp, b, http.StatusOK, &raw)
-	if len(raw) != 4 {
-		t.Errorf("GET /households/{id} = %s, want exactly id, name, role, createdAt", b)
+	if len(raw) != 5 {
+		t.Errorf("GET /households/{id} = %s, want exactly id, name, role, createdAt, memberCount", b)
 	}
 	var got household
 	wantStatus(t, resp, b, http.StatusOK, &got)
@@ -450,5 +456,140 @@ func TestHouseholdsRequireAuth(t *testing.T) {
 	} {
 		resp, b := s.req(t, r.method, r.path, "not-issued", "")
 		wantError(t, resp, b, http.StatusUnauthorized, CodeUnauthorized)
+	}
+}
+
+// TestHouseholdMemberCount checks memberCount in every Household response: 1
+// for a new household, one more after a join, one fewer after a leave and
+// after a removal, as each member sees it.
+func TestHouseholdMemberCount(t *testing.T) {
+	f := newInvitesFixture(t)
+	// newInvitesFixture: Home has the owner and m1; Other has only the owner.
+	wantCount := func(t *testing.T, token, householdID string, want int) {
+		t.Helper()
+		found := false
+		for _, h := range f.list(t, token) {
+			if h.ID == householdID {
+				found = true
+				if h.MemberCount != want {
+					t.Errorf("GET /households: memberCount of %s = %d, want %d", h.Name, h.MemberCount, want)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("GET /households does not list %s", householdID)
+		}
+		resp, b := f.req(t, http.MethodGet, "/households/"+householdID, token, "")
+		var h household
+		wantStatus(t, resp, b, http.StatusOK, &h)
+		if h.MemberCount != want {
+			t.Errorf("GET /households/{id}: memberCount = %d, want %d", h.MemberCount, want)
+		}
+	}
+
+	// A one-member household counts its owner.
+	solo := f.create(t, f.outsider.token, "Solo")
+	if solo.MemberCount != 1 {
+		t.Errorf("POST /households: memberCount = %d, want 1", solo.MemberCount)
+	}
+	wantCount(t, f.outsider.token, solo.ID, 1)
+	wantCount(t, f.owner.token, f.other.ID, 1)
+	wantCount(t, f.owner.token, f.home.ID, 2)
+	wantCount(t, f.m1.token, f.home.ID, 2)
+
+	// A join adds one, for the joiner and the existing members alike.
+	inv := f.createInvite(t, f.owner.token, f.home.ID)
+	resp, b := f.join(t, f.outsider.token, inv.Code)
+	var r joinResult
+	wantStatus(t, resp, b, http.StatusOK, &r)
+	if r.Household == nil || r.Household.MemberCount != 3 {
+		t.Errorf("POST /invites/join = %s, want memberCount 3", b)
+	}
+	for _, u := range []memberUser{f.owner, f.m1, f.outsider} {
+		wantCount(t, u.token, f.home.ID, 3)
+	}
+	// Joining again (already a member) changes nothing.
+	resp, b = f.join(t, f.outsider.token, inv.Code)
+	wantStatus(t, resp, b, http.StatusOK, &r)
+	if r.Household == nil || r.Household.MemberCount != 3 {
+		t.Errorf("second POST /invites/join = %s, want memberCount 3", b)
+	}
+	// The joiner's other household is not affected.
+	wantCount(t, f.outsider.token, solo.ID, 1)
+
+	// Renaming returns the count too.
+	resp, b = f.req(t, http.MethodPatch, "/households/"+f.home.ID, f.owner.token, `{"name":"Maple"}`)
+	var renamed household
+	wantStatus(t, resp, b, http.StatusOK, &renamed)
+	if renamed.MemberCount != 3 {
+		t.Errorf("PATCH /households/{id}: memberCount = %d, want 3", renamed.MemberCount)
+	}
+
+	// A leave takes one away.
+	resp, b = f.req(t, http.MethodDelete, "/households/"+f.home.ID+"/members/"+f.m1.id, f.m1.token, "")
+	wantStatus(t, resp, b, http.StatusNoContent, nil)
+	wantCount(t, f.owner.token, f.home.ID, 2)
+	wantCount(t, f.outsider.token, f.home.ID, 2)
+
+	// So does a removal by the owner, down to the owner alone.
+	resp, b = f.req(t, http.MethodDelete, "/households/"+f.home.ID+"/members/"+f.outsider.id, f.owner.token, "")
+	wantStatus(t, resp, b, http.StatusNoContent, nil)
+	wantCount(t, f.owner.token, f.home.ID, 1)
+}
+
+// TestListHouseholdsOneQuery checks GET /households runs one SQL query besides
+// the transaction and the dbtx setup, however many households (each with
+// several members) the caller belongs to.
+func TestListHouseholdsOneQuery(t *testing.T) {
+	pool := dbtest.New(t)
+	cfg := pool.Config()
+	counter := &queryCounter{}
+	cfg.ConnConfig.Tracer = counter
+	traced, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(traced.Close)
+
+	logger, _ := newLogger()
+	v := authtest.NewVerifier()
+	// The authenticator (user lookup) uses the untraced pool.
+	s := &meServer{
+		url:      serve(t, NewHandler(NewAPI(traced, logger), auth.NewAuthenticator(v, pool), logger, nil)),
+		pool:     pool,
+		verifier: v,
+	}
+	sam := v.Issue(auth.Token{UID: "sam", Name: "Sam"})
+	eve := v.Issue(auth.Token{UID: "eve", Name: "Eve"})
+	eveID := s.userID(t, eve)
+
+	for n := 0; n <= 5; n++ {
+		if n > 0 {
+			h := s.create(t, sam, fmt.Sprintf("Home %d", n))
+			s.exec(t, `INSERT INTO household_members (household_id, user_id, role) VALUES ($1, $2, 'member')`, h.ID, eveID)
+		}
+		counter.reset()
+		list := s.list(t, sam)
+		if len(list) != n {
+			t.Fatalf("GET /households listed %d households, want %d", len(list), n)
+		}
+		for _, h := range list {
+			if h.MemberCount != 2 {
+				t.Errorf("memberCount of %s = %d, want 2", h.Name, h.MemberCount)
+			}
+		}
+		var queries []string
+		for _, sql := range counter.reset() {
+			switch {
+			case sql == "begin", sql == "commit", sql == "rollback":
+				continue
+			case strings.HasPrefix(sql, "SET LOCAL ROLE"), strings.Contains(sql, "set_config('app.user_id'"):
+				continue
+			}
+			queries = append(queries, sql)
+		}
+		if len(queries) != 1 || !strings.Contains(queries[0], "name: ListHouseholds") {
+			t.Errorf("with %d households, GET /households ran %d queries, want only ListHouseholds: %q", n, len(queries), queries)
+		}
 	}
 }

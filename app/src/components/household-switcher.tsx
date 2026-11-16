@@ -29,8 +29,18 @@ export function switcherLabel(name: string): string {
   return `Switch household, current: ${name}`;
 }
 
+/** "1 member", "3 members". */
+export function memberCountLabel(count: number): string {
+  return count === 1 ? '1 member' : `${count} members`;
+}
+
+/** The line under a household's name in the list: "Owner · 3 members". */
+export function householdRowDetail(household: Household): string {
+  return `${roleLabel(household.role)} · ${memberCountLabel(household.memberCount)}`;
+}
+
 export function householdRowLabel(household: Household, current: boolean): string {
-  return `${household.name}, ${roleLabel(household.role)}${current ? ', current' : ''}`;
+  return `${household.name}, ${roleLabel(household.role)}, ${memberCountLabel(household.memberCount)}${current ? ', current' : ''}`;
 }
 
 export function HouseholdSwitcher({ placement }: { placement: Placement }) {
@@ -234,8 +244,13 @@ export function HouseholdList({ currentId, onChoose, onCreate, onJoin }: Househo
             >
               <HouseholdTile name={household.name} size="large" />
               <View style={styles.rowText}>
-                <Text style={styles.rowName}>{household.name}</Text>
-                <Text style={styles.rowRole}>{roleLabel(household.role)}</Text>
+                {/* The name gets one line and truncates; the row label holds it in full. */}
+                <Text style={styles.rowName} numberOfLines={1} ellipsizeMode="tail">
+                  {household.name}
+                </Text>
+                <Text testID="household-row-detail" style={styles.rowDetail}>
+                  {householdRowDetail(household)}
+                </Text>
               </View>
               {isCurrent ? (
                 <Feather testID="household-current-check" name="check" size={22} color={colors.primary} aria-hidden accessible={false} />
@@ -475,7 +490,7 @@ function createStyles(theme: Theme) {
     rowCurrent: { backgroundColor: theme.colors.primarySubtle },
     rowText: { flex: 1, minWidth: 0, gap: 2 },
     rowName: { ...theme.typography.label, fontSize: 16, color: theme.colors.text },
-    rowRole: { ...theme.typography.caption, color: theme.colors.mutedText },
+    rowDetail: { ...theme.typography.caption, color: theme.colors.mutedText },
     actions: { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: theme.spacing.sm },
     action: {
       flexGrow: 1,

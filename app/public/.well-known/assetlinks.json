@@ -1,0 +1,13 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.marboleda.shelfkin",
+      "sha256_cert_fingerprints": [
+        "UPLOAD_KEY_SHA256_PLACEHOLDER_SEE_ISSUE_41",
+        "PLAY_APP_SIGNING_KEY_SHA256_PLACEHOLDER_SEE_ISSUE_41"
+      ]
+    }
+  }
+]

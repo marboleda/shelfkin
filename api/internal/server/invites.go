@@ -270,7 +270,7 @@ func (a *API) JoinInvite(ctx context.Context, req openapi.JoinInviteRequestObjec
 		return nil, fmt.Errorf("POST /invites/join: %w", err)
 	}
 	return openapi.JoinInvite200JSONResponse(openapi.JoinInviteResult{
-		Household:     householdResponse(row.ID, row.Name, row.Role, row.CreatedAt),
+		Household:     householdResponse(row.ID, row.Name, row.Role, row.CreatedAt, row.MemberCount),
 		AlreadyMember: alreadyMember,
 	}), nil
 }

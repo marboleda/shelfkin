@@ -7,18 +7,23 @@
 SELECT public.create_household(@name::text)::uuid AS id;
 
 -- name: ListHouseholds :many
--- The caller's households with the caller's role, sorted by name
--- case-insensitively (the ID breaks ties between duplicate names).
-SELECT h.id, h.name, m.role, h.created_at
+-- The caller's households with the caller's role and member count, sorted by
+-- name case-insensitively (the ID breaks ties between duplicate names). The
+-- count is a subquery in this one statement, so listing never runs a query per
+-- household; it uses the household_members primary key (household_id first).
+-- RLS lets the caller see every member of their own households.
+SELECT h.id, h.name, m.role, h.created_at,
+    (SELECT count(*) FROM household_members c WHERE c.household_id = h.id)::int AS member_count
 FROM households h
 JOIN household_members m ON m.household_id = h.id
 WHERE m.user_id = @user_id
 ORDER BY lower(h.name), h.id;
 
 -- name: GetHousehold :one
--- One household with the caller's role. No row if it does not exist or the
--- caller is not a member.
-SELECT h.id, h.name, m.role, h.created_at
+-- One household with the caller's role and member count. No row if it does
+-- not exist or the caller is not a member.
+SELECT h.id, h.name, m.role, h.created_at,
+    (SELECT count(*) FROM household_members c WHERE c.household_id = h.id)::int AS member_count
 FROM households h
 JOIN household_members m ON m.household_id = h.id
 WHERE h.id = @id AND m.user_id = @user_id;
@@ -28,7 +33,8 @@ WHERE h.id = @id AND m.user_id = @user_id;
 UPDATE households
 SET name = @name, updated_at = now()
 WHERE id = @id
-RETURNING id, name, created_at;
+RETURNING id, name, created_at,
+    (SELECT count(*) FROM household_members c WHERE c.household_id = households.id)::int AS member_count;
 
 -- name: DeleteHousehold :execrows
 -- Owner only (checked by the API and by the households_delete policy). The

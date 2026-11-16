@@ -1,0 +1,12 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["APPLE_TEAM_ID_PLACEHOLDER_SEE_ISSUE_41.com.marboleda.shelfkin"],
+        "components": [{ "/": "/join/*" }],
+        "appID": "APPLE_TEAM_ID_PLACEHOLDER_SEE_ISSUE_41.com.marboleda.shelfkin",
+        "paths": ["/join/*"]
+      }
+    ]
+  }
+}

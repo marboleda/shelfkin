@@ -110,7 +110,7 @@ describe('on web, focus returns to the switcher button only after the overlay is
     await renderOnWeb(1024);
     await fireEvent.press(screen.getByLabelText(label('Home')));
     mockFocus.mockClear();
-    await fireEvent.press(screen.getByLabelText('Cabin, Member'));
+    await fireEvent.press(screen.getByLabelText('Cabin, Member, 1 member'));
     expect(focusCalls()).toHaveLength(0);
     await dismiss('Your households');
     expect(focusCalls()).toHaveLength(1);
