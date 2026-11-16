@@ -103,6 +103,7 @@ export function userMessage(error: unknown): string {
   if (status === 403) return "You don't have access to this.";
   if (status === 404) return "We couldn't find that. It may have been removed.";
   if (status === 409) return 'This was changed by someone else. Refresh and try again.';
+  if (status === 429) return 'Too many requests. Please wait a moment and try again.';
   if (status >= 500) return 'The server ran into a problem. Please try again in a moment.';
   if (status >= 400) return "That didn't work. Check the details and try again.";
   return 'Something went wrong. Please try again.';
