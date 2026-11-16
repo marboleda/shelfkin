@@ -117,7 +117,7 @@ An invite link is `https://shelfkin-5da75.web.app/join/<code>` (the Firebase Hos
 | `public/.well-known/apple-app-site-association` | `APPLE_TEAM_ID_PLACEHOLDER_SEE_ISSUE_41`, in both `appIDs` and `appID`: the Apple Team ID |
 | `public/.well-known/assetlinks.json` | `UPLOAD_KEY_SHA256_PLACEHOLDER_SEE_ISSUE_41` and `PLAY_APP_SIGNING_KEY_SHA256_PLACEHOLDER_SEE_ISSUE_41`: the SHA-256 fingerprints of the upload key (`eas credentials -p android`) and of the Google Play app signing key (Play Console, App signing page). Both are needed, because Play re-signs builds |
 
-These are public values and are committed. `__tests__/association-files-test.ts` checks both files and the `app.json` keys. iOS fetches the association file when the app is installed or updated, so a change needs a new build.
+These are public values and are committed; where to find each one, and where they are recorded, is in [Signing values for universal links and app links](../README.md#signing-values-for-universal-links-and-app-links). `__tests__/association-files-test.ts` checks both files and the `app.json` keys. iOS fetches the association file when the app is installed or updated, so a change needs a new build.
 
 ## Tests
 

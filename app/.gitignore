@@ -39,3 +39,14 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Mobile release credentials (#41): EAS holds these, never commit them.
+# google-services.json reaches EAS builds as the GOOGLE_SERVICES_JSON file
+# variable; a local copy is only for `npx expo run:android`.
+google-services.json
+GoogleService-Info.plist
+*.keystore
+*service-account*.json
+*-key.json
+credentials.json
+credentials/

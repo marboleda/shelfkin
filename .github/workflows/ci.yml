@@ -103,6 +103,12 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # Resolves app.json + app.config.js and runs every config plugin, as EAS
+      # does before a mobile build (#41), so a broken native config fails here.
+      # No EAS account or credentials are involved.
+      - name: Expo config resolves
+        run: npx expo config --type introspect > /dev/null
+
       - name: Test
         run: npm test -- --ci
 
