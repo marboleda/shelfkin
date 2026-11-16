@@ -722,6 +722,11 @@ export interface components {
             name: string;
             role: components["schemas"]["MemberRole"];
             createdAt: components["schemas"]["Timestamp"];
+            /**
+             * @description How many members the household has, including the owner.
+             * @example 3
+             */
+            memberCount: number;
         };
         /**
          * @description A member's role in a household. Each household has exactly one owner.

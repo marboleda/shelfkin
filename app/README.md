@@ -103,6 +103,22 @@ export function useHealthQuery() {
 
 Show `userMessage(error)` to people, never the error itself.
 
+## Invite links
+
+An invite link is `https://shelfkin-5da75.web.app/join/<code>` (the Firebase Hosting domain), or `shelfkin://join/<code>` on a phone. Expo Router opens `src/app/join/[code].tsx` for both, on web, iOS and Android; nothing in `ios/` or `android/` is configured by hand.
+
+- **Signed in:** the screen shows "Joining…", sends `POST /invites/join` once, makes the household current and replaces itself with Pantry ("You joined <name>").
+- **Signed out:** the code is kept on the device (`src/household/pending-invite.ts`, AsyncStorage) and the user goes to `/sign-in`, which says "Sign in or create an account to join the household". After signing in or signing up, the (guest) layout opens the invite again, so the user is joined without typing the code. The code survives switching between sign-in and sign-up, a reload and an app restart; a second link replaces it; it is cleared when the join finishes (or fails for good, e.g. expired) and on every sign-out.
+
+**Universal links and app links.** `app.json` claims `https://shelfkin-5da75.web.app/join/*` (`ios.associatedDomains` and an Android intent filter with `autoVerify`). Firebase Hosting serves the association files from `public/.well-known/`, which only claim `/join/*`, so every other path stays in the browser:
+
+| File | Placeholder to replace (#41) |
+|---|---|
+| `public/.well-known/apple-app-site-association` | `APPLE_TEAM_ID_PLACEHOLDER_SEE_ISSUE_41`, in both `appIDs` and `appID`: the Apple Team ID |
+| `public/.well-known/assetlinks.json` | `UPLOAD_KEY_SHA256_PLACEHOLDER_SEE_ISSUE_41` and `PLAY_APP_SIGNING_KEY_SHA256_PLACEHOLDER_SEE_ISSUE_41`: the SHA-256 fingerprints of the upload key (`eas credentials -p android`) and of the Google Play app signing key (Play Console, App signing page). Both are needed, because Play re-signs builds |
+
+These are public values and are committed. `__tests__/association-files-test.ts` checks both files and the `app.json` keys. iOS fetches the association file when the app is installed or updated, so a change needs a new build.
+
 ## Tests
 
 `npm test` runs Jest with the `jest-expo` preset. API calls are mocked with [MSW](https://mswjs.io/); see `test-utils/api.tsx`. `jest.config.js` and `jest/` make MSW work under jest-expo: they compile MSW's ES modules and swap Expo's native `fetch` for Node's, which MSW can intercept.

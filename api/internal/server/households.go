@@ -60,7 +60,7 @@ func (a *API) ListHouseholds(ctx context.Context, _ openapi.ListHouseholdsReques
 	}
 	list := openapi.HouseholdList{Households: make([]openapi.Household, 0, len(rows))}
 	for _, r := range rows {
-		list.Households = append(list.Households, householdResponse(r.ID, r.Name, r.Role, r.CreatedAt))
+		list.Households = append(list.Households, householdResponse(r.ID, r.Name, r.Role, r.CreatedAt, r.MemberCount))
 	}
 	return openapi.ListHouseholds200JSONResponse(list), nil
 }
@@ -92,7 +92,7 @@ func (a *API) CreateHousehold(ctx context.Context, req openapi.CreateHouseholdRe
 	if err != nil {
 		return nil, fmt.Errorf("POST /households: %w", err)
 	}
-	return openapi.CreateHousehold201JSONResponse(householdResponse(row.ID, row.Name, row.Role, row.CreatedAt)), nil
+	return openapi.CreateHousehold201JSONResponse(householdResponse(row.ID, row.Name, row.Role, row.CreatedAt, row.MemberCount)), nil
 }
 
 // GetHousehold returns one of the caller's households.
@@ -113,7 +113,7 @@ func (a *API) GetHousehold(ctx context.Context, req openapi.GetHouseholdRequestO
 	if err != nil {
 		return nil, fmt.Errorf("GET /households/{id}: %w", err)
 	}
-	return openapi.GetHousehold200JSONResponse(householdResponse(row.ID, row.Name, row.Role, row.CreatedAt)), nil
+	return openapi.GetHousehold200JSONResponse(householdResponse(row.ID, row.Name, row.Role, row.CreatedAt, row.MemberCount)), nil
 }
 
 // UpdateHousehold renames a household. Owner only.
@@ -152,7 +152,7 @@ func (a *API) UpdateHousehold(ctx context.Context, req openapi.UpdateHouseholdRe
 	case err != nil:
 		return nil, fmt.Errorf("PATCH /households/{id}: %w", err)
 	}
-	return openapi.UpdateHousehold200JSONResponse(householdResponse(row.ID, row.Name, db.MemberRoleOwner, row.CreatedAt)), nil
+	return openapi.UpdateHousehold200JSONResponse(householdResponse(row.ID, row.Name, db.MemberRoleOwner, row.CreatedAt, row.MemberCount)), nil
 }
 
 // DeleteHousehold deletes a household and everything in it. Owner only.
@@ -214,12 +214,13 @@ func pgUUID(id types.UUID) pgtype.UUID {
 	return pgtype.UUID{Bytes: id, Valid: true}
 }
 
-func householdResponse(id pgtype.UUID, name string, role db.MemberRole, createdAt pgtype.Timestamptz) openapi.Household {
+func householdResponse(id pgtype.UUID, name string, role db.MemberRole, createdAt pgtype.Timestamptz, memberCount int32) openapi.Household {
 	return openapi.Household{
-		Id:        types.UUID(id.Bytes),
-		Name:      name,
-		Role:      openapi.MemberRole(role),
-		CreatedAt: createdAt.Time.UTC().Truncate(time.Microsecond),
+		Id:          types.UUID(id.Bytes),
+		Name:        name,
+		Role:        openapi.MemberRole(role),
+		CreatedAt:   createdAt.Time.UTC().Truncate(time.Microsecond),
+		MemberCount: int(memberCount),
 	}
 }
 

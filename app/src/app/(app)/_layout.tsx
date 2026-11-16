@@ -7,6 +7,7 @@ import { HouseholdGate } from '@/components/household-gate';
 import { HouseholdNotice } from '@/components/household-notice';
 import { useIsWideLayout } from '@/hooks/use-is-wide-layout';
 import { useLeaveItemScreensOnHouseholdChange } from '@/household/navigation';
+import { useOpenTappedReminders } from '@/push/taps';
 import { useTheme } from '@/theme';
 
 /**
@@ -31,6 +32,7 @@ function Shell() {
   const wide = useIsWideLayout();
   const theme = useTheme();
   useLeaveItemScreensOnHouseholdChange();
+  useOpenTappedReminders();
 
   return (
     <View style={{ flex: 1 }}>
@@ -45,6 +47,7 @@ function Shell() {
       >
         <Tabs.Screen name="index" options={{ title: 'Pantry' }} />
         <Tabs.Screen name="settings" options={{ title: 'Settings' }} />
+        <Tabs.Screen name="settings/household" options={{ title: 'Household' }} />
         <Tabs.Screen name="add" options={{ title: 'Add item' }} />
         <Tabs.Screen name="entries/[id]" options={{ title: 'Entry detail' }} />
       </Tabs>

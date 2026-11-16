@@ -6,10 +6,10 @@ type ButtonProps = Omit<PressableProps, 'style' | 'children'> & {
   label: string;
   /** Shows a spinner and disables the button. */
   busy?: boolean;
-  variant?: 'primary' | 'secondary' | 'link';
+  variant?: 'primary' | 'secondary' | 'danger' | 'link';
 };
 
-/** A full-width primary or secondary action, or a text link-style button. */
+/** A full-width primary, secondary or danger (destructive) action, or a text link-style button. */
 export function Button({ label, busy = false, disabled, variant = 'primary', ...rest }: ButtonProps) {
   const styles = useThemedStyles(createStyles);
   const theme = useTheme();
@@ -29,7 +29,9 @@ export function Button({ label, busy = false, disabled, variant = 'primary', ...
         <ActivityIndicator
           testID="button-busy"
           size="small"
-          color={variant === 'primary' ? theme.colors.onPrimary : theme.colors.primary}
+          color={
+            variant === 'primary' ? theme.colors.onPrimary : variant === 'danger' ? theme.colors.background : theme.colors.primary
+          }
         />
       ) : null}
       <Text style={styles[`${variant}Label`]}>{label}</Text>
@@ -60,6 +62,12 @@ function createStyles(theme: Theme) {
       borderColor: theme.colors.border,
       backgroundColor: theme.colors.surface,
     },
+    danger: {
+      minHeight: 54,
+      paddingHorizontal: theme.spacing.lg,
+      borderRadius: theme.radii.card,
+      backgroundColor: theme.colors.danger,
+    },
     link: {
       alignSelf: 'flex-start' as const,
       paddingHorizontal: theme.spacing.xs,
@@ -67,6 +75,8 @@ function createStyles(theme: Theme) {
     inactive: { opacity: 0.7 },
     primaryLabel: { ...theme.typography.label, fontSize: 16, color: theme.colors.onPrimary },
     secondaryLabel: { ...theme.typography.label, fontSize: 16, color: theme.colors.text },
+    // The background colour reads on `danger` in both light and dark mode.
+    dangerLabel: { ...theme.typography.label, fontSize: 16, color: theme.colors.background },
     linkLabel: { ...theme.typography.label, color: theme.colors.primary },
   };
 }

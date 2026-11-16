@@ -28,3 +28,8 @@ export function signInHref(requestedPath: string | null | undefined): Href {
   if (!requestedPath || requestedPath === '/' || isGuestPath(requestedPath)) return '/sign-in';
   return { pathname: '/sign-in', params: { [REDIRECT_PARAM]: requestedPath } };
 }
+
+/** The invite link route, `/join/<code>` (#33). */
+export function inviteHref(code: string): Href {
+  return { pathname: '/join/[code]', params: { code } };
+}

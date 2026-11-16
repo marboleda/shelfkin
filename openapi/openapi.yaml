@@ -1236,6 +1236,7 @@ components:
         - name
         - role
         - createdAt
+        - memberCount
       properties:
         id:
           $ref: '#/components/schemas/Id'
@@ -1247,6 +1248,11 @@ components:
           $ref: '#/components/schemas/MemberRole'
         createdAt:
           $ref: '#/components/schemas/Timestamp'
+        memberCount:
+          description: How many members the household has, including the owner.
+          type: integer
+          minimum: 1
+          example: 3
     MemberRole:
       description: A member's role in a household. Each household has exactly one owner.
       type: string

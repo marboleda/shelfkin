@@ -7,7 +7,8 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "associatedDomains": ["applinks:shelfkin-5da75.web.app"]
     },
     "android": {
       "adaptiveIcon": {
@@ -16,7 +17,15 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [{ "scheme": "https", "host": "shelfkin-5da75.web.app", "pathPrefix": "/join/" }],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
     },
     "web": {
       "output": "single",
@@ -33,7 +42,13 @@
           }
         }
       ],
-      "expo-localization"
+      "expo-localization",
+      [
+        "expo-notifications",
+        {
+          "defaultChannel": "default"
+        }
+      ]
     ],
     "scheme": "shelfkin",
     "experiments": {
