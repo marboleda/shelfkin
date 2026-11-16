@@ -12,12 +12,14 @@ import { FormMessage } from '@/components/form-message';
 import { PressableLink } from '@/components/pressable-link';
 import { Screen } from '@/components/screen';
 import { TextField } from '@/components/text-field';
+import { PENDING_INVITE_MESSAGE, usePendingInvite } from '@/household/pending-invite';
 import { useThemedStyles, type Theme } from '@/theme';
 
 type FieldErrors = { name?: string | null; email?: string | null; password?: string | null };
 
 export default function SignUpScreen() {
   const styles = useThemedStyles(createStyles);
+  const pendingInvite = usePendingInvite();
   const params = useGlobalSearchParams<{ [REDIRECT_PARAM]?: string }>();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -61,6 +63,7 @@ export default function SignUpScreen() {
 
   return (
     <Screen title="Create account" accessory={<AuthHeader />}>
+      {pendingInvite ? <FormMessage testID="pending-invite" tone="info" message={PENDING_INVITE_MESSAGE} /> : null}
       {formError ? (
         <FormMessage testID="form-error" tone="error" message={formError}>
           {emailInUse ? (

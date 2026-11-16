@@ -12,12 +12,14 @@ import { FormMessage } from '@/components/form-message';
 import { PressableLink } from '@/components/pressable-link';
 import { Screen } from '@/components/screen';
 import { TextField } from '@/components/text-field';
+import { PENDING_INVITE_MESSAGE, usePendingInvite } from '@/household/pending-invite';
 import { useThemedStyles, type Theme } from '@/theme';
 
 type FieldErrors = { email?: string | null; password?: string | null };
 
 export default function SignInScreen() {
   const styles = useThemedStyles(createStyles);
+  const pendingInvite = usePendingInvite();
   const auth = useAuth();
   const params = useGlobalSearchParams<{ [REDIRECT_PARAM]?: string; email?: string }>();
   const [email, setEmail] = useState(typeof params.email === 'string' ? params.email : '');
@@ -78,6 +80,7 @@ export default function SignInScreen() {
 
   return (
     <Screen title="Sign in" accessory={<AuthHeader />}>
+      {pendingInvite ? <FormMessage testID="pending-invite" tone="info" message={PENDING_INVITE_MESSAGE} /> : null}
       {sessionEnded && !formError && !notice ? (
         <FormMessage testID="session-ended" tone="info" message={AUTH_MESSAGES.sessionEnded} />
       ) : null}
