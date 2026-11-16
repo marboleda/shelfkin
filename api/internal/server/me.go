@@ -145,3 +145,103 @@ func errorBody(code, message string) openapi.Error {
 func unauthorizedBody() openapi.UnauthorizedJSONResponse {
 	return openapi.UnauthorizedJSONResponse(errorBody(CodeUnauthorized, unauthorizedMessage))
 }
+
+// Error codes of DELETE /me.
+const (
+	CodeMustTransferOwnership = "must_transfer_ownership"
+	CodeAccountDeletionFailed = "account_deletion_failed"
+)
+
+// AccountDeletionTimeout bounds the call that deletes the Firebase user in
+// DELETE /me, which runs while the database transaction is open.
+const AccountDeletionTimeout = 10 * time.Second
+
+const accountDeletionFailedMessage = "Your account could not be deleted right now. Nothing was deleted; try again later."
+
+// errAccountDeletion marks a failure to delete the Firebase user, which
+// DELETE /me answers with 503.
+var errAccountDeletion = errors.New("deleting the Firebase user failed")
+
+// DeleteMe deletes the caller's account: the households they own alone, their
+// users row (which cascades to memberships and push tokens and clears their
+// name from the history of other households) and their Firebase user, all or
+// nothing. See the delete_account migration.
+func (a *API) DeleteMe(ctx context.Context, _ openapi.DeleteMeRequestObject) (openapi.DeleteMeResponseObject, error) {
+	userID, ok := auth.UserID(ctx)
+	if !ok {
+		return nil, errNoUserInContext
+	}
+	var blocking []db.DeleteAccountRow
+	err := dbtx.WithUser(ctx, a.db, userID, func(tx pgx.Tx) error {
+		q := db.New(tx)
+		uid, err := q.GetUserFirebaseUID(ctx, userID)
+		if err != nil {
+			return err
+		}
+		blocking, err = q.DeleteAccount(ctx)
+		if err != nil {
+			return fmt.Errorf("delete_account: %w", err)
+		}
+		if len(blocking) > 0 {
+			// Nothing was deleted; the rollback is a no-op.
+			return errMustTransfer
+		}
+		// The Firebase user goes last, while the transaction is still open:
+		// if it fails, the rollback undoes the database deletion and the
+		// caller can retry. If the commit fails after it succeeded, a retry
+		// with the same token still works (a missing Firebase user counts as
+		// deleted).
+		if a.accountDeleter == nil {
+			return fmt.Errorf("%w: account deletion is not configured", errAccountDeletion)
+		}
+		fbCtx, cancel := context.WithTimeout(ctx, AccountDeletionTimeout)
+		defer cancel()
+		if err := a.accountDeleter.DeleteUser(fbCtx, uid); err != nil {
+			return fmt.Errorf("%w: %w", errAccountDeletion, err)
+		}
+		return nil
+	})
+	switch {
+	case err == nil:
+		return openapi.DeleteMe204Response{}, nil
+	case errors.Is(err, errMustTransfer):
+		return deleteMeConflict(blocking), nil
+	case errors.Is(err, pgx.ErrNoRows):
+		// Deleted after the middleware resolved it.
+		return openapi.DeleteMe401JSONResponse{UnauthorizedJSONResponse: unauthorizedBody()}, nil
+	case errors.Is(err, errAccountDeletion):
+		a.logger.ErrorContext(ctx, "DELETE /me: nothing was deleted", "error", err)
+		return openapi.DeleteMe503JSONResponse(errorBody(CodeAccountDeletionFailed, accountDeletionFailedMessage)), nil
+	default:
+		return nil, fmt.Errorf("DELETE /me: %w", err)
+	}
+}
+
+// errMustTransfer rolls back DELETE /me when the caller owns households that
+// have other members.
+var errMustTransfer = errors.New("the caller owns households with other members")
+
+func deleteMeConflict(rows []db.DeleteAccountRow) openapi.DeleteMe409JSONResponse {
+	var body openapi.DeleteAccountConflict
+	body.Error.Code = CodeMustTransferOwnership
+	body.Error.Households = make([]openapi.HouseholdRef, len(rows))
+	names := make([]string, len(rows))
+	for i, r := range rows {
+		body.Error.Households[i] = openapi.HouseholdRef{Id: types.UUID(r.HouseholdID.Bytes), Name: r.HouseholdName}
+		names[i] = `"` + r.HouseholdName + `"`
+	}
+	body.Error.Message = fmt.Sprintf("Transfer ownership of %s to another member before deleting your account.", joinNames(names))
+	return openapi.DeleteMe409JSONResponse(body)
+}
+
+// joinNames joins names as "a", "a and b" or "a, b and c".
+func joinNames(names []string) string {
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return names[0]
+	default:
+		return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+	}
+}

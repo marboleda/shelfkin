@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marboleda/shelfkin/api/internal/auth"
 	"github.com/marboleda/shelfkin/api/internal/db"
 	"github.com/marboleda/shelfkin/api/internal/dbtx"
 	"github.com/marboleda/shelfkin/api/internal/openapi"
@@ -33,6 +34,10 @@ type API struct {
 	// now is the clock for dates the server picks, such as an entry's
 	// default purchase date. Tests replace it.
 	now func() time.Time
+	// accountDeleter deletes the caller's Firebase user in DELETE /me. Nil
+	// means account deletion is not configured, and DELETE /me fails with
+	// 503 without deleting anything.
+	accountDeleter auth.AccountDeleter
 }
 
 // DefaultAppBaseURL is the base of invite links when NewAPI is given no
@@ -46,6 +51,12 @@ type Option func(*API)
 // (APP_BASE_URL). A trailing slash is ignored.
 func WithAppBaseURL(base string) Option {
 	return func(a *API) { a.appBaseURL = strings.TrimRight(base, "/") }
+}
+
+// WithAccountDeleter sets how DELETE /me deletes the caller's Firebase user
+// (auth.FirebaseAccountDeleter in production).
+func WithAccountDeleter(d auth.AccountDeleter) Option {
+	return func(a *API) { a.accountDeleter = d }
 }
 
 // Pool is the database connection an API needs: plain queries (GET /health)

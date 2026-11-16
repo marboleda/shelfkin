@@ -24,6 +24,7 @@ users ─┬─< household_members >─── households ─┬─< household_in
 
 catalog_items (built-in, household_id NULL) ──< pantry_entries
 categories, locations (built-in lookup tables)
+deleted_accounts (Firebase UIDs of recently deleted accounts, no FKs)
 ```
 
 ## Tables
@@ -39,6 +40,20 @@ categories, locations (built-in lookup tables)
 | `timezone` | text, not null | IANA name, e.g. `America/Toronto`; used to send expiry pushes at a sensible local time |
 | `push_enabled` | boolean, not null, default false | Push notifications are opt-in. The setting is per user, not per device: turning notifications off on one device means removing that device's row from `push_tokens` |
 | `created_at`, `updated_at` | timestamptz, not null, default `now()` | |
+
+- **Deleting an account (#46):** `DELETE /me` deletes the `users` row through `delete_account()` (see [Access control](#access-control)). This cascades to the user's `household_members`, `push_tokens` (and their `push_tickets`) and `expiry_notifications`, and sets `created_by`, `updated_by` and `actor_id` to `NULL` on rows in households that remain. Households the user owns alone are deleted with them. If they own a household that has other members, nothing is deleted until they transfer ownership. The API deletes the Firebase user in the same transaction and rolls back if that fails.
+
+### `deleted_accounts`
+
+The Firebase UIDs of accounts deleted in the last day (#46). A Firebase ID token is verified without calling Firebase, so a token issued before the deletion stays valid until it expires (at most an hour). The auth middleware refuses to create a user for a UID listed here, so that token gets 401 instead of recreating the account.
+
+| Column | Type | Notes |
+|---|---|---|
+| `firebase_uid` | text PK | |
+| `deleted_at` | timestamptz, not null, default `now()` | Rows older than a day are deleted by `delete_account()` |
+
+- **Indexes:** `(deleted_at)` for pruning.
+- No RLS; `shelfkin_app` can only read it. Only `delete_account()` writes it.
 
 ### `push_tokens`
 
@@ -72,7 +87,7 @@ Expo push tickets waiting for their delivery receipt (#47). When Expo accepts a 
 |---|---|---|
 | `id` | uuid PK | |
 | `name` | text, not null | |
-| `created_by` | uuid FK → users | Nullable; #46 changes the FK to on delete set null |
+| `created_by` | uuid FK → users, on delete set null | Nullable; `NULL` once the creator deletes their account (#46) |
 | `created_at`, `updated_at` | timestamptz, not null, default `now()` | |
 
 Deleting a household (owner only) cascades to members, invites, custom catalog items, entries and events.
@@ -98,7 +113,7 @@ Deleting a household (owner only) cascades to members, invites, custom catalog i
 | `id` | uuid PK | |
 | `household_id` | uuid FK → households, cascade, not null | |
 | `code` | text, unique, not null | Short, human-typable (e.g. 8 chars, no ambiguous characters). Link form: `https://<host>/join/<code>` |
-| `created_by` | uuid FK → users | Nullable; #46 changes the FK to on delete set null |
+| `created_by` | uuid FK → users, on delete set null | Nullable; `NULL` once the creator deletes their account (#46) |
 | `created_at` | timestamptz, not null, default `now()` | |
 | `expires_at` | timestamptz, not null, no default | Set by the API, e.g. 7 days after creation |
 | `revoked_at` | timestamptz | Set when revoked |
@@ -130,7 +145,7 @@ Built-in ingredients and household custom items in one table.
 | `default_category_id` | smallint FK → categories, not null | |
 | `default_location_id` | smallint FK → locations, not null | |
 | `shelf_life_days` | integer | Typical shelf life; used to suggest an expiry date. `NULL` = no suggestion |
-| `created_by` | uuid FK → users | `NULL` for built-ins |
+| `created_by` | uuid FK → users, on delete set null | `NULL` for built-ins, and once the creator deletes their account (#46) |
 | `created_at`, `updated_at` | timestamptz, not null, default `now()` | |
 
 - Unique names: unique index on `(household_id, lower(name))` (with `NULLS NOT DISTINCT`, so built-in names are unique too). A custom item cannot use the same name as a built-in one; the API checks this.
@@ -222,10 +237,11 @@ Stops the nightly job from sending the same alert twice.
   A missing item and another household's item both fail with the same RLS error (`42501`), so the error does not show whether an ID exists. The `USING` clauses are unchanged, so these checks apply only to new and updated rows.
 - `users`, `push_tokens` and `expiry_notifications` have no RLS (they hold no household data) and are scoped by the API: every query filters by the caller's user ID. `push_tickets` has no RLS either; only the expiry job reads and writes it.
 - Owner-only actions (create or revoke invites, remove a member, rename or delete the household) are checked in the API, with a stricter RLS policy as a second check. Transfer ownership is also owner-only, but it goes through `transfer_ownership` (below) because RLS would block it.
-- `shelfkin_app` cannot insert into `households` or `household_members`, or update `household_members`, directly. Three narrow privileged (`SECURITY DEFINER`) functions do this instead. Each reads the caller from `app.user_id`, fails if it is not set, has a fixed `search_path`, and `shelfkin_app` has `EXECUTE` on it and nothing more:
+- `shelfkin_app` cannot insert into `households` or `household_members`, or update `household_members`, or delete `users`, directly. Four narrow privileged (`SECURITY DEFINER`) functions do this instead. Each reads the caller from `app.user_id`, fails if it is not set, has a fixed `search_path`, and `shelfkin_app` has `EXECUTE` on it and nothing more:
   - `create_household(name)` creates a household together with the caller's `owner` row (#14).
   - `transfer_ownership(household_id, new_owner_id)` demotes the owner and promotes a member (#15). It is needed because, as `shelfkin_app`, the owner loses owner rights after demoting themselves, so the RLS policy would block the promote.
   - `join_household(code)` joins a household by invite code (#16), because the user is not a member yet.
+  - `delete_account()` deletes the caller's account and the households they own alone (#46), because `shelfkin_app` cannot delete `users` rows and RLS stops an owner deleting their own `household_members` row. If the caller owns a household that has other members, it deletes nothing and returns those households.
 
 ## Expiry rules (v1)
 

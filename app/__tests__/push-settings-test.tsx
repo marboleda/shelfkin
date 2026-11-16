@@ -340,6 +340,35 @@ describe('sign-out', () => {
   });
 });
 
+describe('deleting the account', () => {
+  test('sends no push token DELETE (the API already deleted the tokens) and forgets the device token', async () => {
+    mockNotifications.setPermission('granted');
+    await saveDevicePush(uid, { enabled: true, token: TOKEN });
+    const api = fakeApi(testMe({ pushEnabled: true }));
+    server.use(
+      http.delete(apiUrl('/me'), () => {
+        api.log.push('DELETE /me');
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    await openSettings();
+    await waitFor(() => expect(api.log).toEqual([`POST ${TOKEN} ios`]));
+
+    await act(async () => {
+      await fireEvent.press(screen.getByRole('button', { name: 'Delete account' }));
+    });
+    await fireEvent.changeText(screen.getByTestId('delete-account-dialog-input'), 'DELETE');
+    await act(async () => {
+      await fireEvent.press(screen.getByTestId('delete-account-dialog-confirm'));
+    });
+
+    await waitFor(() => expect(screen).toHavePathname('/sign-in'));
+    expect(api.log).toEqual([`POST ${TOKEN} ios`, 'DELETE /me']);
+    expect(await loadDevicePush(uid)).toEqual({ enabled: false, token: null });
+    expect(mockFirebase.currentUser).toBeNull();
+  });
+});
+
 describe('tapping a reminder', () => {
   async function pantryFor(name: string) {
     await waitFor(() => expect(screen).toHavePathname('/'));

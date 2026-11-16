@@ -357,6 +357,7 @@ run "service_accounts" {
     condition = alltrue([
       for m in [
         google_project_iam_member.api_runtime_sql_client,
+        google_project_iam_member.api_runtime_firebase_auth_admin,
         google_project_iam_member.migrate_runtime_sql_client,
         google_project_iam_member.deployer_run_developer,
         google_project_iam_member.deployer_hosting_admin,
@@ -364,6 +365,14 @@ run "service_accounts" {
       ] : !contains(["roles/owner", "roles/editor"], m.role)
     ])
     error_message = "No service account may get Owner or Editor"
+  }
+
+  assert {
+    condition = (
+      google_project_iam_member.api_runtime_firebase_auth_admin.role == "roles/firebaseauth.admin" &&
+      google_project_iam_member.api_runtime_firebase_auth_admin.member == google_service_account.api_runtime.member
+    )
+    error_message = "api-runtime must be Firebase Authentication Admin, to delete users in DELETE /me (#46)"
   }
 
   assert {

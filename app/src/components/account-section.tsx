@@ -1,19 +1,35 @@
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 
 import { userMessage } from '@/api/errors';
+import {
+  DELETE_ACCOUNT_MESSAGE,
+  deleteAccountErrorMessage,
+  householdsToTransfer,
+  transferOwnershipMessage,
+  useDeleteAccountMutation,
+  type HouseholdRef,
+} from '@/auth/delete-account';
 import { useMeQuery, useUpdateNameMutation } from '@/auth/profile';
 import { signOut, useAuth } from '@/auth/session';
 import { NAME_MAX_LENGTH, validateName } from '@/auth/validation';
 import { MIN_TOUCH_TARGET, useTheme, useThemedStyles, type Theme } from '@/theme';
 
+import { useHouseholds } from '@/household/current-household';
+
 import { Button } from './button';
+import { ConfirmDialog } from './confirm-dialog';
 import { FormMessage } from './form-message';
 import { NotificationsSection } from './notifications-section';
 import { TextField } from './text-field';
 
+/** What to type in the confirmation before the account can be deleted. */
+const DELETE_CONFIRM_WORD = 'DELETE';
+
 /**
- * The Account section on Settings: name (editable), email and Sign out.
+ * The Account section on Settings: name (editable), email, Sign out and
+ * Delete account (#46).
  * The Notifications section (expiry reminders) comes right before it.
  */
 export function AccountSection() {
@@ -27,6 +43,11 @@ export function AccountSection() {
   const [nameError, setNameError] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
+  const deleteAccount = useDeleteAccountMutation();
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [mustTransfer, setMustTransfer] = useState<HouseholdRef[] | null>(null);
+  const households = useHouseholds();
+  const router = useRouter();
 
   const email = me.data?.email ?? (auth.status === 'signedIn' ? auth.user.email : null);
 
@@ -57,6 +78,37 @@ export function AccountSection() {
       setSigningOut(false);
     }
   }
+
+  function openDeleteDialog() {
+    deleteAccount.reset();
+    setMustTransfer(null);
+    setDeleteDialogOpen(true);
+  }
+
+  function confirmDelete() {
+    if (deleteAccount.isPending) return;
+    deleteAccount.mutate(undefined, {
+      // Signed out: the layouts now send the user to /sign-in.
+      onError: (error) => {
+        const toTransfer = householdsToTransfer(error);
+        if (toTransfer) {
+          setMustTransfer(toTransfer);
+          setDeleteDialogOpen(false);
+        }
+      },
+    });
+  }
+
+  function openHouseholdSettings(householdId: string) {
+    households.switchTo(householdId);
+    router.navigate('/settings/household');
+  }
+
+  // Shown in the dialog; a must_transfer_ownership 409 is shown under the card instead.
+  const deleteError =
+    deleteAccount.isError && !householdsToTransfer(deleteAccount.error)
+      ? deleteAccountErrorMessage(deleteAccount.error)
+      : null;
 
   return (
     <>
@@ -129,9 +181,45 @@ export function AccountSection() {
             <Text style={styles.signOut}>Sign out</Text>
             {signingOut ? <ActivityIndicator size="small" color={theme.colors.mutedText} /> : null}
           </Pressable>
+          <Pressable
+            testID="delete-account"
+            onPress={openDeleteDialog}
+            disabled={signingOut || deleteAccount.isPending}
+            accessibilityRole="button"
+            accessibilityLabel="Delete account"
+            style={[styles.row, styles.divider]}
+          >
+            <Text style={styles.deleteAccount}>Delete account</Text>
+          </Pressable>
         </View>
         {signOutError ? <FormMessage tone="error" message={signOutError} /> : null}
+        {mustTransfer ? (
+          <FormMessage tone="error" message={transferOwnershipMessage(mustTransfer)} testID="must-transfer-ownership">
+            {mustTransfer.map((household) => (
+              <Button
+                key={household.id}
+                label={`Open ${household.name} settings`}
+                variant="link"
+                onPress={() => openHouseholdSettings(household.id)}
+                testID={`transfer-household-${household.id}`}
+              />
+            ))}
+          </FormMessage>
+        ) : null}
       </View>
+      <ConfirmDialog
+        visible={deleteDialogOpen}
+        testID="delete-account-dialog"
+        title="Delete account"
+        message={DELETE_ACCOUNT_MESSAGE}
+        confirmLabel="Delete account"
+        destructive
+        busy={deleteAccount.isPending}
+        error={deleteError}
+        typeToConfirm={{ label: `Type "${DELETE_CONFIRM_WORD}" to confirm`, expected: DELETE_CONFIRM_WORD }}
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteDialogOpen(false)}
+      />
     </>
   );
 }
@@ -160,6 +248,7 @@ function createStyles(theme: Theme) {
     rowProblem: { ...theme.typography.body, flex: 1, color: theme.colors.danger },
     rowAction: { ...theme.typography.label, color: theme.colors.primary },
     signOut: { ...theme.typography.label, fontSize: 16, flex: 1, color: theme.colors.text },
+    deleteAccount: { ...theme.typography.label, fontSize: 16, flex: 1, color: theme.colors.danger },
     editRow: { gap: theme.spacing.md, padding: theme.spacing.md + 2 },
     editActions: { gap: theme.spacing.sm },
   };

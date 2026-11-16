@@ -61,6 +61,7 @@ var noRLSAllowlist = map[string]bool{
 	"push_tokens":          true,
 	"expiry_notifications": true,
 	"push_tickets":         true,
+	"deleted_accounts":     true,
 	"categories":           true,
 	"locations":            true,
 	"goose_db_version":     true,
@@ -284,6 +285,7 @@ func TestRLSGrants(t *testing.T) {
 		"item_events":             "INSERT,SELECT",
 		"expiry_notifications":    "DELETE,INSERT,SELECT",
 		"push_tickets":            "DELETE,INSERT,SELECT",
+		"deleted_accounts":        "SELECT",
 		"effective_catalog_items": "SELECT",
 		// goose_db_version and its sequence: nothing.
 	}

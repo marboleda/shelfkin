@@ -93,3 +93,73 @@ func TestFirebaseVerifierUnreachableEmulator(t *testing.T) {
 		t.Errorf("err = %v, want a non-token error", err)
 	}
 }
+
+func TestNewFirebaseAccountDeleterConfig(t *testing.T) {
+	t.Setenv(auth.EmulatorHostEnv, "")
+	if _, err := auth.NewFirebaseAccountDeleter("", ""); err == nil {
+		t.Error("empty project ID accepted")
+	}
+	// Production mode looks up credentials only when deleting, so the server
+	// starts without them.
+	if _, err := auth.NewFirebaseAccountDeleter("demo-test", ""); err != nil {
+		t.Errorf("NewFirebaseAccountDeleter: %v", err)
+	}
+	if _, err := auth.NewFirebaseAccountDeleter("demo-test", "localhost:9099"); err == nil {
+		t.Error("emulator host configured but not in the environment: accepted")
+	}
+	t.Setenv(auth.EmulatorHostEnv, "localhost:9099")
+	if _, err := auth.NewFirebaseAccountDeleter("demo-test", ""); err == nil {
+		t.Error("emulator host in the environment but not configured: accepted")
+	}
+}
+
+// TestFirebaseAccountDeleterEmulator: DeleteUser deletes the Firebase user,
+// after which its token is rejected, and deleting a user that is already gone
+// succeeds (so DELETE /me can be retried).
+func TestFirebaseAccountDeleterEmulator(t *testing.T) {
+	host := authtest.EmulatorHost(t)
+	t.Setenv(auth.EmulatorHostEnv, host)
+	ctx := context.Background()
+	v, err := auth.NewFirebaseVerifier(ctx, authtest.EmulatorProjectID, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := auth.NewFirebaseAccountDeleter(authtest.EmulatorProjectID, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := authtest.SignUp(t, host, "delete-"+time.Now().Format("150405.000000")+"@example.com", "password123", "Del")
+	if _, err := v.Verify(ctx, user.IDToken); err != nil {
+		t.Fatalf("Verify before deletion: %v", err)
+	}
+	if err := d.DeleteUser(ctx, user.UID); err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+	if _, err := v.Verify(ctx, user.IDToken); !errors.Is(err, auth.ErrInvalidToken) {
+		t.Errorf("Verify after deletion: err = %v, want ErrInvalidToken", err)
+	}
+	if err := d.DeleteUser(ctx, user.UID); err != nil {
+		t.Errorf("DeleteUser of a deleted user: %v, want nil", err)
+	}
+}
+
+// TestFirebaseAccountDeleterUnreachable: a failure to reach Firebase is an
+// error, so DELETE /me rolls back.
+func TestFirebaseAccountDeleterUnreachable(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := ln.Addr().String()
+	ln.Close()
+	t.Setenv(auth.EmulatorHostEnv, host)
+	d, err := auth.NewFirebaseAccountDeleter("demo-test", host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := d.DeleteUser(ctx, "someone"); err == nil {
+		t.Error("DeleteUser with Firebase unreachable: nil error")
+	}
+}

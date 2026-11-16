@@ -26,6 +26,11 @@ import (
 // answers it with 401.
 var ErrInvalidToken = errors.New("auth: invalid ID token")
 
+// ErrAccountDeleted is returned (wrapped) by Authenticate for a valid token
+// of a Firebase user whose Shelfkin account was deleted (DELETE /me) less
+// than a day ago. It wraps ErrInvalidToken, so the server answers 401.
+var ErrAccountDeleted = fmt.Errorf("%w: the account was deleted", ErrInvalidToken)
+
 // Token is what the API uses from a verified Firebase ID token.
 type Token struct {
 	// UID is the Firebase user ID (the token's sub claim). Never empty.
@@ -86,7 +91,8 @@ func NewAuthenticator(verifier Verifier, db dbtx.Beginner) *Authenticator {
 
 // Authenticate verifies idToken and returns the ID of the matching users
 // row, creating it the first time a Firebase user is seen (see
-// DisplayName; timezone starts as UTC). On later calls it updates the stored
+// DisplayName; timezone starts as UTC), unless the account was deleted
+// (ErrAccountDeleted). On later calls it updates the stored
 // email when the token's differs, and never changes the display name.
 // Concurrent first calls for the same user create one row and all succeed.
 //
@@ -106,6 +112,16 @@ func (a *Authenticator) Authenticate(ctx context.Context, idToken string) (pgtyp
 		q := db.New(tx)
 		row, err := q.GetUserIdentityByFirebaseUID(ctx, tok.UID)
 		if errors.Is(err, pgx.ErrNoRows) {
+			// An ID token issued before the account was deleted (DELETE
+			// /me) stays valid until it expires; it must not recreate the
+			// account.
+			deleted, derr := q.IsAccountDeleted(ctx, tok.UID)
+			if derr != nil {
+				return fmt.Errorf("checking for a deleted account: %w", derr)
+			}
+			if deleted {
+				return ErrAccountDeleted
+			}
 			id, err = q.CreateUser(ctx, db.CreateUserParams{
 				FirebaseUid: tok.UID,
 				Email:       email,

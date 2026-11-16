@@ -25,7 +25,7 @@ import {
   requestPushPermission,
   type PushSetupErrorReason,
 } from './device';
-import { loadDevicePush, saveDevicePush } from './storage';
+import { clearDevicePush, loadDevicePush, saveDevicePush } from './storage';
 
 type Me = components['schemas']['User'];
 
@@ -179,6 +179,15 @@ export async function unregisterBeforeSignOut(uid: string): Promise<void> {
     clearTimeout(timer);
   }
   await saveDevicePush(uid, { enabled: stored.enabled, token: null });
+}
+
+/**
+ * Runs before signing out after the account was deleted (#46). The API has
+ * already deleted every push token of the account, and no longer accepts its ID
+ * token, so this only forgets the device's stored state for the user.
+ */
+export async function forgetDeviceAfterAccountDeleted(uid: string): Promise<void> {
+  await clearDevicePush(uid);
 }
 
 /** Test only: forgets queued work from an earlier test. */

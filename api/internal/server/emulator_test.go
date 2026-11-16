@@ -184,3 +184,43 @@ func TestEmulatorPatchMe(t *testing.T) {
 		t.Errorf("PATCH /me = %v", u)
 	}
 }
+
+// TestEmulatorDeleteMe: DELETE /me with the real Firebase verifier and
+// deleter deletes both the users row and the emulator user; the old token is
+// then rejected and does not recreate the account.
+func TestEmulatorDeleteMe(t *testing.T) {
+	host := authtest.EmulatorHost(t)
+	t.Setenv(auth.EmulatorHostEnv, host)
+	verifier, err := auth.NewFirebaseVerifier(context.Background(), authtest.EmulatorProjectID, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleter, err := auth.NewFirebaseAccountDeleter(authtest.EmulatorProjectID, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := dbtest.New(t)
+	logger, _ := newLogger()
+	url := serve(t, NewHandler(NewAPI(pool, logger, WithAccountDeleter(deleter)), auth.NewAuthenticator(verifier, pool), logger, nil))
+	s := &meServer{url: url, pool: pool}
+
+	user := authtest.SignUp(t, host, uniqueEmail(t, "gone"), "password123", "Gone Soon")
+	s.user(t, http.MethodGet, user.IDToken, "")
+	s.create(t, user.IDToken, "Solo")
+
+	resp, b := s.req(t, http.MethodDelete, "/me", user.IDToken, "")
+	wantStatus(t, resp, b, http.StatusNoContent, nil)
+	if n := s.countUsers(t, user.UID); n != 0 {
+		t.Errorf("%d users rows after DELETE /me, want 0", n)
+	}
+	if n := s.count(t, `SELECT count(*) FROM households`); n != 0 {
+		t.Errorf("%d households after DELETE /me, want 0", n)
+	}
+
+	// The emulator user is gone, so the SDK rejects the old token.
+	resp, b = s.req(t, http.MethodGet, "/me", user.IDToken, "")
+	wantError(t, resp, b, http.StatusUnauthorized, CodeUnauthorized)
+	if n := s.countUsers(t, user.UID); n != 0 {
+		t.Errorf("the old token recreated the account (%d rows)", n)
+	}
+}

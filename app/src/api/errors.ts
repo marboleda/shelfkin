@@ -20,6 +20,11 @@ type ApiErrorDetails = {
   serverMessage?: string;
   /** True when a `network` error was caused by the request timing out. */
   timedOut?: boolean;
+  /**
+   * The parsed error body, for errors whose body has more than `code` and
+   * `message` (e.g. `households` in a `must_transfer_ownership` 409).
+   */
+  body?: unknown;
   cause?: unknown;
 };
 
@@ -30,6 +35,7 @@ export class ApiError extends Error {
   readonly code?: string;
   readonly serverMessage?: string;
   readonly timedOut: boolean;
+  readonly body?: unknown;
 
   constructor(kind: ApiErrorKind, message: string, details: ApiErrorDetails = {}) {
     super(message, details.cause === undefined ? undefined : { cause: details.cause });
@@ -39,6 +45,7 @@ export class ApiError extends Error {
     this.code = details.code;
     this.serverMessage = details.serverMessage;
     this.timedOut = details.timedOut ?? false;
+    this.body = details.body;
   }
 }
 
@@ -68,6 +75,7 @@ export function errorFromResponse(status: number, body: unknown): ApiError {
       status,
       code: body.error.code,
       serverMessage: body.error.message,
+      body,
     });
   }
   if (typeof body === 'string' && body.length > 0) {
