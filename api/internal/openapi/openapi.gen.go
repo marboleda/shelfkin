@@ -353,6 +353,11 @@ type Household struct {
 	// Example: 0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80
 	Id Id `json:"id"`
 
+	// MemberCount How many members the household has, including the owner.
+	//
+	// Example: 3
+	MemberCount int `json:"memberCount"`
+
 	// Name 1 to 50 characters. Not unique.
 	//
 	// Example: Home

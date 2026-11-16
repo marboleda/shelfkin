@@ -44,6 +44,7 @@ export function testHousehold(overrides: Partial<Household> = {}): Household {
     name: 'Home',
     role: 'owner',
     createdAt: '2026-01-31T18:04:05Z',
+    memberCount: 1,
     ...overrides,
   };
 }

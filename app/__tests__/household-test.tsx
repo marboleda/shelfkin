@@ -43,8 +43,8 @@ jest.mock('@/api/query-client', () => {
 
 const APP_DIR = './src/app';
 
-const HOME = testHousehold({ id: '0190f3a1-0000-7000-8000-00000000000a', name: 'Home', role: 'owner' });
-const CABIN = testHousehold({ id: '0190f3a1-0000-7000-8000-00000000000b', name: 'Cabin', role: 'member' });
+const HOME = testHousehold({ id: '0190f3a1-0000-7000-8000-00000000000a', name: 'Home', role: 'owner', memberCount: 3 });
+const CABIN = testHousehold({ id: '0190f3a1-0000-7000-8000-00000000000b', name: 'Cabin', role: 'member', memberCount: 2 });
 const LONG_NAME = 'The Very Long Household Name That Fills Fifty Char';
 
 const server = setupApiServer(...signedInApiHandlers(undefined, [HOME]));
@@ -447,7 +447,7 @@ describe('switcher placement', () => {
     expect(api.gets).toBe(gets);
   });
 
-  test('a 50-character name is one truncated line in the header and side nav, and in full in the list', async () => {
+  test('a 50-character name is one truncated line in the header, side nav and list, above the whole role and count line', async () => {
     const long = testHousehold({ id: HOME.id, name: LONG_NAME });
     expect([...LONG_NAME]).toHaveLength(50);
     answerHouseholds([long]);
@@ -459,15 +459,37 @@ describe('switcher placement', () => {
     expect(headerText.props.ellipsizeMode).toBe('tail');
 
     await press(header);
-    const row = screen.getByLabelText(`${LONG_NAME}, Owner, current`);
-    expect(within(row).getByText(LONG_NAME).props.numberOfLines).toBeUndefined();
+    // The row's label holds the full name; the name's own line truncates, and
+    // the role and count line below it is never truncated.
+    const row = screen.getByLabelText(`${LONG_NAME}, Owner, 1 member, current`);
+    expectTruncatedNameAboveDetail(row, LONG_NAME, 'Owner · 1 member');
     await escape('household-sheet');
 
     await setWindowWidth(1024);
     const sideButton = within(screen.getByTestId('side-nav')).getByLabelText(label(LONG_NAME));
     expect(within(sideButton).getByText(LONG_NAME).props.numberOfLines).toBe(1);
+    await press(sideButton);
+    const popoverRow = within(screen.getByTestId('household-popover')).getByLabelText(`${LONG_NAME}, Owner, 1 member, current`);
+    expectTruncatedNameAboveDetail(popoverRow, LONG_NAME, 'Owner · 1 member');
   });
 });
+
+/** The row shows `name` on one truncated line, and `detail` on its own untruncated line below it. */
+function expectTruncatedNameAboveDetail(row: ReturnType<typeof screen.getByTestId>, name: string, detail: string) {
+  const nameText = within(row).getByText(name);
+  expect(nameText.props.numberOfLines).toBe(1);
+  expect(nameText.props.ellipsizeMode).toBe('tail');
+  const detailText = within(row).getByTestId('household-row-detail');
+  expect(detailText).toHaveTextContent(detail, { exact: true });
+  expect(detailText.props.numberOfLines).toBeUndefined();
+}
+
+/** The role and count line of each row in `container`, in order. */
+function rowDetails(container: ReturnType<typeof screen.getByTestId>) {
+  return within(container)
+    .getAllByTestId('household-row-detail')
+    .map((text) => [text.props.children].flat().join(''));
+}
 
 describe('switcher list', () => {
   test('below 768 px the header opens a "Your households" sheet; choosing a household switches and closes it', async () => {
@@ -484,7 +506,10 @@ describe('switcher list', () => {
     expect(sheet.props['aria-label']).toBe('Your households');
     expect(screen.getByLabelText(label('Home'))).toBeExpanded();
     const rows = within(sheet).getAllByLabelText(/, (Owner|Member)/);
-    expect(rows.map((row) => row.props.accessibilityLabel ?? row.props['aria-label'])).toEqual(['Cabin, Member', 'Home, Owner, current']);
+    expect(rows.map((row) => row.props.accessibilityLabel ?? row.props['aria-label'])).toEqual([
+      'Cabin, Member, 2 members',
+      'Home, Owner, 3 members, current',
+    ]);
     expect(within(rows[1]).getByTestId('household-current-check', { includeHiddenElements: true })).toBeTruthy();
     expect(within(sheet).getByRole('button', { name: 'Create a household' })).toBeTruthy();
     expect(within(sheet).getByRole('button', { name: 'Join with a code' })).toBeTruthy();
@@ -495,29 +520,52 @@ describe('switcher list', () => {
     expect(await AsyncStorage.getItem(rememberedHouseholdKey(uid))).toBe(CABIN.id);
   });
 
+  test('each row shows the role and member count from GET /households, singular for one member', async () => {
+    const solo = testHousehold({ id: '0190f3a1-0000-7000-8000-00000000000c', name: 'Studio', role: 'owner', memberCount: 1 });
+    answerHouseholds([HOME, CABIN, solo]);
+    await remember(HOME.id);
+    await renderRouter(APP_DIR, { initialUrl: '/' });
+
+    await press(await screen.findByLabelText(label('Home')));
+    const sheet = screen.getByTestId('household-sheet');
+    // Sorted by name: Cabin, Home, Studio.
+    expect(rowDetails(sheet)).toEqual(['Member · 2 members', 'Owner · 3 members', 'Owner · 1 member']);
+    expect(within(sheet).getByText('Owner · 3 members')).toBeTruthy();
+    expect(within(sheet).getByText('Owner · 1 member')).toBeTruthy();
+    expect(within(sheet).getByLabelText('Studio, Owner, 1 member')).toBeTruthy();
+    await escape('household-sheet');
+
+    // The same rows in the wide side-nav popover.
+    await setWindowWidth(1024);
+    await press(within(screen.getByTestId('side-nav')).getByLabelText(label('Home')));
+    const popover = screen.getByTestId('household-popover');
+    expect(rowDetails(popover)).toEqual(['Member · 2 members', 'Owner · 3 members', 'Owner · 1 member']);
+    expect(within(popover).getByLabelText('Home, Owner, 3 members, current')).toBeTruthy();
+  });
+
   test('the switcher opens with one household, and choosing the current one just closes the list', async () => {
     answerHouseholds([HOME]);
     await renderRouter(APP_DIR, { initialUrl: '/' });
 
     await press(await screen.findByLabelText(label('Home')));
-    await press(screen.getByLabelText('Home, Owner, current'));
+    await press(screen.getByLabelText('Home, Owner, 3 members, current'));
     expect(screen.queryByTestId('household-sheet')).toBeNull();
     expect(screen.getByLabelText(label('Home'))).toBeTruthy();
   });
 
   test('two households with the same name are told apart by the check mark and switched by ID', async () => {
-    const other = testHousehold({ id: CABIN.id, name: 'Home', role: 'member' });
+    const other = testHousehold({ id: CABIN.id, name: 'Home', role: 'member', memberCount: 3 });
     answerHouseholds([HOME, other]);
     await remember(HOME.id);
     await renderRouter(APP_DIR, { initialUrl: '/' });
 
     await press(await screen.findByLabelText(label('Home')));
-    await press(screen.getByLabelText('Home, Member'));
+    await press(screen.getByLabelText('Home, Member, 3 members'));
     expect(await AsyncStorage.getItem(rememberedHouseholdKey(uid))).toBe(other.id);
 
     await press(screen.getByLabelText(label('Home')));
-    expect(screen.getByLabelText('Home, Member, current')).toBeTruthy();
-    expect(screen.getByLabelText('Home, Owner')).toBeTruthy();
+    expect(screen.getByLabelText('Home, Member, 3 members, current')).toBeTruthy();
+    expect(screen.getByLabelText('Home, Owner, 3 members')).toBeTruthy();
   });
 
   test('create from the sheet makes the new household current', async () => {
@@ -589,7 +637,7 @@ describe('side-nav switcher', () => {
     await renderRouter(APP_DIR, { initialUrl: '/settings' });
 
     await press(await screen.findByLabelText(label('Home')));
-    await press(screen.getByLabelText('Cabin, Member'));
+    await press(screen.getByLabelText('Cabin, Member, 2 members'));
 
     expect(screen).toHavePathname('/settings');
     expect(within(screen.getByTestId('side-nav')).getByLabelText(label('Cabin'))).toBeTruthy();
@@ -601,7 +649,7 @@ describe('side-nav switcher', () => {
     await renderRouter(APP_DIR, { initialUrl: url });
 
     await press(await screen.findByLabelText(label('Home')));
-    await press(screen.getByLabelText('Cabin, Member'));
+    await press(screen.getByLabelText('Cabin, Member, 2 members'));
 
     await waitFor(() => expect(screen).toHavePathname('/'));
     expect(screen.getByRole('heading', { name: 'Pantry' })).toBeTruthy();
