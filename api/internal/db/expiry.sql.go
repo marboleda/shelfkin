@@ -11,6 +11,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countExpiredPushTickets = `-- name: CountExpiredPushTickets :one
+SELECT count(*) FROM push_tickets WHERE sent_at < $1::timestamptz
+`
+
+// CountExpiredPushTickets counts the rows DeleteExpiredPushTickets would
+// delete, for dry runs.
+func (q *Queries) CountExpiredPushTickets(ctx context.Context, sentBefore pgtype.Timestamptz) (int64, error) {
+	row := q.db.QueryRow(ctx, countExpiredPushTickets, sentBefore)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countOldExpiryNotifications = `-- name: CountOldExpiryNotifications :one
 SELECT count(*) FROM expiry_notifications
 WHERE expires_on < $1::date
@@ -23,6 +36,33 @@ func (q *Queries) CountOldExpiryNotifications(ctx context.Context, before pgtype
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const countStalePushTokens = `-- name: CountStalePushTokens :one
+SELECT count(*) FROM push_tokens WHERE last_seen_at < $1::timestamptz
+`
+
+// CountStalePushTokens counts the rows DeleteStalePushTokens would delete,
+// for dry runs.
+func (q *Queries) CountStalePushTokens(ctx context.Context, seenBefore pgtype.Timestamptz) (int64, error) {
+	row := q.db.QueryRow(ctx, countStalePushTokens, seenBefore)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const deleteExpiredPushTickets = `-- name: DeleteExpiredPushTickets :execrows
+DELETE FROM push_tickets WHERE sent_at < $1::timestamptz
+`
+
+// DeleteExpiredPushTickets deletes tickets sent before the given time (the
+// run's time minus 24 hours) whose receipt never came.
+func (q *Queries) DeleteExpiredPushTickets(ctx context.Context, sentBefore pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredPushTickets, sentBefore)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteOldExpiryNotifications = `-- name: DeleteOldExpiryNotifications :execrows
@@ -40,6 +80,17 @@ func (q *Queries) DeleteOldExpiryNotifications(ctx context.Context, before pgtyp
 	return result.RowsAffected(), nil
 }
 
+const deletePushTickets = `-- name: DeletePushTickets :exec
+DELETE FROM push_tickets WHERE id = ANY ($1::text[])
+`
+
+// DeletePushTickets deletes the given tickets once their receipts have been
+// processed.
+func (q *Queries) DeletePushTickets(ctx context.Context, ids []string) error {
+	_, err := q.db.Exec(ctx, deletePushTickets, ids)
+	return err
+}
+
 const deletePushToken = `-- name: DeletePushToken :exec
 DELETE FROM push_tokens
 WHERE user_id = $1 AND id = $2
@@ -55,6 +106,64 @@ type DeletePushTokenParams struct {
 func (q *Queries) DeletePushToken(ctx context.Context, arg DeletePushTokenParams) error {
 	_, err := q.db.Exec(ctx, deletePushToken, arg.UserID, arg.ID)
 	return err
+}
+
+const deletePushTokensByID = `-- name: DeletePushTokensByID :execrows
+DELETE FROM push_tokens WHERE id = ANY ($1::uuid[])
+`
+
+// DeletePushTokensByID deletes tokens Expo reported as DeviceNotRegistered in
+// a receipt. Their tickets go with them (ON DELETE CASCADE).
+func (q *Queries) DeletePushTokensByID(ctx context.Context, ids []pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePushTokensByID, ids)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteStalePushTokens = `-- name: DeleteStalePushTokens :execrows
+DELETE FROM push_tokens WHERE last_seen_at < $1::timestamptz
+`
+
+// DeleteStalePushTokens deletes tokens whose last_seen_at is before the given
+// time (the run's time minus 90 days): no device has refreshed them since.
+func (q *Queries) DeleteStalePushTokens(ctx context.Context, seenBefore pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteStalePushTokens, seenBefore)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const listDuePushTickets = `-- name: ListDuePushTickets :many
+SELECT id, token_id, sent_at
+FROM push_tickets
+WHERE sent_at <= $1::timestamptz
+ORDER BY sent_at, id
+`
+
+// ListDuePushTickets returns the tickets sent at or before the given time
+// (the run's time minus 15 minutes), whose receipts Expo should have by now,
+// oldest first.
+func (q *Queries) ListDuePushTickets(ctx context.Context, sentBefore pgtype.Timestamptz) ([]PushTicket, error) {
+	rows, err := q.db.Query(ctx, listDuePushTickets, sentBefore)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PushTicket
+	for rows.Next() {
+		var i PushTicket
+		if err := rows.Scan(&i.ID, &i.TokenID, &i.SentAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listExpiringEntries = `-- name: ListExpiringEntries :many
@@ -216,5 +325,33 @@ type RecordExpiryNotificationsParams struct {
 // of each array); the arrays always have the same length.
 func (q *Queries) RecordExpiryNotifications(ctx context.Context, arg RecordExpiryNotificationsParams) error {
 	_, err := q.db.Exec(ctx, recordExpiryNotifications, arg.EntryIds, arg.UserID, arg.ExpiresOns)
+	return err
+}
+
+const recordPushTickets = `-- name: RecordPushTickets :exec
+
+INSERT INTO push_tickets (id, token_id, sent_at)
+SELECT k.id, k.token_id, $1::timestamptz
+FROM (
+    -- The two unnest calls run in lockstep, as in RecordExpiryNotifications.
+    SELECT unnest($2::text[]) AS id, unnest($3::uuid[]) AS token_id
+) AS k
+JOIN push_tokens t ON t.id = k.token_id
+ON CONFLICT (id) DO NOTHING
+`
+
+type RecordPushTicketsParams struct {
+	SentAt   pgtype.Timestamptz
+	Ids      []string
+	TokenIds []pgtype.UUID
+}
+
+// Push receipts and stale tokens (#47). push_tickets and push_tokens have no
+// row-level security; these run without a user.
+// RecordPushTickets stores the tickets Expo returned for accepted pushes
+// (ids[i] was sent to token token_ids[i]) with the run's time. A token that
+// was deleted since it was read is skipped rather than failing the insert.
+func (q *Queries) RecordPushTickets(ctx context.Context, arg RecordPushTicketsParams) error {
+	_, err := q.db.Exec(ctx, recordPushTickets, arg.SentAt, arg.Ids, arg.TokenIds)
 	return err
 }

@@ -39,13 +39,33 @@ func databaseURL(pool *pgxpool.Pool) string {
 }
 
 // fakeExpo answers every message with an ok ticket and records requests.
+// Requests to /getReceipts get an ok receipt for every ID.
 type fakeExpo struct {
-	mu       sync.Mutex
-	messages []map[string]any
-	auth     []string
+	mu         sync.Mutex
+	messages   []map[string]any
+	auth       []string
+	receiptIDs []string
 }
 
 func (f *fakeExpo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/getReceipts" {
+		var req struct {
+			IDs []string `json:"ids"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		f.mu.Lock()
+		f.receiptIDs = append(f.receiptIDs, req.IDs...)
+		f.mu.Unlock()
+		receipts := map[string]any{}
+		for _, id := range req.IDs {
+			receipts[id] = map[string]string{"status": "ok"}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": receipts})
+		return
+	}
 	var msgs []map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&msgs); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -57,7 +77,7 @@ func (f *fakeExpo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Unlock()
 	tickets := make([]map[string]string, len(msgs))
 	for i := range tickets {
-		tickets[i] = map[string]string{"status": "ok", "id": fmt.Sprint(i)}
+		tickets[i] = map[string]string{"status": "ok", "id": fmt.Sprint("ticket-", i)}
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"data": tickets})
 }
@@ -146,6 +166,21 @@ func TestRunSendsAndExits(t *testing.T) {
 	}
 	if len(expo.messages) != 1 {
 		t.Errorf("second run sent again: %d messages in total", len(expo.messages))
+	}
+	if len(expo.receiptIDs) != 0 {
+		t.Errorf("receipts fetched for a ticket under 15 minutes old: %v", expo.receiptIDs)
+	}
+
+	// 15 minutes later the ticket's receipt is fetched and the ticket deleted.
+	out.Reset()
+	if code := run(t.Context(), []string{"--now", "2026-10-27T13:15:00Z"}, env(vars), &out, &errOut, time.Now); code != 0 {
+		t.Fatalf("exit code %d\n%s", code, out.String())
+	}
+	if len(expo.receiptIDs) != 1 || expo.receiptIDs[0] != "ticket-0" {
+		t.Errorf("receipts fetched for %v, want [ticket-0]", expo.receiptIDs)
+	}
+	if !strings.Contains(out.String(), `"receipts_processed":1`) {
+		t.Errorf("summary does not count the receipt:\n%s", out.String())
 	}
 }
 
