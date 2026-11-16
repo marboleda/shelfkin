@@ -73,3 +73,58 @@ WHERE expires_on < sqlc.arg(before)::date;
 -- would delete, for dry runs.
 SELECT count(*) FROM expiry_notifications
 WHERE expires_on < sqlc.arg(before)::date;
+
+-- Push receipts and stale tokens (#47). push_tickets and push_tokens have no
+-- row-level security; these run without a user.
+
+-- name: RecordPushTickets :exec
+-- RecordPushTickets stores the tickets Expo returned for accepted pushes
+-- (ids[i] was sent to token token_ids[i]) with the run's time. A token that
+-- was deleted since it was read is skipped rather than failing the insert.
+INSERT INTO push_tickets (id, token_id, sent_at)
+SELECT k.id, k.token_id, sqlc.arg(sent_at)::timestamptz
+FROM (
+    -- The two unnest calls run in lockstep, as in RecordExpiryNotifications.
+    SELECT unnest(sqlc.arg(ids)::text[]) AS id, unnest(sqlc.arg(token_ids)::uuid[]) AS token_id
+) AS k
+JOIN push_tokens t ON t.id = k.token_id
+ON CONFLICT (id) DO NOTHING;
+
+-- name: ListDuePushTickets :many
+-- ListDuePushTickets returns the tickets sent at or before the given time
+-- (the run's time minus 15 minutes), whose receipts Expo should have by now,
+-- oldest first.
+SELECT id, token_id, sent_at
+FROM push_tickets
+WHERE sent_at <= sqlc.arg(sent_before)::timestamptz
+ORDER BY sent_at, id;
+
+-- name: DeletePushTickets :exec
+-- DeletePushTickets deletes the given tickets once their receipts have been
+-- processed.
+DELETE FROM push_tickets WHERE id = ANY (sqlc.arg(ids)::text[]);
+
+-- name: DeletePushTokensByID :execrows
+-- DeletePushTokensByID deletes tokens Expo reported as DeviceNotRegistered in
+-- a receipt. Their tickets go with them (ON DELETE CASCADE).
+DELETE FROM push_tokens WHERE id = ANY (sqlc.arg(ids)::uuid[]);
+
+-- name: DeleteExpiredPushTickets :execrows
+-- DeleteExpiredPushTickets deletes tickets sent before the given time (the
+-- run's time minus 24 hours) whose receipt never came.
+DELETE FROM push_tickets WHERE sent_at < sqlc.arg(sent_before)::timestamptz;
+
+-- name: CountExpiredPushTickets :one
+-- CountExpiredPushTickets counts the rows DeleteExpiredPushTickets would
+-- delete, for dry runs.
+SELECT count(*) FROM push_tickets WHERE sent_at < sqlc.arg(sent_before)::timestamptz;
+
+-- name: DeleteStalePushTokens :execrows
+-- DeleteStalePushTokens deletes tokens whose last_seen_at is before the given
+-- time (the run's time minus 90 days): no device has refreshed them since.
+DELETE FROM push_tokens WHERE last_seen_at < sqlc.arg(seen_before)::timestamptz;
+
+-- name: CountStalePushTokens :one
+-- CountStalePushTokens counts the rows DeleteStalePushTokens would delete,
+-- for dry runs.
+SELECT count(*) FROM push_tokens WHERE last_seen_at < sqlc.arg(seen_before)::timestamptz;

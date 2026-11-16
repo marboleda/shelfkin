@@ -60,6 +60,7 @@ var noRLSAllowlist = map[string]bool{
 	"users":                true,
 	"push_tokens":          true,
 	"expiry_notifications": true,
+	"push_tickets":         true,
 	"categories":           true,
 	"locations":            true,
 	"goose_db_version":     true,
@@ -282,6 +283,7 @@ func TestRLSGrants(t *testing.T) {
 		"pantry_entries":          all,
 		"item_events":             "INSERT,SELECT",
 		"expiry_notifications":    "DELETE,INSERT,SELECT",
+		"push_tickets":            "DELETE,INSERT,SELECT",
 		"effective_catalog_items": "SELECT",
 		// goose_db_version and its sequence: nothing.
 	}
@@ -938,10 +940,17 @@ func TestRLSMigrationDownUp(t *testing.T) {
 	if _, err := provider.UpTo(ctx, this); err != nil {
 		t.Fatalf("up to %d: %v", this, err)
 	}
-	if got := get(); got != up {
-		t.Fatalf("after up: %+v; want %+v", got, up)
+	// Later migrations can add grants on their own tables (push_tickets,
+	// #47), so only the grant count may be lower here than at the latest
+	// version.
+	if got := get(); got.Policies != up.Policies || got.RLSTables != up.RLSTables ||
+		got.Functions != up.Functions || got.Role != up.Role || got.Grants == 0 || got.Grants > up.Grants {
+		t.Fatalf("after up to %d: %+v; want %+v (with at most as many grants)", this, got, up)
 	}
 	if _, err := provider.Up(ctx); err != nil {
 		t.Fatalf("up to latest: %v", err)
+	}
+	if got := get(); got != up {
+		t.Fatalf("after up to latest: %+v; want %+v", got, up)
 	}
 }
