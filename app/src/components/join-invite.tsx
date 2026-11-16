@@ -11,7 +11,8 @@ import { isApiError } from '@/api/errors';
 import { useHouseholds } from '@/household/current-household';
 import { joinErrorMessage } from '@/household/households';
 import { useJoinHouseholdMutation } from '@/household/mutations';
-import { clearPendingInvite, savePendingInvite } from '@/household/pending-invite';
+import { getAuthState } from '@/auth/session';
+import { clearPendingInvite, releaseKeptPendingInvite, savePendingInvite } from '@/household/pending-invite';
 import { useTheme, useThemedStyles, type Theme } from '@/theme';
 
 import { Button } from './button';
@@ -73,6 +74,8 @@ export function JoinInviteScreen({ code }: { code: string }) {
   const mounted = useRef(false);
 
   function send() {
+    // A new attempt: an earlier 401's mark no longer applies.
+    releaseKeptPendingInvite();
     // mutateAsync rather than mutate's callbacks: those are skipped once the
     // screen unmounts, which an ended session's sign-out can do before the
     // error arrives, and the 401 save below must always happen.
@@ -84,7 +87,11 @@ export function JoinInviteScreen({ code }: { code: string }) {
       },
       (error: unknown) => {
         if (isDefiniteJoinError(error)) void clearPendingInvite();
-        else if (isUnauthorized(error)) void savePendingInvite(code, { keepOnEndedSession: true });
+        else if (isUnauthorized(error) && (mounted.current || getAuthState().status === 'signedOut')) {
+          // Kept for the sign-out of the session this 401 may have ended. Not
+          // when the user already left this screen while still signed in.
+          void savePendingInvite(code, { keepOnEndedSession: true });
+        }
       },
     );
   }
@@ -93,6 +100,8 @@ export function JoinInviteScreen({ code }: { code: string }) {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      // Left while signed in (not an ended session): forget the 401's mark.
+      releaseKeptPendingInvite();
     };
   }, []);
 

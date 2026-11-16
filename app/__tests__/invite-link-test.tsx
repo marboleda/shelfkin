@@ -117,6 +117,22 @@ async function signInAgainAndJoin(api: { codes: string[] }, sentBefore: number) 
   expect(await storedCode()).toBeNull();
 }
 
+const unauthorized401 = () =>
+  HttpResponse.json({ error: { code: 'unauthorized', message: 'nope' } }, { status: 401 });
+
+/** A request on Pantry gets 401, and so does its retry with a refreshed token: the session ends. */
+async function endSessionWithHouseholds401() {
+  server.use(
+    http.get(apiUrl('/households'), unauthorized401, { once: true }),
+    http.get(apiUrl('/households'), unauthorized401, { once: true }),
+  );
+  await act(async () => {
+    await apiClient.GET('/households');
+  });
+  await waitFor(() => expect(screen).toHavePathname('/sign-in'));
+  expect(await screen.findByTestId('session-ended')).toHaveTextContent(SESSION_ENDED);
+}
+
 describe('isDefiniteJoinError', () => {
   const httpError = (status: number, code?: string) => new ApiError('http', `HTTP ${status}`, { status, code });
 
@@ -292,6 +308,58 @@ describe('signed in', () => {
     expect(await storedCode()).toBeNull();
   });
 
+  test('after a 401 that did not end the session, leaving and a later ended session clear the code', async () => {
+    const user = signInTestUser();
+    let refreshFails = true;
+    user.getIdToken.mockImplementation(async (forceRefresh?: boolean) => {
+      if (forceRefresh && refreshFails) throw new Error('offline');
+      return `token-${user.uid}-1`;
+    });
+    const api = fakeJoin(UNAUTHORIZED, joined(CABIN));
+    await renderRouter(APP_DIR, { initialUrl: '/join/K7QM4XPA' });
+    expect(await screen.findByText('Your session has expired. Please sign in again.')).toBeTruthy();
+    expect(await storedCode()).toBe('K7QM4XPA');
+
+    // The user leaves the Retry screen for Pantry, and a later request ends the session.
+    await act(async () => {
+      router.replace('/');
+    });
+    expect(await screen.findByLabelText(switcherLabel('Home'))).toBeTruthy();
+    refreshFails = false;
+    await endSessionWithHouseholds401();
+
+    expect(await storedCode()).toBeNull();
+    expect(screen.queryByText(PENDING_INVITE_MESSAGE)).toBeNull();
+    await signInWithForm();
+    expect(await screen.findByLabelText(switcherLabel('Home'))).toBeTruthy();
+    expect(api.codes).toEqual(['K7QM4XPA']);
+  });
+
+  test('the kept code is used once: after the join fails again, a later ended session clears it', async () => {
+    const api = fakeJoin(UNAUTHORIZED, UNAUTHORIZED, apiError(500, 'internal'), joined(CABIN));
+    await renderRouter(APP_DIR, { initialUrl: '/join/K7QM4XPA' });
+    await expectSessionEndedWithInvite();
+    expect(await storedCode()).toBe('K7QM4XPA');
+
+    // Signing in again joins, and that join gets a 500.
+    await signInWithForm();
+    expect(await screen.findByText('The server ran into a problem. Please try again in a moment.')).toBeTruthy();
+    expect(api.codes).toHaveLength(3);
+    expect(await storedCode()).toBe('K7QM4XPA');
+
+    // The user leaves for Pantry, and a later request ends the session.
+    await act(async () => {
+      router.replace('/');
+    });
+    expect(await screen.findByLabelText(switcherLabel('Home'))).toBeTruthy();
+    await endSessionWithHouseholds401();
+
+    expect(await storedCode()).toBeNull();
+    await signInWithForm();
+    expect(await screen.findByLabelText(switcherLabel('Home'))).toBeTruthy();
+    expect(api.codes).toHaveLength(3);
+  });
+
   test('a session that ends on another request clears a stale code, so signing in again does not join', async () => {
     const api = fakeJoin(joined(CABIN));
     await renderRouter(APP_DIR, { initialUrl: '/' });
@@ -300,22 +368,8 @@ describe('signed in', () => {
     // A code left on the device, then a request on Pantry whose refreshed token is rejected too.
     await AsyncStorage.setItem(PENDING_INVITE_KEY, 'K7QM4XPA');
     resetPendingInviteForTests();
-    server.use(
-      http.get(apiUrl('/households'), () =>
-        HttpResponse.json({ error: { code: 'unauthorized', message: 'nope' } }, { status: 401 }),
-        { once: true },
-      ),
-      http.get(apiUrl('/households'), () =>
-        HttpResponse.json({ error: { code: 'unauthorized', message: 'nope' } }, { status: 401 }),
-        { once: true },
-      ),
-    );
-    await act(async () => {
-      await apiClient.GET('/households');
-    });
+    await endSessionWithHouseholds401();
 
-    await waitFor(() => expect(screen).toHavePathname('/sign-in'));
-    expect(await screen.findByTestId('session-ended')).toHaveTextContent(SESSION_ENDED);
     expect(await storedCode()).toBeNull();
     expect(screen.queryByText(PENDING_INVITE_MESSAGE)).toBeNull();
 

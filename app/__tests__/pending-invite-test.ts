@@ -10,6 +10,7 @@ import {
   clearPendingInvite,
   loadPendingInvite,
   PENDING_INVITE_KEY,
+  releaseKeptPendingInvite,
   resetPendingInviteForTests,
   savePendingInvite,
 } from '@/household/pending-invite';
@@ -102,5 +103,41 @@ test('a finished join drops the mark, so a later ended session clears a new copy
   await clearPendingInvite();
   await savePendingInvite(CODE);
   await endSession();
+  expect(await stored()).toEqual(cleared);
+});
+
+test('the mark is used once: the next ended session clears the kept code', async () => {
+  await signedIn();
+  await savePendingInvite(CODE, { keepOnEndedSession: true });
+  await endSession();
+  expect(await stored()).toEqual(kept);
+
+  await signedIn();
+  await endSession();
+  expect(await stored()).toEqual(cleared);
+});
+
+test('releasing the mark while signed in lets an ended session clear the code', async () => {
+  await signedIn();
+  await savePendingInvite(CODE, { keepOnEndedSession: true });
+  releaseKeptPendingInvite();
+  await endSession();
+  expect(await stored()).toEqual(cleared);
+});
+
+test('releasing the mark after the ended session has signed out keeps the code', async () => {
+  await signedIn();
+  await savePendingInvite(CODE, { keepOnEndedSession: true });
+  const ending = endSession();
+  await ending;
+  releaseKeptPendingInvite();
+  expect(await stored()).toEqual(kept);
+});
+
+test('a save marked for an ended session does nothing after a plain sign-out', async () => {
+  await signedIn();
+  await signOut();
+  await settle();
+  await savePendingInvite(CODE, { keepOnEndedSession: true });
   expect(await stored()).toEqual(cleared);
 });
