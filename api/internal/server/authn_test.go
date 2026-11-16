@@ -174,7 +174,7 @@ func TestUnknownRoutesAre404Not401(t *testing.T) {
 	url := serve(t, NewHandler(fakeAPI{okHealth}, denyAll, logger, nil))
 	resp, body := do(t, http.MethodGet, url+"/nope")
 	assertError(t, resp, body, http.StatusNotFound, CodeNotFound)
-	resp, body = do(t, http.MethodDelete, url+"/me")
+	resp, body = do(t, http.MethodPut, url+"/me")
 	assertError(t, resp, body, http.StatusMethodNotAllowed, CodeMethodNotAllowed)
 }
 

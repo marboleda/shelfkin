@@ -32,3 +32,19 @@ SET display_name = COALESCE(sqlc.narg(display_name), display_name),
     updated_at   = now()
 WHERE id = @id
 RETURNING id, display_name, email, timezone, push_enabled;
+
+-- name: IsAccountDeleted :one
+-- Whether the Firebase user's Shelfkin account was deleted within the last
+-- day (see the delete_account migration). The auth middleware checks it
+-- before creating a user, so an old ID token cannot recreate the account.
+SELECT EXISTS (SELECT 1 FROM deleted_accounts WHERE firebase_uid = $1)::boolean AS deleted;
+
+-- name: GetUserFirebaseUID :one
+SELECT firebase_uid FROM users WHERE id = $1;
+
+-- name: DeleteAccount :many
+-- Deletes the caller (app.user_id) and the households they own alone, or,
+-- when they own a household that has other members, deletes nothing and
+-- returns those households. See the delete_account migration.
+SELECT household_id::uuid AS household_id, household_name::text AS household_name
+FROM public.delete_account();

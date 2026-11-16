@@ -97,17 +97,17 @@ func TestHouseholdTablesConstraints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The created_by foreign keys have no ON DELETE action (#46 changes them
-	// to SET NULL). There are no CHECK constraints.
+	// The created_by foreign keys are ON DELETE SET NULL (#46; they had no
+	// action before). There are no CHECK constraints.
 	want := []con{
-		{"household_invites", "FOREIGN KEY (created_by) REFERENCES users(id)", false},
+		{"household_invites", "FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL", false},
 		{"household_invites", "FOREIGN KEY (household_id) REFERENCES households(id) ON DELETE CASCADE", false},
 		{"household_invites", "PRIMARY KEY (id)", false},
 		{"household_invites", "UNIQUE (code)", false},
 		{"household_members", "FOREIGN KEY (household_id) REFERENCES households(id) ON DELETE CASCADE", false},
 		{"household_members", "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE", false},
 		{"household_members", "PRIMARY KEY (household_id, user_id)", false},
-		{"households", "FOREIGN KEY (created_by) REFERENCES users(id)", false},
+		{"households", "FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL", false},
 		{"households", "PRIMARY KEY (id)", false},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -496,16 +496,22 @@ func TestDeletingUserRemovesMemberships(t *testing.T) {
 	}
 }
 
-func TestDeletingCreatorUserFails(t *testing.T) {
+// TestDeletingCreatorUserSetsNull: since #46, deleting a user who created a
+// household or an invite keeps those rows with a NULL created_by.
+func TestDeletingCreatorUserSetsNull(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	pool := dbtest.New(t)
 
 	// Sam created a household.
 	sam := insertUser(t, pool, "fb-sam")
-	insertHousehold(t, pool, "Home", sam)
-	_, err := pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, sam)
-	wantSQLState(t, err, sqlStateForeignKey, "deleting user who created a household")
+	home := insertHousehold(t, pool, "Home", sam)
+	if _, err := pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, sam); err != nil {
+		t.Fatalf("deleting user who created a household: %v", err)
+	}
+	if n := count(t, pool, `SELECT count(*) FROM households WHERE id = $1 AND created_by IS NULL`, home); n != 1 {
+		t.Errorf("household created by the deleted user: want it kept with NULL created_by")
+	}
 
 	// Alex created only an invite, in a household Alex did not create.
 	alex := insertUser(t, pool, "fb-alex")
@@ -513,8 +519,12 @@ func TestDeletingCreatorUserFails(t *testing.T) {
 	if err := insertInvite(ctx, pool, cabin, "CABIN001", alex); err != nil {
 		t.Fatal(err)
 	}
-	_, err = pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, alex)
-	wantSQLState(t, err, sqlStateForeignKey, "deleting user who created an invite")
+	if _, err := pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, alex); err != nil {
+		t.Fatalf("deleting user who created an invite: %v", err)
+	}
+	if n := count(t, pool, `SELECT count(*) FROM household_invites WHERE code = 'CABIN001' AND created_by IS NULL`); n != 1 {
+		t.Errorf("invite created by the deleted user: want it kept with NULL created_by")
+	}
 }
 
 func TestHouseholdUnknownReferences(t *testing.T) {

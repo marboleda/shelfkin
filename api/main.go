@@ -64,6 +64,14 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer, shut
 		return 1
 	}
 
+	// Deletes the Firebase user in DELETE /me. It needs credentials (the
+	// Cloud Run service account), looked up on first use.
+	deleter, err := auth.NewFirebaseAccountDeleter(cfg.FirebaseProjectID, cfg.AuthEmulatorHost)
+	if err != nil {
+		logger.Error("creating Firebase account deleter", "error", err)
+		return 1
+	}
+
 	if cfg.Pool.ConnConfig.ConnectTimeout == 0 {
 		cfg.Pool.ConnConfig.ConnectTimeout = connectTimeout
 	}
@@ -83,7 +91,7 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer, shut
 	}
 	logger.Info("listening", "port", cfg.Port)
 
-	handler := server.NewHandler(server.NewAPI(pool, logger, server.WithAppBaseURL(cfg.AppBaseURL)), auth.NewAuthenticator(verifier, pool), logger, cfg.CORSAllowedOrigins)
+	handler := server.NewHandler(server.NewAPI(pool, logger, server.WithAppBaseURL(cfg.AppBaseURL), server.WithAccountDeleter(deleter)), auth.NewAuthenticator(verifier, pool), logger, cfg.CORSAllowedOrigins)
 	srv := server.NewHTTPServer(handler, logger)
 	err = server.Serve(ctx, srv, ln, shutdownTimeout)
 	switch {

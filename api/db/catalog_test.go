@@ -185,7 +185,7 @@ func TestCatalogTablesConstraints(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []con{
-		{"catalog_items", "FOREIGN KEY (created_by) REFERENCES users(id)"},
+		{"catalog_items", "FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL"},
 		{"catalog_items", "FOREIGN KEY (default_category_id) REFERENCES categories(id)"},
 		{"catalog_items", "FOREIGN KEY (default_location_id) REFERENCES locations(id)"},
 		{"catalog_items", "FOREIGN KEY (household_id) REFERENCES households(id) ON DELETE CASCADE"},

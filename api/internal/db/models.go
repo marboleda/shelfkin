@@ -162,6 +162,11 @@ type Category struct {
 	SortOrder int16
 }
 
+type DeletedAccount struct {
+	FirebaseUid string
+	DeletedAt   pgtype.Timestamptz
+}
+
 type EffectiveCatalogItem struct {
 	HouseholdID        pgtype.UUID
 	CatalogItemID      pgtype.UUID
