@@ -7,8 +7,8 @@
 // does tapping outside the dialog. While `busy`, it cannot be dismissed and
 // both buttons are disabled; the confirm button shows progress.
 
-import { useState, type ReactNode } from 'react';
-import { Modal, ScrollView, Text, View } from 'react-native';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Modal, Platform, ScrollView, Text, View } from 'react-native';
 
 import { useThemedStyles, type Theme } from '@/theme';
 
@@ -75,9 +75,33 @@ export function ConfirmDialog({
   const typedMatches = !typeToConfirm || typed.trim() === typeToConfirm.expected.trim();
   const canConfirm = !busy && !confirmDisabled && typedMatches;
 
+  // Set once the dialog has asked to close, so Escape (handled both here and by
+  // the Modal on web) and a double tap call `onCancel` only once per opening.
+  const cancelled = useRef(false);
+  useEffect(() => {
+    if (visible) cancelled.current = false;
+  }, [visible]);
+
   function cancel() {
-    if (!busy) onCancel();
+    if (busy || !visible || cancelled.current) return;
+    cancelled.current = true;
+    onCancel();
   }
+
+  // On web, RN-Web's Modal only handles Escape once its opening animation has
+  // finished; handle it from the moment the dialog shows.
+  const cancelRef = useRef(cancel);
+  useEffect(() => {
+    cancelRef.current = cancel;
+  });
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !visible || typeof document === 'undefined') return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') cancelRef.current();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [visible]);
 
   function confirm() {
     if (canConfirm) onConfirm();

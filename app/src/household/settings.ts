@@ -8,6 +8,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
+import { useCallback } from 'react';
 
 import { apiClient, callApi } from '@/api/client';
 import { isApiError } from '@/api/errors';
@@ -205,7 +206,7 @@ export function useTransferOwnershipMutation() {
       queryClient.setQueryData<Household[]>(queryKeys.households.list(), (previous) =>
         previous?.map((item) => (item.id === keys.householdId ? { ...item, role: 'member' } : item)),
       );
-      queryClient.removeQueries({ queryKey: keys.invites() });
+      // The invites stay cached but are no longer requested or shown: the query is owner-only.
     },
   });
 }
@@ -254,16 +255,17 @@ export function useDeleteHouseholdMutation() {
 
 /**
  * After a 403 `owner_only`: reload the household list (so the role is fresh)
- * and the members, and forget the invites the user can no longer see.
+ * and the members. The invites are no longer requested once the role says member.
  */
 export function useReloadAfterOwnershipLost() {
   const keys = useHouseholdKeys();
   const queryClient = useQueryClient();
-  return () => {
-    queryClient.removeQueries({ queryKey: keys.invites() });
-    return Promise.all([
-      queryClient.invalidateQueries({ queryKey: queryKeys.households.list(), exact: true }),
-      queryClient.invalidateQueries({ queryKey: keys.members(), exact: true }),
-    ]);
-  };
+  return useCallback(
+    () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.households.list(), exact: true }),
+        queryClient.invalidateQueries({ queryKey: keys.members(), exact: true }),
+      ]),
+    [queryClient, keys],
+  );
 }

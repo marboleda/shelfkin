@@ -82,8 +82,12 @@ export function HouseholdSettings() {
     },
     [household.id, household.name, reloadAfterOwnershipLost],
   );
+  // Each failed invites request is handled once.
+  const handledInvitesError = useRef<unknown>(null);
   useEffect(() => {
-    if (invites.isError) handleOwnerOnly(invites.error);
+    if (!invites.isError || handledInvitesError.current === invites.error) return;
+    handledInvitesError.current = invites.error;
+    handleOwnerOnly(invites.error);
   }, [invites.isError, invites.error, handleOwnerOnly]);
 
   // The dialog stays filled in while it fades out.

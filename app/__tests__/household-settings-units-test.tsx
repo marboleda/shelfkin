@@ -124,11 +124,17 @@ describe('ConfirmDialog', () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
-  test('the escape gesture and the backdrop cancel', async () => {
+  test('the escape gesture cancels', async () => {
     const { onCancel } = await renderDialog();
     await fireEvent(screen.getByTestId('confirm-dialog'), 'accessibilityEscape');
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  test('tapping the backdrop cancels, once however often it is tapped', async () => {
+    const { onCancel } = await renderDialog();
     await fireEvent(screen.getByTestId('confirm-dialog-backdrop', { includeHiddenElements: true }), 'responderRelease');
-    expect(onCancel).toHaveBeenCalledTimes(2);
+    await fireEvent(screen.getByTestId('confirm-dialog-backdrop', { includeHiddenElements: true }), 'responderRelease');
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
   test('while busy, nothing can be pressed or dismissed', async () => {
