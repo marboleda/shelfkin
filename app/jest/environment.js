@@ -10,6 +10,15 @@ class AppTestEnvironment extends ReactNativeEnvironment {
   constructor(config, context) {
     super(config, context);
     this.global.__NODE_FETCH__ = { fetch, Request, Response, Headers, AbortController, AbortSignal };
+    // Sets the time zone of the test process (`process.env.TZ` inside a test is a
+    // copy and has no effect). Node applies a TZ change at once, to every Date
+    // and Intl call in the process. Returns the previous value, to restore it.
+    this.global.__SET_TIME_ZONE__ = (zone) => {
+      const previous = process.env.TZ;
+      if (zone === undefined) delete process.env.TZ;
+      else process.env.TZ = zone;
+      return previous;
+    };
   }
 }
 

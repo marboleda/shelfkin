@@ -27,6 +27,12 @@ type ScreenProps = {
    * tab), e.g. the household switcher on Pantry.
    */
   header?: ReactNode;
+  /**
+   * False for a screen whose content scrolls itself, such as a virtualised list
+   * (a `FlatList` inside a `ScrollView` renders every row). The content then
+   * fills the screen's height instead of scrolling as a whole.
+   */
+  scroll?: boolean;
   children?: ReactNode;
 };
 
@@ -55,31 +61,39 @@ export function safeAreaPadding(insets: EdgeInsets, inShell: boolean, wide: bool
   };
 }
 
-export function Screen({ title, inShell = false, accessory, header, children }: ScreenProps) {
+export function Screen({ title, inShell = false, accessory, header, scroll = true, children }: ScreenProps) {
   const styles = useThemedStyles(createStyles);
   const insets = useSafeAreaInsets();
   const wide = useIsWideLayout();
+
+  const content = (
+    <View testID="screen-content" style={[styles.content, scroll ? null : styles.contentFill]}>
+      {accessory}
+      {header ? (
+        <View role="heading" aria-level={1}>
+          {header}
+        </View>
+      ) : (
+        <Text role="heading" aria-level={1} style={styles.heading}>
+          {title}
+        </Text>
+      )}
+      {children}
+    </View>
+  );
 
   return (
     <View testID="screen" style={[styles.root, safeAreaPadding(insets, inShell, wide)]}>
       <Head>
         <title>{documentTitle(title)}</title>
       </Head>
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
-        <View testID="screen-content" style={styles.content}>
-          {accessory}
-          {header ? (
-            <View role="heading" aria-level={1}>
-              {header}
-            </View>
-          ) : (
-            <Text role="heading" aria-level={1} style={styles.heading}>
-              {title}
-            </Text>
-          )}
-          {children}
-        </View>
-      </ScrollView>
+      {scroll ? (
+        <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+          {content}
+        </ScrollView>
+      ) : (
+        <View style={styles.fixed}>{content}</View>
+      )}
     </View>
   );
 }
@@ -96,6 +110,14 @@ function createStyles(theme: Theme) {
     scrollContent: {
       flexGrow: 1,
       alignItems: 'center' as const,
+    },
+    fixed: {
+      flex: 1,
+      alignItems: 'center' as const,
+    },
+    contentFill: {
+      flex: 1,
+      paddingBottom: 0,
     },
     content: {
       width: '100%' as const,
