@@ -12,6 +12,7 @@ import { ProfileSync } from '@/auth/profile';
 import { useAuth } from '@/auth/session';
 import { ConfigError } from '@/components/config-error';
 import { CurrentHouseholdProvider } from '@/household/current-household';
+import { PushLifecycle } from '@/push/push-lifecycle';
 import { getNavigationTheme, useTheme } from '@/theme';
 import { useAppFonts } from '@/theme/fonts';
 
@@ -54,6 +55,7 @@ export default function RootLayout() {
       ) : (
         <QueryProvider>
           <ProfileSync />
+          <PushLifecycle />
           <CurrentHouseholdProvider>
             <AppRoutes />
           </CurrentHouseholdProvider>
