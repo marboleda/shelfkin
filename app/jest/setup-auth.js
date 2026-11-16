@@ -7,5 +7,6 @@ const { mockFirebase } = require('./firebase-auth-mock');
 beforeEach(async () => {
   mockFirebase.reset();
   require('@/auth/session').resetAuthSessionForTests();
+  require('@/household/pending-invite').resetPendingInviteForTests();
   await AsyncStorage.clear();
 });
