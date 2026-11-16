@@ -123,6 +123,18 @@ resource "google_cloud_run_v2_job" "migrate" {
       containers {
         image = local.placeholder_job
 
+        # A bare `gcloud run jobs execute shelfkin-migrate` runs the
+        # migrations and the grant step (#40). The same values as the deploy
+        # workflow's per-execution overrides (--args=/usr/local/bin/migrate,up
+        # --update-env-vars=API_DB_ROLE=shelfkin_api). No `command`: with one,
+        # the workflow's --args would be appended to it.
+        args = ["/usr/local/bin/migrate", "up"]
+
+        env {
+          name  = "API_DB_ROLE"
+          value = local.api_db_role
+        }
+
         env {
           name = "DATABASE_URL"
 

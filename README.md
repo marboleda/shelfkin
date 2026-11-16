@@ -174,7 +174,7 @@ which is `https://shelfkin-5da75.web.app,https://shelfkin-5da75.firebaseapp.com`
 
 ## Expiry notification job
 
-`api/cmd/expiry-job` sends expiry push notifications. It runs once and exits, and is meant to run hourly as a Cloud Run job (#40). Each run handles every user with `push_enabled` and at least one push token whose local hour (from `users.timezone`, or UTC if that cannot be loaded) is 9, and sends them one push per household listing the items there that are not `out` and expire within 3 days (already expired ones included), via the [Expo Push API](https://docs.expo.dev/push-notifications/sending-notifications/). Each entry is announced to each user once per expiry date (recorded in `expiry_notifications`), so running it twice in the same hour sends nothing the second time. Each run also deletes `expiry_notifications` rows whose expiry date is more than 30 days ago.
+`api/cmd/expiry-job` sends expiry push notifications. It runs once and exits, and runs hourly in production as a Cloud Run job (see [Expiry job in production](#expiry-job-in-production)). Each run handles every user with `push_enabled` and at least one push token whose local hour (from `users.timezone`, or UTC if that cannot be loaded) is 9, and sends them one push per household listing the items there that are not `out` and expire within 3 days (already expired ones included), via the [Expo Push API](https://docs.expo.dev/push-notifications/sending-notifications/). Each entry is announced to each user once per expiry date (recorded in `expiry_notifications`), so running it twice in the same hour sends nothing the second time. Each run also deletes `expiry_notifications` rows whose expiry date is more than 30 days ago.
 
 It reads `DATABASE_URL` and `LOG_LEVEL` like the API server (see [Running the API](#running-the-api)), plus:
 
@@ -243,7 +243,7 @@ npm run test:app         # Jest in app/
 
 ## Infrastructure
 
-The production GCP and Firebase project is defined in Terraform under `infra/`: Cloud SQL for PostgreSQL 18, Secret Manager, Artifact Registry, the `shelfkin-api` Cloud Run service and `shelfkin-migrate` job, service accounts, Workload Identity Federation for GitHub Actions, Firebase (Auth, Hosting and the web, Android and Apple apps) and a billing budget. `terraform apply` against an empty project (after the one-time bootstrap below) recreates all of it. Apply from a developer machine, never from CI.
+The production GCP and Firebase project is defined in Terraform under `infra/`: Cloud SQL for PostgreSQL 18, Secret Manager, Artifact Registry, the `shelfkin-api` Cloud Run service and the `shelfkin-migrate` and `shelfkin-expiry-job` jobs, the Cloud Scheduler job that runs the expiry job hourly, the expiry job's alerts (Cloud Monitoring), service accounts, Workload Identity Federation for GitHub Actions, Firebase (Auth, Hosting and the web, Android and Apple apps) and a billing budget. `terraform apply` against an empty project (after the one-time bootstrap below) recreates all of it. Apply from a developer machine, never from CI.
 
 Fixed values:
 
@@ -300,7 +300,7 @@ terraform plan
 terraform apply
 ```
 
-Running `terraform plan` again after an apply should show "No changes" (check this on the first apply after a change to `infra/`). The Cloud Run service and job are created with a public placeholder image; deploys (#38) replace it and Terraform ignores image changes, so an apply never rolls a deploy back.
+Running `terraform plan` again after an apply should show "No changes" (check this on the first apply after a change to `infra/`). The Cloud Run service and jobs are created with a public placeholder image; deploys (#38) replace it and Terraform ignores image changes, so an apply never rolls a deploy back.
 
 CI runs `terraform fmt -check`, `terraform init -backend=false`, `terraform validate` and `terraform test` (all providers mocked) with no credentials. Run the same locally from `infra/`.
 
@@ -537,8 +537,11 @@ CI runs can finish out of order, so an automatic deploy whose commit is no longe
 2. Points the `shelfkin-migrate` job at the new image and runs `migrate up` with `--wait`, logged in as `shelfkin_migrator`. After the migrations it creates the `shelfkin_api` login if it is missing, or sets its password if the `api-database-url` password no longer logs in, then grants `shelfkin_app` to `shelfkin_api`, and finally logs in as `shelfkin_api` once to check that the API will be able to connect (see [Database roles](#database-roles-in-production)). Once done, this changes nothing. If anything fails, the workflow stops and the API is **not** deployed.
 3. Deploys `shelfkin-api` with the new image. Only the image changes: env vars, secrets, scaling and the startup probe stay as Terraform set them. If the new revision fails its startup probe (`GET /health`), Cloud Run keeps serving the previous revision and the workflow fails. Traffic is then sent to the latest revision, which also undoes an earlier rollback.
 4. Smoke checks: `GET <API_URL>/health` must return 200 with `{"status":"ok"}` and `GET <API_URL>/me` without a token must return 401 in the `Error` format. Either failing fails the workflow (the new revision is already serving then; roll back below if needed).
+5. Points the `shelfkin-expiry-job` Cloud Run job at the same image (only the image changes; see [Expiry job in production](#expiry-job-in-production)). If the job does not exist yet, because `infra/` has not been applied since #40, the step only warns. The run summary says whether the job was updated.
 
 The job and the migrate binary are chosen per execution (`gcloud run jobs execute --args=/usr/local/bin/migrate,up --update-env-vars=API_DB_ROLE=shelfkin_api`), so the job's definition stays as Terraform made it apart from its image, which Terraform ignores. `--update-env-vars` adds to the job's env, so `DATABASE_URL` and `API_DATABASE_URL` (from the `migrator-database-url` and `api-database-url` secrets, set by Terraform) stay set.
+
+Terraform sets the same values as the job's defaults (`args = ["/usr/local/bin/migrate", "up"]` and `API_DB_ROLE=shelfkin_api`, #40), so a bare `gcloud run jobs execute shelfkin-migrate --region "$REGION" --wait` also runs the migrations and the grant step, instead of starting the API server. The workflow keeps passing its overrides, so deploys work whether or not that apply has happened. The job has no `command` on purpose: with one, the workflow's `--args` would be appended to it and break the deploy.
 
 ### Where to watch it
 
@@ -566,6 +569,9 @@ The next deploy sends traffic to its new revision again.
 Always through the job, so migrations run as `shelfkin_migrator` (see above), never by hand as `postgres` or another admin user.
 
 ```sh
+# Run the migrations and the grant step (the job's defaults, the same as a deploy runs)
+gcloud run jobs execute shelfkin-migrate --region "$REGION" --wait
+
 # Show every migration and whether it is applied
 gcloud run jobs execute shelfkin-migrate --region "$REGION" --wait --args=/usr/local/bin/migrate,status
 ```
@@ -718,6 +724,127 @@ Then connect as `shelfkin_api` (`user=shelfkin_api`; its password is in the `api
 BEGIN; SET LOCAL ROLE shelfkin_app; RESET ROLE; SELECT FROM household_members; ROLLBACK;
 BEGIN; SET LOCAL ROLE shelfkin_app; RESET ROLE; SELECT FROM users; ROLLBACK;
 ```
+
+## Expiry job in production
+
+The [expiry notification job](#expiry-notification-job) runs as the Cloud Run job `shelfkin-expiry-job`, started at minute 0 of every hour by the Cloud Scheduler job of the same name. Both are defined in `infra/expiry.tf`:
+
+- **The job** runs `/usr/local/bin/expiry-job` from the API image (Terraform sets the container `command`, because the image's default command is the API server and it has no `ENTRYPOINT`). It has 1 task, a 15-minute task timeout and at most 1 retry, so a failed run and its retry both finish within the hour they started in. It runs as the `expiry-job-runtime` service account, which has Cloud SQL Client and Secret Accessor on `api-database-url` and `expo-access-token` only.
+- **Database login**: `DATABASE_URL` comes from `api-database-url`, so the job logs in as `shelfkin_api` like the API, and every query runs as `shelfkin_app` through the #10 helper (see [Database roles in production](#database-roles-in-production)). It never gets the migrator's URL or any admin credentials.
+- **Image**: each API deploy points the job at the new image after the smoke checks pass (step 5 of [What a deploy does](#what-a-deploy-does)). Terraform ignores the image, so an apply never rolls it back.
+- **Schedule**: `0 * * * *` in `Etc/UTC`. Cloud Scheduler calls the Cloud Run Admin API (`POST https://run.googleapis.com/v2/projects/<project>/locations/<region>/jobs/shelfkin-expiry-job:run`) with an OAuth token for the `scheduler-invoker` service account, which is Cloud Run Invoker on this job and has no other role. Cloud Run Invoker can start the job but not with overrides. The scheduler runs in the `scheduler_region` variable, or in `region` when that is unset; set it only if Cloud Scheduler is not offered in `region` (it is offered in `us-central1`).
+
+### Running it by hand
+
+Running the job with overrides (`--args`) needs Cloud Run Developer or Owner on the project. Run these from a machine with `gcloud` logged in, with `REGION=us-central1`:
+
+```sh
+# A normal run, as the schedule does it
+gcloud run jobs execute shelfkin-expiry-job --region "$REGION" --wait
+
+# A dry run: logs each push that would be sent and what would be deleted; sends and writes nothing
+gcloud run jobs execute shelfkin-expiry-job --region "$REGION" --wait --args=--dry-run
+
+# Replay a missed hour: run as of the start of that hour (UTC)
+gcloud run jobs execute shelfkin-expiry-job --region "$REGION" --wait --args=--now=2026-11-15T13:00:00Z
+
+# Both: see what a replay would send first
+gcloud run jobs execute shelfkin-expiry-job --region "$REGION" --wait --args=--dry-run,--now=2026-11-15T13:00:00Z
+```
+
+`--args` replaces the job's (empty) arguments for that execution only, so the job still runs `/usr/local/bin/expiry-job`. The output is in the execution's logs (Cloud Run > Jobs > `shelfkin-expiry-job` > Executions, or `gcloud run jobs executions list --job shelfkin-expiry-job --region "$REGION"`).
+
+### Missed and repeated runs
+
+- **A retry, or a second run in the same hour, sends nothing twice.** Each entry is recorded in `expiry_notifications` once it is announced to a user (#22), so a retry of a failed run (or a manual run in the same hour) only sends what the first attempt did not.
+- **A run more than an hour late skips users.** A run handles the users whose local time is 9:00-9:59 at the moment it runs (or at `--now`). If the 13:00 UTC run only starts at 14:05, the users whose 9am hour was 13:00 UTC are not handled, and nothing retries them later. They get their next push at their next 9am, which includes entries still expiring within 3 days. To catch up, replay the missed hour with `--now` set to its start, as above; the de-duplication makes that safe even if part of the hour was handled.
+
+### Pausing and resuming the schedule
+
+```sh
+gcloud scheduler jobs pause  shelfkin-expiry-job --location "$REGION"
+gcloud scheduler jobs resume shelfkin-expiry-job --location "$REGION"
+gcloud scheduler jobs describe shelfkin-expiry-job --location "$REGION"   # state, lastAttemptTime, status
+```
+
+(Use the `scheduler_region` value as the location if it is set.) Terraform ignores the paused state, so an apply does not resume a paused schedule. While paused, the "no successful run for 3 hours" alert fires after 3 hours; that is expected. Replay the hours you skipped with `--now` after resuming, if needed.
+
+### Alerts
+
+Alerts are emailed to the address in the `alert_email` Terraform variable (a Cloud Monitoring email notification channel). Two alert policies, in Monitoring > Alerting:
+
+| Policy | Fires when |
+|---|---|
+| `shelfkin-expiry-job: execution failed` | An execution failed after its retry (`run.googleapis.com/job/completed_execution_count` with `result = failed`). A task that fails once and then succeeds on the retry is not an alert. Usually emailed within about 10 minutes |
+| `shelfkin-expiry-job: no successful run for 3 hours` | No execution has succeeded for 3 hours (no `result = succeeded` data). Catches a paused, deleted or broken schedule, a job that cannot start, and repeated failures. Cloud Monitoring only evaluates a metric-absence condition once the metric has had data, so it starts watching after the first successful execution |
+
+The job exits 1 when any user failed, so a partial failure (for example Expo rejecting one user's pushes after its retries) fails the execution and alerts too. Each email links to the policy, whose documentation points here.
+
+To change the address, set `alert_email` in `infra/terraform.tfvars` and apply.
+
+### Finding each run's summary
+
+Every run ends with one `expiry job finished` log line with `now`, `dry_run`, `users_processed`, `pushes_sent`, `failures`, `receipts_processed` and `tokens_deleted`. In Logs Explorer (Logging > Logs Explorer), run this query and save it (Save > name it `shelfkin-expiry-job summaries`):
+
+```text
+resource.type="cloud_run_job"
+resource.labels.job_name="shelfkin-expiry-job"
+jsonPayload.msg="expiry job finished"
+```
+
+Add `jsonPayload.failures>0` to see only runs with failures. The same from the command line:
+
+```sh
+gcloud logging read 'resource.type="cloud_run_job" AND resource.labels.job_name="shelfkin-expiry-job" AND jsonPayload.msg="expiry job finished"' \
+  --freshness=1d --format='table(timestamp, jsonPayload.now, jsonPayload.users_processed, jsonPayload.pushes_sent, jsonPayload.failures)'
+```
+
+Viewing needs Logs Viewer on the project.
+
+### Setting `EXPO_ACCESS_TOKEN`
+
+The job only needs an Expo access token if [enhanced push security](https://docs.expo.dev/push-notifications/sending-notifications/#additional-security) is turned on for the Expo project (#41). Otherwise leave the secret empty and `expo_access_token_enabled` off; the job then sends no token.
+
+Terraform creates the Secret Manager secret `expo-access-token` but never a value, so the token is never in code or Terraform state. A secret with no version cannot be passed to the job (the execution would fail to start), so the job only reads it once the `expo_access_token_enabled` variable is `true`. To turn it on:
+
+1. In the Expo account that owns the EAS project, create an access token (expo.dev > Account settings > Access tokens). Turn on enhanced push security for the project only after step 3, or pushes fail in between.
+2. Add it as a version, without it landing in your shell history:
+
+   ```sh
+   read -rs EXPO_TOKEN   # paste the token, then Enter
+   printf '%s' "$EXPO_TOKEN" | gcloud secrets versions add expo-access-token --data-file=- --project "$PROJECT_ID"
+   unset EXPO_TOKEN
+   ```
+
+3. Set `expo_access_token_enabled = true` in `infra/terraform.tfvars` and apply. The plan must show only the `EXPO_ACCESS_TOKEN` env var added to `google_cloud_run_v2_job.expiry`.
+4. Run a dry run and then a normal run by hand (above) and check that they succeed.
+
+The job reads the `latest` version when each execution starts, so to rotate the token add a new version (step 2), check the next run, then disable the old version with `gcloud secrets versions disable <n> --secret expo-access-token`. Nothing needs to be redeployed.
+
+### Owner rollout (#40)
+
+Done once by the project owner after this change is merged. Needs the same account as [Infrastructure](#infrastructure) (Owner covers Cloud Run Admin, Cloud Scheduler Admin, Monitoring Admin, Secret Manager Admin and IAM admin) and the inbox for `alert_email`. Record the results on #40.
+
+1. **Merge.** The automatic deploy runs as before. Its "Update the expiry job" step warns that `shelfkin-expiry-job` does not exist yet and skips; the migrate job still gets its overrides, so the deploy passes.
+2. **Set `alert_email`** in `infra/terraform.tfvars`.
+3. **Apply from `main`**, just after the start of an hour, so step 4 is done before the first scheduled run:
+
+   ```sh
+   git checkout main && git pull
+   terraform -chdir=infra plan
+   terraform -chdir=infra apply
+   ```
+
+   The plan must show **15 to add, 1 to change, 0 to destroy**: the 2 APIs (`cloudscheduler`, `monitoring`), the `expiry-job-runtime` and `scheduler-invoker` service accounts and their 5 IAM grants (Cloud SQL Client, Secret Accessor on the two secrets, Cloud Run Invoker on the job, and the deployer's Service Account User on `expiry-job-runtime`), the `expo-access-token` secret, the `shelfkin-expiry-job` Cloud Run job and Cloud Scheduler job, the notification channel and 2 alert policies; and an in-place update of `google_cloud_run_v2_job.migrate` adding only `args` and the `API_DB_ROLE` env var. Until step 4 the job has the placeholder image, so a scheduled run would fail and send an alert email.
+4. **Deploy by hand:** `gh workflow run deploy-api.yml --ref main`. The run summary must show `shelfkin-expiry-job image updated: yes`. Then `terraform -chdir=infra plan` must show "No changes".
+5. **Bare migrate run:** `gcloud run jobs execute shelfkin-migrate --region "$REGION" --wait` succeeds, and its log shows `shelfkin_api can log in; password unchanged` and `shelfkin_api already has shelfkin_app (INHERIT FALSE, SET TRUE)`.
+6. **Expo token:** check whether enhanced push security is on for the Expo project. If it is, follow [Setting `EXPO_ACCESS_TOKEN`](#setting-expo_access_token); if not, leave it off. If it is **already on**, do this right after step 4, before the first scheduled hour: until the token is set, every run's pushes are rejected and the run fails.
+7. **Runs by hand:** `gcloud run jobs execute shelfkin-expiry-job --region "$REGION" --wait` succeeds, and its `expiry job finished` line has `failures` 0. With `--args=--dry-run`, the log shows `dry run: would send expiry push` lines (if any user is at 9am; use `--args=--dry-run,--now=<an hour when a test user is at 9am>` to be sure) and `dry_run: true`, and the test user's device receives nothing.
+8. **Alert test (once):** `gcloud run jobs execute shelfkin-expiry-job --region "$REGION" --wait --args=--now=bad`. The command fails (both attempts exit 2, as expected), and an email from `shelfkin-expiry-job: execution failed` arrives at `alert_email` within about 10 minutes. Note the time sent and received on #40. The incident closes itself after an hour.
+9. **After a few hours:** `gcloud run jobs executions list --job shelfkin-expiry-job --region "$REGION"` shows one execution per hour at minute 0 (plus your manual ones), and `gcloud scheduler jobs describe shelfkin-expiry-job --location "$REGION"` shows `state: ENABLED` and a recent `lastAttemptTime` with no error `status`. The Cloud Scheduler console shows the last run as successful. Also check the label the 3-hour alert relies on: in Monitoring > Metrics Explorer, select `run.googleapis.com/job/completed_execution_count` on resource `cloud_run_job`, filter `job_name = shelfkin-expiry-job` and group by `result`. There must be a `result="succeeded"` series (and `failed` from step 8). The Cloud Run docs do not list the label's values; if successes are labelled differently, the absence alert would never fire, so fix the `succeeded` (and if needed `failed`) value in the alert filters in `infra/expiry.tf` and apply.
+10. **Logs query:** save the [summary query](#finding-each-runs-summary) in Logs Explorer and check it lists one line per run.
+
+If the scheduler's attempts fail with `PERMISSION_DENIED`, check that `scheduler-invoker` is Cloud Run Invoker on the job (`gcloud run jobs get-iam-policy shelfkin-expiry-job --region "$REGION"`) and that the Cloud Scheduler service agent (`service-<project number>@gcp-sa-cloudscheduler.iam.gserviceaccount.com`) has the Cloud Scheduler Service Agent role on the project, which Google grants when the API is enabled.
 
 ## Docs
 

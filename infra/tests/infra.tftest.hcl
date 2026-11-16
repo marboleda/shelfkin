@@ -54,6 +54,7 @@ variables {
   hosting_site_id   = "shelfkin-test"
   budget_amount     = 30
   github_repository = "marboleda/shelfkin"
+  alert_email       = "alerts@example.com"
 
   # terraform_data.email_privacy PATCHes the real Identity Toolkit API from a
   # local-exec provisioner. Mocked providers and override_resource do not stop
@@ -258,6 +259,23 @@ run "cloud_run_job" {
       [e.value_source[0].secret_key_ref[0].secret, e.value_source[0].secret_key_ref[0].version] if e.name == "API_DATABASE_URL"
     ] == [["api-database-url", "latest"]]
     error_message = "Job API_DATABASE_URL must come from the latest api-database-url"
+  }
+
+  # A bare `gcloud run jobs execute shelfkin-migrate` runs migrate up and the
+  # grant step, with the same values the deploy workflow passes (#40).
+  assert {
+    condition = (
+      google_cloud_run_v2_job.migrate.template[0].template[0].containers[0].args == tolist(["/usr/local/bin/migrate", "up"]) &&
+      length(coalesce(google_cloud_run_v2_job.migrate.template[0].template[0].containers[0].command, [])) == 0
+    )
+    error_message = "Migrate job must set args = [/usr/local/bin/migrate, up] and no command"
+  }
+
+  assert {
+    condition = [
+      for e in google_cloud_run_v2_job.migrate.template[0].template[0].containers[0].env : e.value if e.name == "API_DB_ROLE"
+    ] == ["shelfkin_api"]
+    error_message = "Migrate job must set API_DB_ROLE=shelfkin_api"
   }
 
   assert {
@@ -486,4 +504,268 @@ run "hosting_site_id_must_differ_from_project_id" {
   }
 
   expect_failures = [var.hosting_site_id]
+}
+
+# --- Expiry job in production (#40) ---
+
+run "expiry_job" {
+  command = plan
+
+  assert {
+    condition = (
+      google_cloud_run_v2_job.expiry.name == "shelfkin-expiry-job" &&
+      google_cloud_run_v2_job.expiry.location == var.region
+    )
+    error_message = "Job must be shelfkin-expiry-job in var.region"
+  }
+
+  assert {
+    condition = (
+      google_cloud_run_v2_job.expiry.template[0].template[0].containers[0].command == tolist(["/usr/local/bin/expiry-job"]) &&
+      length(coalesce(google_cloud_run_v2_job.expiry.template[0].template[0].containers[0].args, [])) == 0
+    )
+    error_message = "Job must run /usr/local/bin/expiry-job (the default command of the image is the API server) with no default args"
+  }
+
+  assert {
+    condition = (
+      google_cloud_run_v2_job.expiry.template[0].task_count == 1 &&
+      google_cloud_run_v2_job.expiry.template[0].template[0].timeout == "900s" &&
+      google_cloud_run_v2_job.expiry.template[0].template[0].max_retries == 1
+    )
+    error_message = "Job must have 1 task, a 15-minute task timeout and at most 1 retry"
+  }
+
+  assert {
+    condition     = (length(google_cloud_run_v2_job.expiry.template[0].template[0].volumes[0].cloud_sql_instance[0].instances) == 1 && contains(google_cloud_run_v2_job.expiry.template[0].template[0].volumes[0].cloud_sql_instance[0].instances, "test-project:europe-west1:shelfkin")) && google_cloud_run_v2_job.expiry.template[0].template[0].containers[0].volume_mounts[0].mount_path == "/cloudsql"
+    error_message = "Job must mount the Cloud SQL connection at /cloudsql"
+  }
+
+  # Logs in as shelfkin_api, never with the migrator URL.
+  assert {
+    condition = [
+      for e in google_cloud_run_v2_job.expiry.template[0].template[0].containers[0].env :
+      [e.value_source[0].secret_key_ref[0].secret, e.value_source[0].secret_key_ref[0].version] if e.name == "DATABASE_URL"
+    ] == [["api-database-url", "latest"]]
+    error_message = "Job DATABASE_URL must come from the latest api-database-url"
+  }
+
+  assert {
+    condition = alltrue([
+      for e in google_cloud_run_v2_job.expiry.template[0].template[0].containers[0].env :
+      length(e.value_source) == 0 || e.value_source[0].secret_key_ref[0].secret != "migrator-database-url"
+    ])
+    error_message = "Job must not read migrator-database-url"
+  }
+
+  # Off by default: the secret has no version until one is added by hand.
+  assert {
+    condition = (
+      [for e in google_cloud_run_v2_job.expiry.template[0].template[0].containers[0].env : e.name] == ["DATABASE_URL", "LOG_LEVEL"] &&
+      google_secret_manager_secret.expo_access_token.secret_id == "expo-access-token" &&
+      google_secret_manager_secret.expo_access_token.replication[0].user_managed[0].replicas[0].location == var.region
+    )
+    error_message = "expo-access-token must exist in var.region, and EXPO_ACCESS_TOKEN must not be set while expo_access_token_enabled is false"
+  }
+}
+
+run "expiry_job_with_expo_token" {
+  command = plan
+
+  variables {
+    expo_access_token_enabled = true
+  }
+
+  assert {
+    condition = [
+      for e in google_cloud_run_v2_job.expiry.template[0].template[0].containers[0].env :
+      [e.value_source[0].secret_key_ref[0].secret, e.value_source[0].secret_key_ref[0].version] if e.name == "EXPO_ACCESS_TOKEN"
+    ] == [["expo-access-token", "latest"]]
+    error_message = "EXPO_ACCESS_TOKEN must come from the latest expo-access-token"
+  }
+}
+
+run "expiry_schedule" {
+  command = plan
+
+  assert {
+    condition = (
+      google_cloud_scheduler_job.expiry.schedule == "0 * * * *" &&
+      google_cloud_scheduler_job.expiry.time_zone == "Etc/UTC" &&
+      google_cloud_scheduler_job.expiry.region == var.region
+    )
+    error_message = "Schedule must be 0 * * * * in Etc/UTC, in var.region by default"
+  }
+
+  assert {
+    condition = (
+      google_cloud_scheduler_job.expiry.http_target[0].http_method == "POST" &&
+      google_cloud_scheduler_job.expiry.http_target[0].uri == "https://run.googleapis.com/v2/projects/test-project/locations/europe-west1/jobs/shelfkin-expiry-job:run" &&
+      google_cloud_scheduler_job.expiry.http_target[0].oauth_token[0].scope == "https://www.googleapis.com/auth/cloud-platform" &&
+      length(google_cloud_scheduler_job.expiry.http_target[0].oidc_token) == 0
+    )
+    error_message = "Scheduler must POST to the Cloud Run Admin API jobs.run method with an OAuth token"
+  }
+}
+
+run "expiry_schedule_region_override" {
+  command = plan
+
+  variables {
+    scheduler_region = "us-central1"
+  }
+
+  assert {
+    condition = (
+      google_cloud_scheduler_job.expiry.region == "us-central1" &&
+      google_cloud_scheduler_job.expiry.http_target[0].uri == "https://run.googleapis.com/v2/projects/test-project/locations/europe-west1/jobs/shelfkin-expiry-job:run"
+    )
+    error_message = "scheduler_region must move only the scheduler, not the job"
+  }
+}
+
+run "expiry_iam" {
+  # An apply (all mocked) so the secret IDs and members compared below are
+  # known. A state of its own, so the overrides are used.
+  command   = apply
+  state_key = "expiry_iam"
+
+  override_resource {
+    target = google_service_account.expiry_job_runtime
+    values = {
+      email  = "expiry-job-runtime@test-project.iam.gserviceaccount.com"
+      member = "serviceAccount:expiry-job-runtime@test-project.iam.gserviceaccount.com"
+      name   = "projects/test-project/serviceAccounts/expiry-job-runtime@test-project.iam.gserviceaccount.com"
+    }
+  }
+
+  override_resource {
+    target = google_service_account.scheduler_invoker
+    values = {
+      email  = "scheduler-invoker@test-project.iam.gserviceaccount.com"
+      member = "serviceAccount:scheduler-invoker@test-project.iam.gserviceaccount.com"
+      name   = "projects/test-project/serviceAccounts/scheduler-invoker@test-project.iam.gserviceaccount.com"
+    }
+  }
+
+  override_resource {
+    target = google_service_account.github_deployer
+    values = {
+      email  = "github-deployer@test-project.iam.gserviceaccount.com"
+      member = "serviceAccount:github-deployer@test-project.iam.gserviceaccount.com"
+      name   = "projects/test-project/serviceAccounts/github-deployer@test-project.iam.gserviceaccount.com"
+    }
+  }
+
+  assert {
+    condition = (
+      google_service_account.expiry_job_runtime.account_id == "expiry-job-runtime" &&
+      google_service_account.scheduler_invoker.account_id == "scheduler-invoker" &&
+      google_cloud_run_v2_job.expiry.template[0].template[0].service_account == "expiry-job-runtime@test-project.iam.gserviceaccount.com"
+    )
+    error_message = "The job must run as expiry-job-runtime"
+  }
+
+  assert {
+    condition = (
+      google_project_iam_member.expiry_job_runtime_sql_client.role == "roles/cloudsql.client" &&
+      google_project_iam_member.expiry_job_runtime_sql_client.member == google_service_account.expiry_job_runtime.member
+    )
+    error_message = "expiry-job-runtime must be Cloud SQL Client"
+  }
+
+  assert {
+    condition = alltrue([
+      for m in [
+        google_secret_manager_secret_iam_member.expiry_job_runtime_database_url,
+        google_secret_manager_secret_iam_member.expiry_job_runtime_expo_token,
+      ] : m.role == "roles/secretmanager.secretAccessor" && m.member == google_service_account.expiry_job_runtime.member
+      ]) && toset([
+      google_secret_manager_secret_iam_member.expiry_job_runtime_database_url.secret_id,
+      google_secret_manager_secret_iam_member.expiry_job_runtime_expo_token.secret_id,
+    ]) == toset([google_secret_manager_secret.api_database_url.id, google_secret_manager_secret.expo_access_token.id])
+    error_message = "expiry-job-runtime must be Secret Accessor on api-database-url and expo-access-token"
+  }
+
+  assert {
+    condition = alltrue([
+      for m in [
+        google_secret_manager_secret_iam_member.migrate_runtime,
+        google_secret_manager_secret_iam_member.migrate_runtime_api_url,
+        google_secret_manager_secret_iam_member.api_runtime,
+      ] : m.member != google_service_account.expiry_job_runtime.member
+    ])
+    error_message = "expiry-job-runtime must have no other secret grants"
+  }
+
+  # Only on the job: Cloud Run Invoker runs it, without overrides.
+  assert {
+    condition = (
+      google_cloud_run_v2_job_iam_member.scheduler_invoker.role == "roles/run.invoker" &&
+      google_cloud_run_v2_job_iam_member.scheduler_invoker.name == "shelfkin-expiry-job" &&
+      google_cloud_run_v2_job_iam_member.scheduler_invoker.location == var.region &&
+      google_cloud_run_v2_job_iam_member.scheduler_invoker.member == google_service_account.scheduler_invoker.member &&
+      google_cloud_scheduler_job.expiry.http_target[0].oauth_token[0].service_account_email == google_service_account.scheduler_invoker.email
+    )
+    error_message = "scheduler-invoker must be Cloud Run Invoker on shelfkin-expiry-job only, and the scheduler must use it"
+  }
+
+  assert {
+    condition = (
+      google_service_account_iam_member.deployer_acts_as_expiry_job_runtime.role == "roles/iam.serviceAccountUser" &&
+      google_service_account_iam_member.deployer_acts_as_expiry_job_runtime.service_account_id == google_service_account.expiry_job_runtime.name &&
+      google_service_account_iam_member.deployer_acts_as_expiry_job_runtime.member == google_service_account.github_deployer.member
+    )
+    error_message = "The deployer must be Service Account User on expiry-job-runtime, so it can update the image of the job"
+  }
+}
+
+run "expiry_alerts" {
+  command   = apply
+  state_key = "expiry_alerts"
+
+  assert {
+    condition = (
+      google_monitoring_notification_channel.alert_email.type == "email" &&
+      google_monitoring_notification_channel.alert_email.labels.email_address == "alerts@example.com"
+    )
+    error_message = "Expected an email notification channel for alert_email"
+  }
+
+  assert {
+    condition = alltrue([
+      for p in [
+        google_monitoring_alert_policy.expiry_job_failed,
+        google_monitoring_alert_policy.expiry_job_not_succeeding,
+      ] : p.notification_channels == tolist([google_monitoring_notification_channel.alert_email.id])
+    ])
+    error_message = "Both alerts must go to the alert_email channel"
+  }
+
+  assert {
+    condition = (
+      google_monitoring_alert_policy.expiry_job_failed.conditions[0].condition_threshold[0].filter == "resource.type = \"cloud_run_job\" AND resource.labels.job_name = \"shelfkin-expiry-job\" AND metric.type = \"run.googleapis.com/job/completed_execution_count\" AND metric.labels.result = \"failed\"" &&
+      google_monitoring_alert_policy.expiry_job_failed.conditions[0].condition_threshold[0].comparison == "COMPARISON_GT" &&
+      google_monitoring_alert_policy.expiry_job_failed.conditions[0].condition_threshold[0].threshold_value == 0
+    )
+    error_message = "The failure alert must fire on any failed shelfkin-expiry-job execution"
+  }
+
+  assert {
+    condition = (
+      google_monitoring_alert_policy.expiry_job_not_succeeding.conditions[0].condition_absent[0].filter == "resource.type = \"cloud_run_job\" AND resource.labels.job_name = \"shelfkin-expiry-job\" AND metric.type = \"run.googleapis.com/job/completed_execution_count\" AND metric.labels.result = \"succeeded\"" &&
+      google_monitoring_alert_policy.expiry_job_not_succeeding.conditions[0].condition_absent[0].duration == "10800s"
+    )
+    error_message = "The absence alert must fire when no execution has succeeded for 3 hours"
+  }
+}
+
+run "alert_email_must_be_an_email" {
+  command = plan
+
+  variables {
+    alert_email = "not-an-email"
+  }
+
+  expect_failures = [var.alert_email]
 }
