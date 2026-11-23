@@ -10,6 +10,7 @@ type Pantry = components['schemas']['Pantry'];
 type PantryGroup = components['schemas']['PantryGroup'];
 type PantryListEntry = components['schemas']['PantryListEntry'];
 type Location = components['schemas']['Location'];
+type Category = components['schemas']['Category'];
 
 /** The pantry's `today` in tests unless a test says otherwise. */
 export const TEST_TODAY = '2026-11-02';
@@ -18,6 +19,12 @@ export const TEST_LOCATIONS: Location[] = [
   { id: 1, key: 'fridge', name: 'Fridge' },
   { id: 2, key: 'freezer', name: 'Freezer' },
   { id: 3, key: 'pantry', name: 'Pantry' },
+];
+
+export const TEST_CATEGORIES: Category[] = [
+  { id: 1, key: 'produce', name: 'Produce' },
+  { id: 2, key: 'dairy', name: 'Dairy' },
+  { id: 3, key: 'meat_seafood', name: 'Meat & seafood' },
 ];
 
 let nextId = 1;
@@ -69,4 +76,8 @@ export function pantryHandler(pantry: Pantry | ((householdId: string) => Pantry)
 
 export function locationsHandler(locations: Location[] = TEST_LOCATIONS) {
   return http.get(apiUrl('/locations'), () => HttpResponse.json({ items: locations }));
+}
+
+export function categoriesHandler(categories: Category[] = TEST_CATEGORIES) {
+  return http.get(apiUrl('/categories'), () => HttpResponse.json({ items: categories }));
 }

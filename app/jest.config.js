@@ -37,6 +37,8 @@ const ESM_PACKAGES = [
   'tldts-core',
   'cookie',
   'type-fest',
+  // uuid ships only as an ES module.
+  'uuid',
 ];
 
 /** @type {import('jest').Config} */
