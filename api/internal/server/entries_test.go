@@ -782,72 +782,125 @@ func TestEntryEventFailureRollsBack(t *testing.T) {
 	}
 }
 
-// Members changing the same entry at the same time all succeed; the changes
-// apply one after the other, each event's "from" is the previous "to", and
-// the entry ends at the last one.
+// Members changing the same entry at the same time all succeed and the
+// changes apply one after the other. The test runs rounds of concurrent
+// PATCHes from Sam and Alex. In each round every request sends a different
+// level, and none sends the level the entry has when the round starts, so
+// whatever order the row lock admits them in, every request is a real change.
+// The test then asserts, for every order:
+//   - every request returns 200;
+//   - exactly one level_changed event per request is recorded, under the
+//     request's eventId and with the level it sent as "to" (no lost update);
+//   - ordered by occurred_at, id, the events form an unbroken chain: the first
+//     "from" is the starting level, each later "from" is the previous "to",
+//     and no event has from == to (the updates were serialized);
+//   - the entry ends at the last event's "to".
 func TestConcurrentEntryUpdates(t *testing.T) {
+	const rounds = 8
+	allLevels := []string{"full", "half", "low", "out"}
 	f := newEntryFixture(t)
 	e, _ := f.createEntry(t, f.milk, nil)
-	levels := []string{"half", "low", "out", "full", "half", "low", "out", "half"}
-	var wg sync.WaitGroup
-	errs := make(chan string, len(levels))
-	for i, level := range levels {
-		wg.Add(1)
-		token := f.sam
-		if i%2 == 1 {
-			token = f.alex
+	level := func() string {
+		t.Helper()
+		var l string
+		if err := f.pool.QueryRow(context.Background(), `SELECT level::text FROM pantry_entries WHERE id = $1`, e.ID).Scan(&l); err != nil {
+			t.Fatal(err)
 		}
-		go func() {
-			defer wg.Done()
-			resp, b := f.patch(t, token, f.home, e.ID, map[string]any{"eventId": newID(), "level": level})
-			if resp.StatusCode != http.StatusOK {
-				errs <- fmt.Sprintf("level %s: %d %s", level, resp.StatusCode, b)
-			}
-		}()
+		return l
 	}
-	wg.Wait()
-	close(errs)
-	for msg := range errs {
-		t.Error(msg)
+
+	start := level()
+	sent := map[string]string{} // eventId -> level sent
+	for r := range rounds {
+		// The three levels other than the entry's current one: up to three
+		// concurrent writers can each make a real change in any order.
+		cur := level()
+		var levels []string
+		for _, l := range allLevels {
+			if l != cur {
+				levels = append(levels, l)
+			}
+		}
+		var wg sync.WaitGroup
+		ready := make(chan struct{})
+		errs := make(chan string, len(levels))
+		for i, l := range levels {
+			token := f.sam
+			if (i+r)%2 == 1 {
+				token = f.alex
+			}
+			eventID := newID()
+			sent[eventID] = l
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-ready // release every request of the round at once
+				resp, b := f.patch(t, token, f.home, e.ID, map[string]any{"eventId": eventID, "level": l})
+				if resp.StatusCode != http.StatusOK {
+					errs <- fmt.Sprintf("round %d, level %s: %d %s", r, l, resp.StatusCode, b)
+				}
+			}()
+		}
+		close(ready)
+		wg.Wait()
+		close(errs)
+		for msg := range errs {
+			t.Error(msg)
+		}
 	}
 
 	rows, err := f.pool.Query(context.Background(), `
-		SELECT changes->'level'->>'from', changes->'level'->>'to'
+		SELECT id::text, changes->'level'->>'from', changes->'level'->>'to'
 		FROM item_events WHERE entry_id = $1 AND type = 'level_changed'
 		ORDER BY occurred_at, id`, e.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	var chain [][2]string
+	type change struct{ id, from, to string }
+	var chain []change
 	for rows.Next() {
-		var from, to string
-		if err := rows.Scan(&from, &to); err != nil {
+		var c change
+		if err := rows.Scan(&c.id, &c.from, &c.to); err != nil {
 			t.Fatal(err)
 		}
-		chain = append(chain, [2]string{from, to})
+		chain = append(chain, c)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	// Some updates may be no-ops (the level was already set by another one);
-	// every real change is recorded and the chain is unbroken.
-	cur := "full"
+
+	// No lost update: one event per request, under its eventId, to its level.
+	if len(chain) != len(sent) {
+		t.Errorf("%d level_changed events for %d requests: %v", len(chain), len(sent), chain)
+	}
+	recorded := map[string]string{}
 	for _, c := range chain {
-		if c[0] != cur || c[0] == c[1] {
-			t.Errorf("event chain %v is broken at %v", chain, c)
+		recorded[c.id] = c.to
+	}
+	for id, l := range sent {
+		if to, ok := recorded[id]; !ok {
+			t.Errorf("no level_changed event %s for the request that sent %s", id, l)
+		} else if to != l {
+			t.Errorf("event %s: to %s, want %s (the level its request sent)", id, to, l)
+		}
+	}
+
+	// Serialized: each "from" is the previous "to", starting at the entry's
+	// starting level.
+	cur := start
+	for _, c := range chain {
+		if c.from != cur || c.from == c.to {
+			t.Errorf("event chain %v is broken at %v (want from %s)", chain, c, cur)
 			break
 		}
-		cur = c[1]
+		cur = c.to
 	}
-	if len(chain) < len(levels)/2 {
-		t.Errorf("only %d of %d concurrent updates recorded: %v", len(chain), len(levels), chain)
+	last := start
+	if len(chain) > 0 {
+		last = chain[len(chain)-1].to
 	}
-	var final string
-	if err := f.pool.QueryRow(context.Background(), `SELECT level::text FROM pantry_entries WHERE id = $1`, e.ID).Scan(&final); err != nil {
-		t.Fatal(err)
-	}
-	if final != cur {
-		t.Errorf("final level %s, want %s (the last event's to)", final, cur)
+	if final := level(); final != last {
+		t.Errorf("final level %s, want %s (the last event's to)", final, last)
 	}
 }
