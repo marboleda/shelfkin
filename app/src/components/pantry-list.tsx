@@ -1,13 +1,15 @@
-// The Pantry list: one row per item ("Milk ×2"), in the API's order. A row
-// with one entry shows that entry and opens it; a row with several expands to
-// show each entry, and while collapsed summarises them.
+// The Pantry list, in sections by location or by category. A row is one item
+// ("Milk ×2") with the entries shown in that section. A row with one entry
+// shows that entry and opens it; a row with several expands to show each
+// entry, and while collapsed summarises them.
 //
-// The list is a FlatList of groups, so only the rows near the screen are
-// rendered, however large the pantry.
+// The list is a SectionList, so only the rows near the screen are rendered,
+// however large the pantry. One item can appear in several sections (by
+// location), so row keys and test IDs include the section key.
 
 import Feather from '@expo/vector-icons/Feather';
 import { memo, useCallback, useMemo, useState, type ReactElement } from 'react';
-import { FlatList, Platform, Pressable, Text, View } from 'react-native';
+import { Platform, Pressable, SectionList, Text, View } from 'react-native';
 
 import {
   expiryLabel,
@@ -18,7 +20,8 @@ import {
   summarizeGroup,
   type ExpiryTone,
 } from '@/pantry/format';
-import type { Pantry, PantryGroup, PantryListEntry } from '@/pantry/pantry';
+import type { PantryGroup, PantryListEntry } from '@/pantry/pantry';
+import { rowKey, type PantrySection, type ViewMode } from '@/pantry/sections';
 import { MIN_TOUCH_TARGET, useTheme, useThemedStyles, type Theme } from '@/theme';
 
 import { ExpiryChip } from './expiry-chip';
@@ -36,49 +39,77 @@ export type PantryRowContext = {
   locationName: (id: number) => string | undefined;
 };
 
-type PantryListProps = Omit<PantryRowContext, 'today'> & {
-  pantry: Pantry;
+type PantryListProps = PantryRowContext & {
+  /** The sections to show, from `buildSections`. */
+  sections: PantrySection[];
+  /** The view the sections are for. Switching it collapses every row. */
+  mode: ViewMode;
   /** Rendered above the rows, scrolling with them. */
   header?: ReactElement | null;
   /** Space below the last row, e.g. so a floating button never covers it. */
   bottomInset?: number;
 };
 
-export function PantryList({ pantry, now, currentUserId, locationName, header, bottomInset = 0 }: PantryListProps) {
-  const styles = useThemedStyles(createStyles);
-  // Expanded rows, by catalog item ID. Kept across refetches (the IDs stay the
-  // same); Pantry remounts the list when the household changes, which resets it.
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
-  const toggle = useCallback((catalogItemId: string) => {
-    setExpanded((previous) => {
-      const next = new Set(previous);
-      if (next.has(catalogItemId)) next.delete(catalogItemId);
-      else next.add(catalogItemId);
-      return next;
-    });
-  }, []);
+const NONE_EXPANDED: ReadonlySet<string> = new Set();
 
-  const context = useMemo<PantryRowContext>(
-    () => ({ today: pantry.today, now, currentUserId, locationName }),
-    [pantry.today, now, currentUserId, locationName],
+export function PantryList({
+  sections,
+  mode,
+  today,
+  now,
+  currentUserId,
+  locationName,
+  header,
+  bottomInset = 0,
+}: PantryListProps) {
+  const styles = useThemedStyles(createStyles);
+  // Expanded rows by row key (section and catalog item), for the current view.
+  // Kept across refetches and filter changes (the keys stay the same); another
+  // view starts with every row collapsed. Pantry remounts the list when the
+  // household changes, which resets it too.
+  const [expandedState, setExpandedState] = useState<{ mode: ViewMode; keys: ReadonlySet<string> }>(() => ({
+    mode,
+    keys: NONE_EXPANDED,
+  }));
+  if (expandedState.mode !== mode) {
+    // Adjusting state while rendering: React re-renders straight away, before anything is shown.
+    setExpandedState({ mode, keys: NONE_EXPANDED });
+  }
+  const expanded = expandedState.mode === mode ? expandedState.keys : NONE_EXPANDED;
+  const toggle = useCallback(
+    (key: string) => {
+      setExpandedState((previous) => {
+        const next = new Set(previous.mode === mode ? previous.keys : NONE_EXPANDED);
+        if (next.has(key)) next.delete(key);
+        else next.add(key);
+        return { mode, keys: next };
+      });
+    },
+    [mode],
   );
 
+  const context = useMemo<PantryRowContext>(
+    () => ({ today, now, currentUserId, locationName }),
+    [today, now, currentUserId, locationName],
+  );
+  const firstSectionKey = sections[0]?.key;
+
   return (
-    <FlatList
+    <SectionList
       testID="pantry-list"
       style={styles.list}
       contentContainerStyle={[styles.content, { paddingBottom: bottomInset }]}
-      data={pantry.groups}
+      sections={sections}
       keyExtractor={(group) => group.catalogItemId}
       extraData={{ expanded, context }}
-      renderItem={({ item }) => (
-        <PantryGroupRow
-          group={item}
-          expanded={expanded.has(item.catalogItemId)}
-          onToggle={toggle}
-          context={context}
-        />
-      )}
+      renderItem={({ item, section }) => {
+        const key = rowKey(section.key, item.catalogItemId);
+        return (
+          <PantryGroupRow rowKey={key} group={item} expanded={expanded.has(key)} onToggle={toggle} context={context} />
+        );
+      }}
+      renderSectionHeader={({ section }) => <SectionHeader section={section} first={section.key === firstSectionKey} />}
+      stickySectionHeadersEnabled={false}
       ListHeaderComponent={header ?? undefined}
       ItemSeparatorComponent={Separator}
       initialNumToRender={12}
@@ -89,20 +120,49 @@ export function PantryList({ pantry, now, currentUserId, locationName, header, b
   );
 }
 
+/** "FRIDGE" on the left and the number of rows on the right, announced as a heading. */
+function SectionHeader({ section, first }: { section: PantrySection; first: boolean }) {
+  const styles = useThemedStyles(createStyles);
+  const count = section.data.length;
+  return (
+    <View
+      testID={`pantry-section-${section.key}`}
+      role="heading"
+      aria-level={2}
+      aria-label={`${section.title}, ${count} ${count === 1 ? 'item' : 'items'}`}
+      style={[styles.sectionHeader, first ? null : styles.sectionHeaderSpaced]}
+    >
+      <Text style={styles.sectionTitle}>{section.title}</Text>
+      <Text testID="pantry-section-count" style={styles.sectionCount}>
+        {count}
+      </Text>
+    </View>
+  );
+}
+
 function Separator() {
   const styles = useThemedStyles(createStyles);
   return <View style={styles.separator} />;
 }
 
 type PantryGroupRowProps = {
+  /** Unique across the list (see `rowKey`): the row's test ID and what `onToggle` gets. */
+  rowKey: string;
+  /** The item, with only the entries shown in this row. */
   group: PantryGroup;
   expanded: boolean;
-  onToggle: (catalogItemId: string) => void;
+  onToggle: (rowKey: string) => void;
   context: PantryRowContext;
 };
 
 /** One item: its single entry, or a collapsible row of its entries. */
-export const PantryGroupRow = memo(function PantryGroupRow({ group, expanded, onToggle, context }: PantryGroupRowProps) {
+export const PantryGroupRow = memo(function PantryGroupRow({
+  rowKey: key,
+  group,
+  expanded,
+  onToggle,
+  context,
+}: PantryGroupRowProps) {
   const styles = useThemedStyles(createStyles);
   const theme = useTheme();
   const entries = group.entries;
@@ -111,7 +171,7 @@ export const PantryGroupRow = memo(function PantryGroupRow({ group, expanded, on
     const entry = entries[0];
     const expiry = expiryLabel(entry, context.today);
     return (
-      <View testID={`pantry-row-${group.catalogItemId}`} style={[styles.card, highlightStyle(styles, expiry.tone)]}>
+      <View testID={`pantry-row-${key}`} style={[styles.card, highlightStyle(styles, expiry.tone)]}>
         <PressableLink
           href={{ pathname: '/entries/[id]', params: { id: entry.id } }}
           accessibilityRole="link"
@@ -133,9 +193,9 @@ export const PantryGroupRow = memo(function PantryGroupRow({ group, expanded, on
   const summary = summarizeGroup(entries, context.today);
   const tone = summary.highlighted ? summary.expiry?.tone : undefined;
   return (
-    <View testID={`pantry-row-${group.catalogItemId}`} style={[styles.card, highlightStyle(styles, tone)]}>
+    <View testID={`pantry-row-${key}`} style={[styles.card, highlightStyle(styles, tone)]}>
       <Pressable
-        onPress={() => onToggle(group.catalogItemId)}
+        onPress={() => onToggle(key)}
         accessibilityRole="button"
         accessibilityLabel={groupAccessibilityLabel(group.name, entries, context.today)}
         accessibilityHint={expanded ? 'Hides the entries' : 'Shows each entry'}
@@ -247,6 +307,24 @@ function createStyles(theme: Theme) {
     list: { flex: 1 },
     content: { flexGrow: 1 },
     separator: { height: theme.spacing.sm },
+    sectionHeader: {
+      flexDirection: 'row' as const,
+      justifyContent: 'space-between' as const,
+      alignItems: 'center' as const,
+      gap: theme.spacing.sm,
+      paddingHorizontal: theme.spacing.xs,
+      paddingBottom: theme.spacing.sm,
+    },
+    sectionHeaderSpaced: { paddingTop: theme.spacing.xl },
+    sectionTitle: {
+      ...theme.typography.overline,
+      flexShrink: 1,
+      color: theme.colors.mutedText,
+    },
+    sectionCount: {
+      ...theme.typography.overline,
+      color: theme.colors.mutedText,
+    },
     card: {
       backgroundColor: theme.colors.surface,
       borderColor: theme.colors.border,

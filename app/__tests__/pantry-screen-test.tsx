@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { act, fireEvent, waitFor, within } from '@testing-library/react-native';
 import { renderRouter, screen } from 'expo-router/testing-library';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { http, HttpResponse } from 'msw';
 import { Dimensions, StyleSheet } from 'react-native';
 
@@ -9,7 +10,16 @@ import { householdRowLabel } from '@/components/household-switcher';
 import { colors, CONTENT_MAX_WIDTH } from '@/theme';
 import { apiUrl, setupApiServer } from '../test-utils/api';
 import { signedInApiHandlers, signInTestUser, testHousehold, testMe } from '../test-utils/auth';
-import { pantryHandler, testEntry, testGroup, testPantry } from '../test-utils/pantry';
+import { pantryViewKey } from '@/pantry/view-storage';
+import {
+  categoriesHandler,
+  locationsHandler,
+  pantryHandler,
+  TEST_LOCATIONS,
+  testEntry,
+  testGroup,
+  testPantry,
+} from '../test-utils/pantry';
 
 jest.setTimeout(120000);
 
@@ -44,8 +54,10 @@ const CABIN = testHousehold({ id: '0190f3a1-0000-7000-8000-00000000000b', name: 
 
 const server = setupApiServer(...signedInApiHandlers(ME, [HOME]));
 
+let uid = '';
+
 beforeEach(async () => {
-  signInTestUser();
+  uid = signInTestUser().uid;
   await setWindowWidth(390);
 });
 
@@ -70,6 +82,11 @@ async function press(element: Parameters<typeof fireEvent.press>[0]) {
 
 async function renderPantry() {
   await renderRouter(APP_DIR, { initialUrl: '/' });
+}
+
+/** A row's test ID: rows are keyed by section, because one item can appear in several. By default, the Fridge section. */
+function rowTestId(group: { catalogItemId: string }, sectionKey = 'location-1') {
+  return `pantry-row-${sectionKey}:${group.catalogItemId}`;
 }
 
 function textStyle(text: string) {
@@ -99,16 +116,16 @@ describe('rows', () => {
     server.use(pantryHandler(testPantry([BUTTER, MILK])));
     await renderPantry();
 
-    const butterRow = await screen.findByTestId(`pantry-row-${BUTTER.catalogItemId}`);
-    const milkRow = screen.getByTestId(`pantry-row-${MILK.catalogItemId}`);
+    const butterRow = await screen.findByTestId(rowTestId(BUTTER));
+    const milkRow = screen.getByTestId(rowTestId(MILK));
     expect(within(milkRow).getByText('Milk')).toBeTruthy();
     expect(within(milkRow).getByTestId('pantry-row-count')).toHaveTextContent('×2');
     expect(within(butterRow).getByText('Butter')).toBeTruthy();
     expect(within(butterRow).queryByTestId('pantry-row-count')).toBeNull();
     expect(within(butterRow).queryByText(/×1/)).toBeNull();
 
-    const names = screen.getAllByTestId(/^pantry-row-0/).map((row) => row.props.testID);
-    expect(names).toEqual([`pantry-row-${BUTTER.catalogItemId}`, `pantry-row-${MILK.catalogItemId}`]);
+    const names = screen.getAllByTestId(/^pantry-row-location-1:/).map((row) => row.props.testID);
+    expect(names).toEqual([rowTestId(BUTTER), rowTestId(MILK)]);
   });
 
   test('the list is virtualised: 500 entries over 200 items render only the rows near the screen', async () => {
@@ -122,7 +139,7 @@ describe('rows', () => {
     await renderPantry();
     await screen.findByText('Item 000');
 
-    const rendered = screen.getAllByTestId(/^pantry-row-0/).length;
+    const rendered = screen.getAllByTestId(/^pantry-row-location-1:/).length;
     expect(rendered).toBeGreaterThan(0);
     expect(rendered).toBeLessThan(60);
     expect(screen.queryByText('Item 199')).toBeNull();
@@ -132,7 +149,7 @@ describe('rows', () => {
     server.use(pantryHandler(testPantry([BUTTER])));
     await renderPantry();
 
-    const row = await screen.findByTestId(`pantry-row-${BUTTER.catalogItemId}`);
+    const row = await screen.findByTestId(rowTestId(BUTTER));
     expect(within(row).getByText('Bought Dec 12, 2025 · Fridge')).toBeTruthy();
     expect(within(row).getByText('Half')).toBeTruthy();
     expect(within(row).getByText('No expiry')).toBeTruthy();
@@ -245,7 +262,7 @@ describe('expiry and out', () => {
     expect(await screen.findByText(text)).toBeTruthy();
     expect(textStyle(text).color).toBe(colors.light.expiringSoon);
     expect(screen.getByTestId('expiry-chip-soon')).toHaveStyle({ backgroundColor: colors.light.expiringSubtle });
-    expect(screen.getByTestId(`pantry-row-${group.catalogItemId}`)).toHaveStyle({ borderColor: colors.light.expiringSoon });
+    expect(screen.getByTestId(rowTestId(group))).toHaveStyle({ borderColor: colors.light.expiringSoon });
   });
 
   test('expired says "Expired Oct 25" in the danger colour', async () => {
@@ -256,7 +273,7 @@ describe('expiry and out', () => {
     expect(await screen.findByText('Expired Oct 25')).toBeTruthy();
     expect(textStyle('Expired Oct 25').color).toBe(colors.light.danger);
     expect(screen.getByTestId('expiry-chip-expired')).toHaveStyle({ backgroundColor: colors.light.dangerSubtle });
-    expect(screen.getByTestId(`pantry-row-${group.catalogItemId}`)).toHaveStyle({ borderColor: colors.light.danger });
+    expect(screen.getByTestId(rowTestId(group))).toHaveStyle({ borderColor: colors.light.danger });
   });
 
   test('a later expiry and no expiry are plain', async () => {
@@ -286,7 +303,7 @@ describe('expiry and out', () => {
     expect(textStyle('Expires Nov 3').color).toBe(colors.light.mutedText);
     expect(textStyle('Spinach').color).toBe(colors.light.mutedText);
     expect(textStyle('Out').color).toBe(colors.light.mutedText);
-    expect(screen.getByTestId(`pantry-row-${group.catalogItemId}`)).toHaveStyle({ borderColor: colors.light.border });
+    expect(screen.getByTestId(rowTestId(group))).toHaveStyle({ borderColor: colors.light.border });
   });
 
   test('a collapsed row is highlighted when any entry is soon or expired, with words', async () => {
@@ -298,7 +315,7 @@ describe('expiry and out', () => {
     await renderPantry();
 
     expect(await screen.findByText('Expired Oct 25')).toBeTruthy();
-    expect(screen.getByTestId(`pantry-row-${group.catalogItemId}`)).toHaveStyle({ borderColor: colors.light.danger });
+    expect(screen.getByTestId(rowTestId(group))).toHaveStyle({ borderColor: colors.light.danger });
   });
 
   test('a row whose entries are all out is muted as a whole, and an out entry is never the summary\'s expiry', async () => {
@@ -478,6 +495,403 @@ describe('screen states', () => {
     const content = screen.getByTestId('screen-content');
     expect(content).toHaveStyle({ maxWidth: CONTENT_MAX_WIDTH });
     expect(within(content).getByTestId('pantry-list')).toBeTruthy();
+    expect(within(content).getByTestId('add-item-button')).toBeTruthy();
+  });
+});
+
+describe('view toggle and filters', () => {
+  const FRIDGE = 1;
+  const FREEZER = 2;
+  const PANTRY = 3;
+  // This file's own categories, so the tests do not depend on the shared fixture's names.
+  const CATEGORIES = [
+    { id: 1, key: 'produce', name: 'Produce' },
+    { id: 2, key: 'dairy', name: 'Dairy' },
+    { id: 4, key: 'grains', name: 'Grains' },
+  ];
+  const PRODUCE = 1;
+  const DAIRY = 2;
+  const GRAINS = 4;
+
+  const SPLIT_FRIDGE_OLD = testEntry({ locationId: FRIDGE, expiresOn: '2026-10-25', expiryStatus: 'expired' });
+  const SPLIT_FRIDGE_NEW = testEntry({ locationId: FRIDGE, expiresOn: '2026-12-25' });
+  const SPLIT_FREEZER_A = testEntry({ locationId: FREEZER, expiresOn: '2027-01-10' });
+  const SPLIT_FREEZER_B = testEntry({ locationId: FREEZER, expiresOn: '2027-02-10' });
+  const CHEESE = testGroup('Cheese', [SPLIT_FRIDGE_OLD, SPLIT_FRIDGE_NEW, SPLIT_FREEZER_A, SPLIT_FREEZER_B], {
+    categoryId: DAIRY,
+  });
+  const PEAS = testGroup('Peas', [testEntry({ locationId: FREEZER })], { categoryId: PRODUCE });
+  const RICE = testGroup('Rice', [testEntry({ locationId: PANTRY })], { categoryId: GRAINS });
+  const YOGURT = testGroup('Yogurt', [testEntry({ locationId: FRIDGE })], { categoryId: DAIRY });
+  const GROUPS = [CHEESE, PEAS, RICE, YOGURT];
+
+  beforeEach(() => {
+    server.use(categoriesHandler(CATEGORIES));
+  });
+
+  /** The visible section titles and their counts, top to bottom: ["Fridge 2", …]. */
+  function sectionOutline() {
+    return screen.getAllByTestId(/^pantry-section-(location|category|unknown)/).map((header) => {
+      const count = within(header).getByTestId('pantry-section-count').props.children;
+      const title = String(header.props['aria-label']).split(',')[0];
+      return `${title} ${count}`;
+    });
+  }
+
+  /** Records the path of every API request from now on. */
+  function recordRequests() {
+    const paths: string[] = [];
+    const listener = (event: { request: Request }) => {
+      paths.push(new URL(event.request.url).pathname);
+    };
+    server.events.on('request:start', listener);
+    return {
+      paths,
+      stop: () => server.events.removeListener('request:start', listener),
+    };
+  }
+
+  async function savedChoices() {
+    return JSON.parse((await AsyncStorage.getItem(pantryViewKey(uid))) as string);
+  }
+
+  async function saveChoices(choices: { mode: string; locationIds: number[]; categoryIds: number[] }) {
+    await AsyncStorage.setItem(pantryViewKey(uid), JSON.stringify(choices));
+  }
+
+  test('a new install groups by location, with a "Group by" control and section headers with counts', async () => {
+    server.use(pantryHandler(testPantry(GROUPS)));
+    await renderPantry();
+
+    expect(await screen.findByTestId('pantry-section-location-1')).toBeTruthy();
+    const groupBy = screen.getByLabelText('Group by');
+    const location = within(groupBy).getByRole('radio', { name: 'Location' });
+    const category = within(groupBy).getByRole('radio', { name: 'Category' });
+    expect(location.props.accessibilityState).toMatchObject({ checked: true, selected: true });
+    expect(category.props.accessibilityState).toMatchObject({ checked: false, selected: false });
+    expect(location).toHaveStyle({ backgroundColor: colors.light.surface });
+
+    // Fridge, Freezer, Pantry: the locations' order. Cheese is in two sections.
+    expect(sectionOutline()).toEqual(['Fridge 2', 'Freezer 2', 'Pantry 1']);
+    const fridge = screen.getByTestId('pantry-section-location-1');
+    expect(fridge.props.role).toBe('heading');
+    expect(fridge.props['aria-label']).toBe('Fridge, 2 items');
+    expect(StyleSheet.flatten(within(fridge).getByText('Fridge').props.style)).toMatchObject({
+      textTransform: 'uppercase',
+      color: colors.light.mutedText,
+    });
+    expect(within(screen.getByTestId('pantry-section-location-3')).getByTestId('pantry-section-count')).toHaveTextContent(
+      '1',
+    );
+  });
+
+  test('by location, an item in two locations has a row in each with only those entries, highlighted per section', async () => {
+    server.use(pantryHandler(testPantry(GROUPS)));
+    await renderPantry();
+
+    const fridgeRow = await screen.findByTestId(rowTestId(CHEESE, 'location-1'));
+    const freezerRow = screen.getByTestId(rowTestId(CHEESE, 'location-2'));
+    expect(within(fridgeRow).getByTestId('pantry-row-count')).toHaveTextContent('×2');
+    expect(within(freezerRow).getByTestId('pantry-row-count')).toHaveTextContent('×2');
+    // Expired in the Fridge only.
+    expect(fridgeRow).toHaveStyle({ borderColor: colors.light.danger });
+    expect(freezerRow).toHaveStyle({ borderColor: colors.light.border });
+
+    // Expanding the Fridge row leaves the Freezer row collapsed.
+    await press(within(fridgeRow).getByRole('button', { name: /^Cheese, 2 entries/ }));
+    expect(screen.getByTestId(`pantry-entry-${SPLIT_FRIDGE_OLD.id}`)).toBeTruthy();
+    expect(screen.getByTestId(`pantry-entry-${SPLIT_FRIDGE_NEW.id}`)).toBeTruthy();
+    expect(screen.queryByTestId(`pantry-entry-${SPLIT_FREEZER_A.id}`)).toBeNull();
+    const freezerButton = within(screen.getByTestId(rowTestId(CHEESE, 'location-2'))).getByRole('button', {
+      name: /^Cheese, 2 entries/,
+    });
+    expect(freezerButton.props.accessibilityState).toMatchObject({ expanded: false });
+  });
+
+  test('a single entry left in a location is a plain row with no count, and opens the entry', async () => {
+    const fridge = testEntry({ locationId: FRIDGE });
+    const milk = testGroup('Milk', [fridge, testEntry({ locationId: FREEZER })]);
+    server.use(pantryHandler(testPantry([milk])));
+    await renderPantry();
+
+    const row = await screen.findByTestId(rowTestId(milk, 'location-1'));
+    expect(screen.getByTestId(rowTestId(milk, 'location-2'))).toBeTruthy();
+    expect(within(row).queryByTestId('pantry-row-count')).toBeNull();
+    await press(within(row).getByText('Milk'));
+    expect(screen).toHavePathname(`/entries/${fridge.id}`);
+  });
+
+  test('switching to Category re-sections without a request, collapses rows, and is saved', async () => {
+    server.use(pantryHandler(testPantry(GROUPS)));
+    await renderPantry();
+    const fridgeRow = await screen.findByTestId(rowTestId(CHEESE, 'location-1'));
+    await press(within(fridgeRow).getByRole('button', { name: /^Cheese, 2 entries/ }));
+    expect(screen.getByTestId(`pantry-entry-${SPLIT_FRIDGE_OLD.id}`)).toBeTruthy();
+
+    const requests = recordRequests();
+    await press(screen.getByRole('radio', { name: 'Category' }));
+    requests.stop();
+
+    expect(requests.paths).toEqual([]);
+    expect(screen.getByRole('radio', { name: 'Category' }).props.accessibilityState).toMatchObject({ selected: true });
+    expect(sectionOutline()).toEqual(['Produce 1', 'Dairy 2', 'Grains 1']);
+    const cheese = screen.getByTestId(rowTestId(CHEESE, 'category-2'));
+    expect(within(cheese).getByTestId('pantry-row-count')).toHaveTextContent('×4');
+    expect(screen.queryByTestId(`pantry-entry-${SPLIT_FRIDGE_OLD.id}`)).toBeNull();
+    expect((await savedChoices()).mode).toBe('category');
+
+    await press(screen.getByRole('radio', { name: 'Location' }));
+    expect(sectionOutline()).toEqual(['Fridge 2', 'Freezer 2', 'Pantry 1']);
+    expect(screen.queryByTestId(`pantry-entry-${SPLIT_FRIDGE_OLD.id}`)).toBeNull();
+  });
+
+  test('filters: chips in a panel, a count on the button, "Filtered: …" with Clear, and no request', async () => {
+    server.use(pantryHandler(testPantry(GROUPS)));
+    await renderPantry();
+    await screen.findByTestId('pantry-section-location-1');
+
+    expect(screen.queryByTestId('pantry-filter-panel')).toBeNull();
+    const requests = recordRequests();
+    await press(screen.getByRole('button', { name: 'Filters' }));
+    const panel = screen.getByTestId('pantry-filter-panel');
+    const locationChips = within(within(panel).getByLabelText('Location')).getAllByRole('checkbox');
+    const categoryChips = within(within(panel).getByLabelText('Category')).getAllByRole('checkbox');
+    expect(locationChips.map((chip) => chip.props.accessibilityLabel)).toEqual(TEST_LOCATIONS.map((l) => l.name));
+    expect(categoryChips.map((chip) => chip.props.accessibilityLabel)).toEqual(['Produce', 'Dairy', 'Grains']);
+    expect(locationChips[0]).toHaveStyle({ backgroundColor: colors.light.surface, borderColor: colors.light.border });
+    expect(StyleSheet.flatten(locationChips[0].props.style).minHeight).toBeGreaterThanOrEqual(44);
+
+    // Fridge: only Fridge entries, so Cheese ×2 and Yogurt.
+    await press(within(panel).getByRole('checkbox', { name: 'Fridge' }));
+    const fridgeChip = within(screen.getByTestId('pantry-filter-panel')).getByRole('checkbox', { name: 'Fridge' });
+    expect(fridgeChip.props.accessibilityState).toMatchObject({ checked: true, selected: true });
+    expect(fridgeChip).toHaveStyle({ backgroundColor: colors.light.primarySubtle, borderColor: colors.light.primary });
+    expect(sectionOutline()).toEqual(['Fridge 2']);
+    expect(screen.getByRole('button', { name: 'Filters · 1' })).toBeTruthy();
+
+    // Freezer as well: either location.
+    await press(screen.getByRole('checkbox', { name: 'Freezer' }));
+    expect(sectionOutline()).toEqual(['Fridge 2', 'Freezer 2']);
+
+    // And Dairy: location and category must both match.
+    await press(screen.getByRole('checkbox', { name: 'Dairy' }));
+    expect(sectionOutline()).toEqual(['Fridge 2', 'Freezer 1']);
+    expect(within(screen.getByTestId('pantry-filter-line')).getByText('Filtered: Fridge, Freezer, Dairy')).toBeTruthy();
+
+    // The line stays when the panel is closed.
+    await press(screen.getByRole('button', { name: 'Filters · 3' }));
+    expect(screen.queryByTestId('pantry-filter-panel')).toBeNull();
+    const line = screen.getByTestId('pantry-filter-line');
+    expect(within(line).getByText('Filtered: Fridge, Freezer, Dairy')).toBeTruthy();
+    expect(await savedChoices()).toEqual({ mode: 'location', locationIds: [FRIDGE, FREEZER], categoryIds: [DAIRY] });
+
+    await press(within(line).getByRole('button', { name: 'Clear' }));
+    requests.stop();
+    expect(screen.queryByTestId('pantry-filter-line')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy();
+    expect(sectionOutline()).toEqual(['Fridge 2', 'Freezer 2', 'Pantry 1']);
+    expect(requests.paths).toEqual([]);
+  });
+
+  test('a location filter splits a group in the category view too: one Milk in the Fridge is a single entry', async () => {
+    const fridge = testEntry({ locationId: FRIDGE });
+    const milk = testGroup('Milk', [fridge, testEntry({ locationId: FREEZER })], { categoryId: DAIRY });
+    server.use(pantryHandler(testPantry([milk])));
+    await saveChoices({ mode: 'category', locationIds: [FRIDGE], categoryIds: [] });
+    await renderPantry();
+
+    const row = await screen.findByTestId(rowTestId(milk, 'category-2'));
+    expect(within(row).queryByTestId('pantry-row-count')).toBeNull();
+    expect(within(row).getByText('Bought Oct 20 · Fridge')).toBeTruthy();
+  });
+
+  test('filters that match nothing show "No items match these filters" with Clear filters', async () => {
+    server.use(pantryHandler(testPantry([YOGURT])));
+    await renderPantry();
+    await screen.findByTestId('pantry-section-location-1');
+
+    await press(screen.getByRole('button', { name: 'Filters' }));
+    await press(screen.getByRole('checkbox', { name: 'Grains' }));
+
+    const empty = screen.getByTestId('pantry-no-matches');
+    expect(within(empty).getByText('No items match these filters')).toBeTruthy();
+    expect(screen.queryByText('Your pantry is empty')).toBeNull();
+    expect(screen.queryByTestId('pantry-list')).toBeNull();
+
+    await press(within(empty).getByRole('button', { name: 'Clear filters' }));
+    expect(screen.queryByTestId('pantry-no-matches')).toBeNull();
+    expect(screen.getByText('Yogurt')).toBeTruthy();
+  });
+
+  test('an empty pantry shows the empty state with no controls, and keeps the remembered choices', async () => {
+    await saveChoices({ mode: 'category', locationIds: [FRIDGE], categoryIds: [] });
+    const saved = await AsyncStorage.getItem(pantryViewKey(uid));
+    await renderPantry();
+
+    expect(await screen.findByText('Your pantry is empty')).toBeTruthy();
+    expect(screen.queryByLabelText('Group by')).toBeNull();
+    expect(screen.queryByTestId('pantry-filters-button')).toBeNull();
+    expect(screen.queryByTestId('pantry-filter-line')).toBeNull();
+    expect(await AsyncStorage.getItem(pantryViewKey(uid))).toBe(saved);
+  });
+
+  test('restores the saved choices without showing the default view first; unknown IDs are ignored and dropped on the next save', async () => {
+    await saveChoices({ mode: 'category', locationIds: [FRIDGE, 99], categoryIds: [77] });
+    server.use(pantryHandler(testPantry(GROUPS)));
+    await renderPantry();
+
+    // Every render until the category view appears shows the loading placeholder, never the location view.
+    await waitFor(() => {
+      expect(screen.queryByTestId('pantry-section-location-1')).toBeNull();
+      expect(screen.queryByTestId('pantry-section-category-2')).not.toBeNull();
+    });
+    expect(screen.getByRole('radio', { name: 'Category' }).props.accessibilityState).toMatchObject({ selected: true });
+    expect(screen.getByText('Filtered: Fridge')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Filters · 1' })).toBeTruthy();
+    expect(sectionOutline()).toEqual(['Dairy 2']);
+
+    await press(screen.getByRole('radio', { name: 'Location' }));
+    expect(await savedChoices()).toEqual({ mode: 'location', locationIds: [FRIDGE], categoryIds: [] });
+  });
+
+  test('malformed saved data falls back to Location with no filters, without an error', async () => {
+    await AsyncStorage.setItem(pantryViewKey(uid), '{not json');
+    server.use(pantryHandler(testPantry(GROUPS)));
+    await renderPantry();
+
+    expect(await screen.findByTestId('pantry-section-location-1')).toBeTruthy();
+    expect(screen.queryByTestId('pantry-filter-line')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  test('another user\'s choices on the same device do not apply', async () => {
+    await AsyncStorage.setItem(
+      pantryViewKey('someone-else'),
+      JSON.stringify({ mode: 'category', locationIds: [FRIDGE], categoryIds: [] }),
+    );
+    server.use(pantryHandler(testPantry(GROUPS)));
+    await renderPantry();
+
+    expect(await screen.findByTestId('pantry-section-location-1')).toBeTruthy();
+    expect(screen.queryByTestId('pantry-filter-line')).toBeNull();
+  });
+
+  test('a refetch keeps the view and filters, and a moved entry changes section', async () => {
+    const entry = testEntry({ locationId: FRIDGE });
+    const milk = testGroup('Milk', [entry], { categoryId: DAIRY });
+    server.use(pantryHandler(testPantry([milk, YOGURT, RICE])));
+    await saveChoices({ mode: 'location', locationIds: [], categoryIds: [DAIRY] });
+    await renderPantry();
+    expect(await screen.findByTestId(rowTestId(milk, 'location-1'))).toBeTruthy();
+    expect(sectionOutline()).toEqual(['Fridge 2']);
+
+    const moved = { ...milk, entries: [{ ...milk.entries[0], locationId: FREEZER }] };
+    server.use(pantryHandler(testPantry([moved, YOGURT, RICE])));
+    await act(async () => {
+      await appQueryClient().refetchQueries({ queryKey: queryKeys.households.pantry(HOME.id) });
+    });
+
+    expect(await screen.findByTestId(rowTestId(milk, 'location-2'))).toBeTruthy();
+    expect(screen.queryByTestId(rowTestId(milk, 'location-1'))).toBeNull();
+    expect(sectionOutline()).toEqual(['Fridge 1', 'Freezer 1']);
+    expect(screen.getByText('Filtered: Dairy')).toBeTruthy();
+  });
+
+  test('an entry or item whose location or category is unknown goes in a final "Unknown" section', async () => {
+    const odd = testGroup('Odd', [testEntry({ locationId: 42 })], { categoryId: 42 });
+    server.use(pantryHandler(testPantry([odd, YOGURT])));
+    await renderPantry();
+
+    await screen.findByTestId('pantry-section-unknown');
+    expect(sectionOutline()).toEqual(['Fridge 1', 'Unknown 1']);
+    await press(screen.getByRole('radio', { name: 'Category' }));
+    expect(sectionOutline()).toEqual(['Dairy 1', 'Unknown 1']);
+  });
+
+  test('while categories first load, the loading placeholder shows', async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      pantryHandler(testPantry(GROUPS)),
+      http.get(apiUrl('/categories'), async () => {
+        await held;
+        return HttpResponse.json({ items: CATEGORIES });
+      }),
+    );
+    await renderPantry();
+
+    expect(await screen.findByTestId('pantry-loading')).toBeTruthy();
+    expect(screen.queryByTestId('pantry-list')).toBeNull();
+    await act(async () => {
+      release();
+    });
+    expect(await screen.findByTestId('pantry-section-location-1')).toBeTruthy();
+  });
+
+  test('a failing categories request shows the error state, and Retry refetches it', async () => {
+    let fail = true;
+    let categoryRequests = 0;
+    server.use(
+      pantryHandler(testPantry(GROUPS)),
+      http.get(apiUrl('/categories'), () => {
+        categoryRequests += 1;
+        return fail
+          ? HttpResponse.json({ error: { code: 'internal', message: 'boom' } }, { status: 500 })
+          : HttpResponse.json({ items: CATEGORIES });
+      }),
+    );
+    await renderPantry();
+
+    const error = await screen.findByTestId('pantry-error');
+    expect(within(error).getByText('The server ran into a problem. Please try again in a moment.')).toBeTruthy();
+    expect(screen.queryByTestId('pantry-list')).toBeNull();
+
+    fail = false;
+    const before = categoryRequests;
+    await press(within(error).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByTestId('pantry-section-location-1')).toBeTruthy();
+    expect(categoryRequests).toBeGreaterThan(before);
+  });
+
+  test('a failing locations request shows the error state too', async () => {
+    server.use(
+      pantryHandler(testPantry(GROUPS)),
+      http.get(apiUrl('/locations'), () =>
+        HttpResponse.json({ error: { code: 'internal', message: 'boom' } }, { status: 500 }),
+      ),
+    );
+    await renderPantry();
+
+    const error = await screen.findByTestId('pantry-error');
+    server.use(locationsHandler());
+    await press(within(error).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByTestId('pantry-section-location-1')).toBeTruthy();
+  });
+
+  test('the chips wrap onto several lines instead of scrolling sideways', async () => {
+    server.use(pantryHandler(testPantry(GROUPS)));
+    await renderPantry();
+    await screen.findByTestId('pantry-section-location-1');
+    await press(screen.getByRole('button', { name: 'Filters' }));
+
+    const panel = screen.getByTestId('pantry-filter-panel');
+    for (const title of ['Location', 'Category']) {
+      const chip = within(within(panel).getByLabelText(title)).getAllByRole('checkbox')[0];
+      expect(StyleSheet.flatten(chip.parent?.props.style)).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap' });
+    }
+  });
+
+  test('at 768 px and wider the controls sit above the list with the inline Add item button', async () => {
+    server.use(pantryHandler(testPantry(GROUPS)));
+    await setWindowWidth(1440);
+    await renderPantry();
+    await screen.findByTestId('pantry-section-location-1');
+
+    const content = screen.getByTestId('screen-content');
+    expect(within(content).getByLabelText('Group by')).toBeTruthy();
+    expect(within(content).getByTestId('pantry-filters-button')).toBeTruthy();
     expect(within(content).getByTestId('add-item-button')).toBeTruthy();
   });
 });
