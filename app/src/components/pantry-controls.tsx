@@ -23,10 +23,12 @@ type PantryToolbarProps = {
   filters: PantryFilters;
   panelOpen: boolean;
   onTogglePanel: () => void;
+  /** At 768 px and wider the segmented control is sized to its options instead of filling the line. */
+  wide?: boolean;
 };
 
 /** "Group by" and the Filters button, on one line. */
-export function PantryToolbar({ mode, onModeChange, filters, panelOpen, onTogglePanel }: PantryToolbarProps) {
+export function PantryToolbar({ mode, onModeChange, filters, panelOpen, onTogglePanel, wide = false }: PantryToolbarProps) {
   const styles = useThemedStyles(createStyles);
   const theme = useTheme();
   const count = activeFilterCount(filters);
@@ -39,7 +41,7 @@ export function PantryToolbar({ mode, onModeChange, filters, panelOpen, onToggle
         aria-label="Group by"
         accessibilityLabel="Group by"
         testID="pantry-group-by"
-        style={styles.segmented}
+        style={[styles.segmented, wide ? styles.segmentedCompact : null]}
       >
         {MODE_OPTIONS.map((option) => {
           const selected = option.mode === mode;
@@ -207,6 +209,13 @@ function createStyles(theme: Theme) {
       borderWidth: 1,
       borderColor: theme.colors.border,
       backgroundColor: theme.colors.background,
+    },
+    // `flex: 1` above sets a zero basis, so the basis is reset for the fixed width to apply.
+    segmentedCompact: {
+      flexGrow: 0,
+      flexShrink: 1,
+      flexBasis: 'auto' as const,
+      width: 280,
     },
     segment: {
       flex: 1,

@@ -111,53 +111,54 @@ function PantryContent({ wide, view }: { wide: boolean; view: PantryView }) {
         </View>
       </View>
     ) : (
-      <View style={styles.fill}>
-        <View style={styles.controls}>
-          <PantryToolbar
-            mode={mode}
-            onModeChange={setMode}
-            filters={filters}
-            panelOpen={panelOpen}
-            onTogglePanel={() => setPanelOpen((open) => !open)}
-          />
-          {panelOpen ? (
-            <FilterPanel
+      // The controls are the list's header, so they scroll with the rows: an
+      // open filter panel never pushes the rows (or its own chips) off screen,
+      // and the bottom inset keeps the last chip and row clear of the floating
+      // Add item button.
+      <PantryList
+        sections={sections}
+        mode={mode}
+        today={pantry.data.today}
+        now={now}
+        currentUserId={me.data?.id ?? null}
+        locationName={locationName}
+        header={
+          <View style={styles.controls}>
+            {refreshError}
+            <PantryToolbar
+              mode={mode}
+              onModeChange={setMode}
+              filters={filters}
+              panelOpen={panelOpen}
+              onTogglePanel={() => setPanelOpen((open) => !open)}
+              wide={wide}
+            />
+            {panelOpen ? (
+              <FilterPanel
+                locations={locations.data}
+                categories={categories.data}
+                filters={filters}
+                onChange={setFilters}
+              />
+            ) : null}
+            <FilterLine
               locations={locations.data}
               categories={categories.data}
               filters={filters}
-              onChange={setFilters}
+              onClear={clearFilters}
             />
-          ) : null}
-          <FilterLine
-            locations={locations.data}
-            categories={categories.data}
-            filters={filters}
-            onClear={clearFilters}
-          />
-        </View>
-        {sections.length === 0 ? (
-          <View style={styles.fill}>
-            {refreshError}
-            <View testID="pantry-no-matches" style={styles.centered}>
-              <Text role="heading" aria-level={2} style={styles.emptyTitle}>
-                No items match these filters
-              </Text>
-              <Button variant="secondary" label="Clear filters" onPress={clearFilters} />
-            </View>
           </View>
-        ) : (
-          <PantryList
-            sections={sections}
-            mode={mode}
-            today={pantry.data.today}
-            now={now}
-            currentUserId={me.data?.id ?? null}
-            locationName={locationName}
-            header={refreshError ? <View style={styles.listHeader}>{refreshError}</View> : null}
-            bottomInset={wide ? 24 : FLOATING_BUTTON_CLEARANCE}
-          />
-        )}
-      </View>
+        }
+        empty={
+          <View testID="pantry-no-matches" style={styles.centered}>
+            <Text role="heading" aria-level={2} style={styles.emptyTitle}>
+              No items match these filters
+            </Text>
+            <Button variant="secondary" label="Clear filters" onPress={clearFilters} />
+          </View>
+        }
+        bottomInset={wide ? 24 : FLOATING_BUTTON_CLEARANCE}
+      />
     );
   } else if (failed.length > 0) {
     body = (
@@ -211,9 +212,7 @@ function createStyles(theme: Theme) {
     },
     controls: {
       gap: theme.spacing.md,
-    },
-    listHeader: {
-      paddingBottom: theme.spacing.sm,
+      paddingBottom: theme.spacing.lg,
     },
     refreshError: {
       flexDirection: 'row' as const,

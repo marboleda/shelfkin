@@ -716,7 +716,9 @@ describe('view toggle and filters', () => {
     const empty = screen.getByTestId('pantry-no-matches');
     expect(within(empty).getByText('No items match these filters')).toBeTruthy();
     expect(screen.queryByText('Your pantry is empty')).toBeNull();
-    expect(screen.queryByTestId('pantry-list')).toBeNull();
+    expect(screen.queryAllByTestId(/^pantry-row-/)).toHaveLength(0);
+    // The controls stay above it, so the filters can still be changed.
+    expect(within(screen.getByTestId('pantry-list')).getByTestId('pantry-filter-panel')).toBeTruthy();
 
     await press(within(empty).getByRole('button', { name: 'Clear filters' }));
     expect(screen.queryByTestId('pantry-no-matches')).toBeNull();
@@ -868,6 +870,35 @@ describe('view toggle and filters', () => {
     server.use(locationsHandler());
     await press(within(error).getByRole('button', { name: 'Retry' }));
     expect(await screen.findByTestId('pantry-section-location-1')).toBeTruthy();
+  });
+
+  test('the controls and an open panel scroll with the list, and the content clears the floating Add item button', async () => {
+    await setWindowWidth(375);
+    server.use(pantryHandler(testPantry(GROUPS)));
+    await renderPantry();
+    await screen.findByTestId('pantry-section-location-1');
+    await press(screen.getByRole('button', { name: 'Filters' }));
+
+    // Toolbar, panel and filter line are the list's header, not a fixed block above it,
+    // so on a short phone the last chip and the rows below are reached by scrolling.
+    const list = screen.getByTestId('pantry-list');
+    expect(within(list).getByLabelText('Group by')).toBeTruthy();
+    expect(within(list).getByTestId('pantry-filter-panel')).toBeTruthy();
+    await press(within(list).getByRole('checkbox', { name: 'Fridge' }));
+    expect(within(screen.getByTestId('pantry-list')).getByTestId('pantry-filter-line')).toBeTruthy();
+    expect(within(screen.getByTestId('pantry-list')).getByTestId(rowTestId(YOGURT, 'location-1'))).toBeTruthy();
+    expect(StyleSheet.flatten(screen.getByTestId('pantry-list').props.contentContainerStyle).paddingBottom).toBeGreaterThanOrEqual(
+      96,
+    );
+  });
+
+  test('at 768 px and wider the Group by control is sized to its options', async () => {
+    server.use(pantryHandler(testPantry(GROUPS)));
+    await setWindowWidth(1440);
+    await renderPantry();
+    await screen.findByTestId('pantry-section-location-1');
+
+    expect(StyleSheet.flatten(screen.getByTestId('pantry-group-by').props.style)).toMatchObject({ flexGrow: 0 });
   });
 
   test('the chips wrap onto several lines instead of scrolling sideways', async () => {

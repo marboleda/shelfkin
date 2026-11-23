@@ -40,12 +40,14 @@ export type PantryRowContext = {
 };
 
 type PantryListProps = PantryRowContext & {
-  /** The sections to show, from `buildSections`. */
+  /** The sections to show, from `buildSections`; `empty` shows when there are none. */
   sections: PantrySection[];
   /** The view the sections are for. Switching it collapses every row. */
   mode: ViewMode;
   /** Rendered above the rows, scrolling with them. */
   header?: ReactElement | null;
+  /** Shown below the header instead of the rows when there are no sections. */
+  empty?: ReactElement | null;
   /** Space below the last row, e.g. so a floating button never covers it. */
   bottomInset?: number;
 };
@@ -60,6 +62,7 @@ export function PantryList({
   currentUserId,
   locationName,
   header,
+  empty,
   bottomInset = 0,
 }: PantryListProps) {
   const styles = useThemedStyles(createStyles);
@@ -111,6 +114,7 @@ export function PantryList({
       renderSectionHeader={({ section }) => <SectionHeader section={section} first={section.key === firstSectionKey} />}
       stickySectionHeadersEnabled={false}
       ListHeaderComponent={header ?? undefined}
+      ListEmptyComponent={empty ?? undefined}
       ItemSeparatorComponent={Separator}
       initialNumToRender={12}
       windowSize={7}
