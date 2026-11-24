@@ -1,3 +1,4 @@
+import type { ComponentRef, Ref } from 'react';
 import { ActivityIndicator, Pressable, Text, type PressableProps } from 'react-native';
 
 import { MIN_TOUCH_TARGET, useTheme, useThemedStyles, type Theme } from '@/theme';
@@ -7,6 +8,8 @@ type ButtonProps = Omit<PressableProps, 'style' | 'children'> & {
   /** Shows a spinner and disables the button. */
   busy?: boolean;
   variant?: 'primary' | 'secondary' | 'danger' | 'link';
+  /** The pressable, e.g. to move keyboard focus to it. */
+  ref?: Ref<ComponentRef<typeof Pressable>>;
 };
 
 /** A full-width primary, secondary or danger (destructive) action, or a text link-style button. */
