@@ -14,6 +14,8 @@ export const queryKeys = {
   me: () => ['me'] as const,
   /** The built-in storage locations (`GET /locations`), the same for every household. */
   locations: () => ['locations'] as const,
+  /** The built-in item categories (`GET /categories`), the same for every household. */
+  categories: () => ['categories'] as const,
   /**
    * Households, and everything scoped to one. Every household-scoped key
    * starts with `['households', householdId]`, so switching household never

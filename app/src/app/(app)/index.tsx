@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 
 import { userMessage } from '@/api/errors';
@@ -5,13 +6,16 @@ import { useMeQuery } from '@/auth/profile';
 import { AddItemButton } from '@/components/add-item-button';
 import { Button } from '@/components/button';
 import { HouseholdSwitcher } from '@/components/household-switcher';
+import { FilterLine, FilterPanel, PantryToolbar } from '@/components/pantry-controls';
 import { PantryList } from '@/components/pantry-list';
 import { Screen } from '@/components/screen';
 import { ThemedText } from '@/components/themed-text';
 import { useIsWideLayout } from '@/hooks/use-is-wide-layout';
 import { useNow } from '@/hooks/use-now';
 import { useHouseholdKeys } from '@/household/current-household';
-import { useLocationNames, usePantryQuery } from '@/pantry/pantry';
+import { useCategoriesQuery, useLocationNames, useLocationsQuery, usePantryQuery } from '@/pantry/pantry';
+import { buildSections, hasNoEntries, knownFilters, NO_FILTERS, type PantryFilters, type ViewMode } from '@/pantry/sections';
+import { usePantryView, type PantryView } from '@/pantry/use-pantry-view';
 import { useTheme, useThemedStyles, type Theme } from '@/theme';
 
 /** Room below the last row so the floating Add item button never covers it. */
@@ -20,6 +24,9 @@ const FLOATING_BUTTON_CLEARANCE = 96;
 export default function PantryScreen() {
   const wide = useIsWideLayout();
   const { householdId } = useHouseholdKeys();
+  // Read here, outside the household-keyed content, so switching household
+  // keeps the view and filters without reading them again.
+  const view = usePantryView();
 
   // Below the breakpoint the header is the household switcher; at and above it
   // the switcher is in the side nav and the header is a plain "Pantry".
@@ -31,22 +38,50 @@ export default function PantryScreen() {
       header={wide ? undefined : <HouseholdSwitcher placement="header" />}
     >
       {/* Keyed by household, so expanded rows reset when the household changes. */}
-      <PantryContent key={householdId} wide={wide} />
+      <PantryContent key={householdId} wide={wide} view={view} />
     </Screen>
   );
 }
 
-function PantryContent({ wide }: { wide: boolean }) {
+function PantryContent({ wide, view }: { wide: boolean; view: PantryView }) {
   const styles = useThemedStyles(createStyles);
   const pantry = usePantryQuery();
+  const locations = useLocationsQuery();
+  const categories = useCategoriesQuery();
   const locationName = useLocationNames();
   const me = useMeQuery();
   const now = useNow();
+  const [panelOpen, setPanelOpen] = useState(false);
+
+  const mode: ViewMode = view.choices?.mode ?? 'location';
+  // Saved IDs that are not in the loaded lists are ignored, and dropped the
+  // next time the choices are saved (every change saves these).
+  const filters = useMemo<PantryFilters>(
+    () =>
+      view.choices && locations.data && categories.data
+        ? knownFilters(view.choices.filters, locations.data, categories.data)
+        : NO_FILTERS,
+    [view.choices, locations.data, categories.data],
+  );
+  // Worked out from what is already loaded, so toggling and filtering send no request.
+  const sections = useMemo(
+    () =>
+      pantry.data && locations.data && categories.data
+        ? buildSections(pantry.data.groups, { mode, filters, locations: locations.data, categories: categories.data })
+        : [],
+    [pantry.data, locations.data, categories.data, mode, filters],
+  );
 
   const addButton = <AddItemButton placement={wide ? 'inline' : 'floating'} />;
+  // Locations and categories never refetch once loaded, so only their first load can fail.
+  const failed = [pantry, locations, categories].filter((query) => query.isError && !query.data);
 
   let body;
-  if (pantry.data) {
+  if (pantry.data && locations.data && categories.data && view.loaded) {
+    const setMode = (next: ViewMode) => view.setChoices({ mode: next, filters });
+    const setFilters = (next: PantryFilters) => view.setChoices({ mode, filters: next });
+    const clearFilters = () => setFilters(NO_FILTERS);
+
     const refreshError = pantry.isError ? (
       <View role="alert" testID="pantry-refresh-error" style={styles.refreshError}>
         <ThemedText style={styles.refreshErrorText}>
@@ -61,39 +96,81 @@ function PantryContent({ wide }: { wide: boolean }) {
       </View>
     ) : null;
 
-    body =
-      pantry.data.groups.length === 0 ? (
-        <View style={styles.fill}>
-          {refreshError}
-          <View testID="pantry-empty" style={styles.centered}>
-            <Text role="heading" aria-level={2} style={styles.emptyTitle}>
-              Your pantry is empty
-            </Text>
-            <ThemedText variant="muted" style={styles.centeredText}>
-              Add what you have on hand to keep track of it.
-            </ThemedText>
-            <AddItemButton label="Add your first item" testID="pantry-empty-add" />
-          </View>
+    body = hasNoEntries(pantry.data.groups) ? (
+      // The remembered view and filters are kept for when there are entries again.
+      <View style={styles.fill}>
+        {refreshError}
+        <View testID="pantry-empty" style={styles.centered}>
+          <Text role="heading" aria-level={2} style={styles.emptyTitle}>
+            Your pantry is empty
+          </Text>
+          <ThemedText variant="muted" style={styles.centeredText}>
+            Add what you have on hand to keep track of it.
+          </ThemedText>
+          <AddItemButton label="Add your first item" testID="pantry-empty-add" />
         </View>
-      ) : (
-        <PantryList
-          pantry={pantry.data}
-          now={now}
-          currentUserId={me.data?.id ?? null}
-          locationName={locationName}
-          header={refreshError ? <View style={styles.listHeader}>{refreshError}</View> : null}
-          bottomInset={wide ? 24 : FLOATING_BUTTON_CLEARANCE}
-        />
-      );
-  } else if (pantry.isError) {
+      </View>
+    ) : (
+      // The controls are the list's header, so they scroll with the rows: an
+      // open filter panel never pushes the rows (or its own chips) off screen,
+      // and the bottom inset keeps the last chip and row clear of the floating
+      // Add item button.
+      <PantryList
+        sections={sections}
+        mode={mode}
+        today={pantry.data.today}
+        now={now}
+        currentUserId={me.data?.id ?? null}
+        locationName={locationName}
+        header={
+          <View style={styles.controls}>
+            {refreshError}
+            <PantryToolbar
+              mode={mode}
+              onModeChange={setMode}
+              filters={filters}
+              panelOpen={panelOpen}
+              onTogglePanel={() => setPanelOpen((open) => !open)}
+              wide={wide}
+            />
+            {panelOpen ? (
+              <FilterPanel
+                locations={locations.data}
+                categories={categories.data}
+                filters={filters}
+                onChange={setFilters}
+              />
+            ) : null}
+            <FilterLine
+              locations={locations.data}
+              categories={categories.data}
+              filters={filters}
+              onClear={clearFilters}
+            />
+          </View>
+        }
+        empty={
+          <View testID="pantry-no-matches" style={styles.centered}>
+            <Text role="heading" aria-level={2} style={styles.emptyTitle}>
+              No items match these filters
+            </Text>
+            <Button variant="secondary" label="Clear filters" onPress={clearFilters} />
+          </View>
+        }
+        bottomInset={wide ? 24 : FLOATING_BUTTON_CLEARANCE}
+      />
+    );
+  } else if (failed.length > 0) {
     body = (
       <View testID="pantry-error" role="alert" style={styles.centered}>
-        <ThemedText style={styles.centeredText}>{userMessage(pantry.error)}</ThemedText>
+        <ThemedText style={styles.centeredText}>{userMessage(failed[0].error)}</ThemedText>
         <Button
           variant="secondary"
           label="Retry"
-          busy={pantry.isFetching}
-          onPress={() => void pantry.refetch()}
+          busy={failed.some((query) => query.isFetching)}
+          onPress={() => {
+            for (const query of failed) void query.refetch();
+          }}
         />
       </View>
     );
@@ -133,8 +210,9 @@ function createStyles(theme: Theme) {
       flex: 1,
       gap: theme.spacing.lg,
     },
-    listHeader: {
-      paddingBottom: theme.spacing.sm,
+    controls: {
+      gap: theme.spacing.md,
+      paddingBottom: theme.spacing.lg,
     },
     refreshError: {
       flexDirection: 'row' as const,
