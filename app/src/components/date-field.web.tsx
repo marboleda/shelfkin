@@ -1,4 +1,4 @@
-import { useId, type ChangeEvent } from 'react';
+import { useId, type ChangeEvent, type CSSProperties } from 'react';
 import { Pressable, Text, View } from 'react-native';
 
 import { MIN_TOUCH_TARGET, useTheme, useThemedStyles, type Theme } from '@/theme';
@@ -20,7 +20,7 @@ export function DateField({ label, value, onChange, error, hint, clearLabel, dis
 
   return (
     <View style={styles.field}>
-      <label htmlFor={id} style={{ ...theme.typography.label, color: theme.colors.text } as object}>
+      <label htmlFor={id} data-testid={`${testID}-label`} style={labelStyle(theme)}>
         {label}
       </label>
       <View style={styles.row}>
@@ -35,6 +35,7 @@ export function DateField({ label, value, onChange, error, hint, clearLabel, dis
           onChange={(event: ChangeEvent<HTMLInputElement>) => onChange(event.target.value)}
           style={{
             flex: 1,
+            minWidth: 0,
             minHeight: 50,
             boxSizing: 'border-box',
             paddingLeft: theme.spacing.md + 2,
@@ -47,7 +48,8 @@ export function DateField({ label, value, onChange, error, hint, clearLabel, dis
             color: theme.colors.text,
             colorScheme: theme.dark ? 'dark' : 'light',
             fontFamily: theme.typography.body.fontFamily,
-            fontSize: theme.typography.body.fontSize,
+            fontSize: `${theme.typography.body.fontSize}px`,
+            lineHeight: `${theme.typography.body.lineHeight}px`,
           }}
         />
         {clearLabel && value ? (
@@ -74,6 +76,23 @@ export function DateField({ label, value, onChange, error, hint, clearLabel, dis
       ) : null}
     </View>
   );
+}
+
+/**
+ * The label's style for a plain DOM element. React Native numbers are pixels,
+ * but in the DOM a unitless `line-height` is a multiple of the font size, so
+ * sizes are given with units here.
+ */
+export function labelStyle(theme: Theme): CSSProperties {
+  const { fontFamily, fontSize, lineHeight, fontWeight } = theme.typography.label;
+  return {
+    display: 'block',
+    fontFamily,
+    fontSize: `${fontSize}px`,
+    lineHeight: `${lineHeight}px`,
+    fontWeight,
+    color: theme.colors.text,
+  };
 }
 
 function createStyles(theme: Theme) {

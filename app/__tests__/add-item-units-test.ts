@@ -149,3 +149,15 @@ describe('withRetries', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('web DateField label', () => {
+  test('sizes are pixels, since a unitless line-height is a multiplier in the DOM', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { labelStyle } = require('@/components/date-field.web') as typeof import('@/components/date-field.web');
+    const { getTheme } = jest.requireActual('@/theme') as typeof import('@/theme');
+    const style = labelStyle(getTheme('light'));
+    expect(style.lineHeight).toBe('20px');
+    expect(style.fontSize).toBe('15px');
+    expect(style.display).toBe('block');
+  });
+});

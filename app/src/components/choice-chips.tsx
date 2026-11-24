@@ -1,3 +1,4 @@
+import type { ComponentRef, Ref } from 'react';
 import { Pressable, Text, View } from 'react-native';
 
 import { MIN_TOUCH_TARGET, useThemedStyles, type Theme } from '@/theme';
@@ -15,6 +16,8 @@ type ChoiceChipsProps<T extends string | number> = {
   error?: string | null;
   disabled?: boolean;
   testID?: string;
+  /** Set to the chip keyboard focus should go to: the selected one, else the first. */
+  focusRef?: Ref<ComponentRef<typeof Pressable>>;
 };
 
 /**
@@ -30,17 +33,20 @@ export function ChoiceChips<T extends string | number>({
   error,
   disabled = false,
   testID,
+  focusRef,
 }: ChoiceChipsProps<T>) {
   const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.field} testID={testID}>
       <Text style={styles.label}>{label}</Text>
       <View accessibilityRole="radiogroup" accessibilityLabel={label} style={styles.chips}>
-        {options.map((option) => {
+        {options.map((option, index) => {
           const selected = option.value === value;
+          const focusTarget = value === null || !options.some((o) => o.value === value) ? index === 0 : selected;
           return (
             <Pressable
               key={String(option.value)}
+              ref={focusTarget ? focusRef : undefined}
               testID={testID ? `${testID}-${option.value}` : undefined}
               accessibilityRole="radio"
               accessibilityLabel={option.label}

@@ -127,9 +127,13 @@ export function AddItemForm({ onSaved, confirmation }: AddItemFormProps) {
   const [purchasedOn, setPurchasedOn] = useState(() => todayOnDevice());
   const [expiry, setExpiry] = useState<Expiry>({ mode: 'suggested' });
   const [notice, setNotice] = useState<string | null>(null);
-  // Set when an item is picked with Enter (web), so focus moves to Add.
-  const focusAddNext = useRef(false);
+  // Set when an item is picked with Enter (web), so focus moves on into the details.
+  const focusDetailsNext = useRef(false);
   const addButton = useRef<ComponentRef<typeof Pressable>>(null);
+  const categoryChip = useRef<ComponentRef<typeof Pressable>>(null);
+  const locationChip = useRef<ComponentRef<typeof Pressable>>(null);
+  const locationsRetry = useRef<ComponentRef<typeof Pressable>>(null);
+  const categoriesRetry = useRef<ComponentRef<typeof Pressable>>(null);
 
   const isNew = picked?.kind === 'new';
   const itemName = picked ? (picked.kind === 'catalog' ? picked.item.name : picked.name) : '';
@@ -219,16 +223,8 @@ export function AddItemForm({ onSaved, confirmation }: AddItemFormProps) {
     setExpiry({ mode: 'suggested' });
     setNotice(null);
     setStep('details');
-    focusAddNext.current = byKeyboard;
+    focusDetailsNext.current = byKeyboard;
   };
-
-  // On web, an item picked with Enter moves focus to Add, so a second Enter adds it.
-  useEffect(() => {
-    if (step === 'details' && focusAddNext.current) {
-      focusAddNext.current = false;
-      focusElement(addButton.current);
-    }
-  }, [step, picked]);
 
   const backToSearch = () => {
     save.reset();
@@ -255,6 +251,23 @@ export function AddItemForm({ onSaved, confirmation }: AddItemFormProps) {
     !locationError &&
     !shelfLifeError &&
     !expiryError;
+
+  // On web, an item picked with Enter moves focus to Add, so a second Enter
+  // adds it. When Add cannot be used yet, focus goes to the first thing that
+  // needs the user instead (a Retry, the category, the location), never to
+  // the page. While locations or categories are still loading, it waits.
+  useEffect(() => {
+    if (step !== 'details' || !focusDetailsNext.current) return;
+    let target: ComponentRef<typeof Pressable> | null = null;
+    if (locations.isError) target = locationsRetry.current;
+    else if (categories.isError) target = categoriesRetry.current;
+    else if (!locationsReady || !categoriesReady) return;
+    else if (categoryError) target = categoryChip.current;
+    else if (locationError) target = locationChip.current;
+    else target = addButton.current;
+    focusDetailsNext.current = false;
+    focusElement(target);
+  }, [step, picked, locations.isError, categories.isError, locationsReady, categoriesReady, categoryError, locationError]);
 
   const submit = () => {
     if (!picked || !canSave || save.isPending || locationId === null) return;
@@ -332,12 +345,24 @@ export function AddItemForm({ onSaved, confirmation }: AddItemFormProps) {
 
         {locations.isError ? (
           <FormMessage tone="error" message="Couldn't load locations" testID="add-locations-error">
-            <Button variant="link" label="Retry" onPress={() => void locations.refetch()} testID="add-locations-retry" />
+            <Button
+              ref={locationsRetry}
+              variant="link"
+              label="Retry"
+              onPress={() => void locations.refetch()}
+              testID="add-locations-retry"
+            />
           </FormMessage>
         ) : null}
         {categories.isError ? (
           <FormMessage tone="error" message="Couldn't load categories" testID="add-categories-error">
-            <Button variant="link" label="Retry" onPress={() => void categories.refetch()} testID="add-categories-retry" />
+            <Button
+              ref={categoriesRetry}
+              variant="link"
+              label="Retry"
+              onPress={() => void categories.refetch()}
+              testID="add-categories-retry"
+            />
           </FormMessage>
         ) : null}
         {(locations.isPending && !locations.isError) || (categories.isPending && !categories.isError) ? (
@@ -348,6 +373,7 @@ export function AddItemForm({ onSaved, confirmation }: AddItemFormProps) {
           <ChoiceChips
             label="Category"
             testID="add-category"
+            focusRef={categoryChip}
             options={categories.data.map((category) => ({ value: category.id, label: category.name }))}
             value={categoryId}
             onChange={setCategoryId}
@@ -362,6 +388,7 @@ export function AddItemForm({ onSaved, confirmation }: AddItemFormProps) {
           <ChoiceChips
             label="Where is it?"
             testID="add-location"
+            focusRef={locationChip}
             options={locations.data.map((location) => ({ value: location.id, label: location.name }))}
             value={locationId}
             onChange={setLocationId}

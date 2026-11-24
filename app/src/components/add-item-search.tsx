@@ -89,9 +89,12 @@ export function AddItemSearch({
     return list;
   }, [suggestions, showCreate, createDisabled]);
 
-  // The first option is highlighted whenever the options change (not when the
-  // same results are fetched again).
-  const optionsKey = options.map((option) => (option.kind === 'item' ? option.item.id : 'create')).join('|');
+  // The first option is highlighted whenever new results arrive (a new search,
+  // or different options), but not when the same results are fetched again.
+  // Only the keyboard moves the highlight: hovering has its own style, because
+  // browsers report a hover when results appear under a pointer that has not
+  // moved, and Enter must still pick the first suggestion then.
+  const optionsKey = `${query}#${options.map((option) => (option.kind === 'item' ? option.item.id : 'create')).join('|')}`;
   const [highlightState, setHighlightState] = useState({ optionsKey, index: 0 });
   const highlight = highlightState.optionsKey === optionsKey ? highlightState.index : 0;
   const setHighlight = (next: number | ((current: number) => number)) =>
@@ -115,6 +118,15 @@ export function AddItemSearch({
   };
 
   const highlighted = keyboard ? options[Math.min(highlight, options.length - 1)] : undefined;
+  // Which option the pointer is over (web), for its hover style only.
+  const [hovered, setHovered] = useState<string | null>(null);
+  const hoverProps = (id: string) =>
+    keyboard
+      ? {
+          onHoverIn: () => setHovered(id),
+          onHoverOut: () => setHovered((current) => (current === id ? null : current)),
+        }
+      : {};
 
   return (
     <View style={styles.root}>
@@ -146,7 +158,7 @@ export function AddItemSearch({
           <FormMessage tone="error" message="Couldn't load suggestions" testID="add-search-error" />
         ) : null}
         <View accessibilityLabel="Suggestions" style={styles.list}>
-          {suggestions.map((item, index) => {
+          {suggestions.map((item) => {
             const category = categoryName(item.categoryId) ?? '';
             const location = locationName(item.locationId) ?? '';
             const count = pantryCount(item.id);
@@ -161,8 +173,12 @@ export function AddItemSearch({
                 accessibilityRole="button"
                 accessibilityLabel={[item.name, category, location, ...badges].filter(Boolean).join(', ')}
                 onPress={() => pick({ kind: 'item', item }, false)}
-                onHoverIn={keyboard ? () => setHighlight(index) : undefined}
-                style={[styles.option, isHighlighted ? styles.optionHighlighted : null]}
+                {...hoverProps(item.id)}
+                style={[
+                  styles.option,
+                  hovered === item.id ? styles.optionHovered : null,
+                  isHighlighted ? styles.optionHighlighted : null,
+                ]}
               >
                 <View style={styles.optionText}>
                   <HighlightedName name={item.name} typed={trimmed} />
@@ -192,10 +208,11 @@ export function AddItemSearch({
               accessibilityState={{ disabled: createDisabled }}
               disabled={createDisabled}
               onPress={() => pick({ kind: 'create' }, false)}
-              onHoverIn={keyboard && !createDisabled ? () => setHighlight(suggestions.length) : undefined}
+              {...(createDisabled ? {} : hoverProps('create'))}
               style={[
                 styles.option,
                 styles.create,
+                hovered === 'create' ? styles.optionHovered : null,
                 highlighted?.kind === 'create' ? styles.optionHighlighted : null,
                 createDisabled ? styles.disabled : null,
               ]}
@@ -253,6 +270,7 @@ function createStyles(theme: Theme) {
       borderColor: theme.colors.border,
       backgroundColor: theme.colors.surface,
     },
+    optionHovered: { borderColor: theme.colors.primary },
     optionHighlighted: { borderColor: theme.colors.primary, backgroundColor: theme.colors.primarySubtle },
     create: { borderStyle: 'dashed' as const },
     disabled: { opacity: 0.7 },

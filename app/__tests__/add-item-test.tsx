@@ -48,6 +48,20 @@ jest.mock('@/api/query-client', () => {
 jest.mock('@/components/add-item-keyboard', () => ({ usesKeyboardHighlight: jest.fn(() => false) }));
 const mockUsesKeyboardHighlight = jest.requireMock('@/components/add-item-keyboard').usesKeyboardHighlight as jest.Mock;
 
+// Records where keyboard focus is sent (it still calls the real focusElement).
+jest.mock('@/components/focus', () => {
+  const actual = jest.requireActual('@/components/focus');
+  return { ...actual, focusElement: jest.fn(actual.focusElement) };
+});
+const mockFocusElement = jest.requireMock('@/components/focus').focusElement as jest.Mock;
+
+/** The test ID of the element focus was last sent to. */
+function lastFocused(): string | undefined {
+  const calls = mockFocusElement.mock.calls;
+  const element = calls[calls.length - 1]?.[0] as { props?: { testID?: string } } | null | undefined;
+  return element?.props?.testID;
+}
+
 const APP_DIR = './src/app';
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -737,6 +751,7 @@ describe('saving', () => {
 describe('keyboard (web)', () => {
   beforeEach(() => {
     mockUsesKeyboardHighlight.mockReturnValue(true);
+    mockFocusElement.mockClear();
   });
   afterEach(() => {
     mockUsesKeyboardHighlight.mockReturnValue(false);
@@ -760,6 +775,7 @@ describe('keyboard (web)', () => {
     await searchFor('milk');
     await enter();
     expect(within(screen.getByTestId('add-summary')).getByText('Milk')).toBeTruthy();
+    expect(lastFocused()).toBe('add-submit');
     // Focus is now on Add; a second Enter presses it.
     await submitAndWaitForReset();
     expect(lastEntry()).toMatchObject({ catalogItemId: MILK.id, level: 'full', locationId: 1, purchasedOn: today, expiresOn: addDays(today, 7) });
@@ -780,6 +796,45 @@ describe('keyboard (web)', () => {
     await key('ArrowUp');
     await enter();
     expect(within(screen.getByTestId('add-summary')).getByText('Oat milk')).toBeTruthy();
+  });
+
+  test('hovering a suggestion does not move the highlight, so Enter still picks the first', async () => {
+    await renderAdd();
+    await searchFor('milk');
+    // Browsers report a hover when results appear under a pointer that has not moved.
+    await act(async () => {
+      fireEvent(screen.getByTestId(`add-suggestion-${OAT_MILK.id}`), 'hoverIn', { nativeEvent: {} });
+    });
+    await enter();
+    expect(within(screen.getByTestId('add-summary')).getByText('Milk')).toBeTruthy();
+  });
+
+  test('new results move the highlight back to the first option', async () => {
+    await renderAdd();
+    await searchFor('mil');
+    await key('ArrowDown');
+    // "milk" finds the same two items: still new results, so Milk is highlighted again.
+    await searchFor('milk');
+    expect(screen.getByTestId(`add-suggestion-${OAT_MILK.id}`)).toBeTruthy();
+    await enter();
+    expect(within(screen.getByTestId('add-summary')).getByText('Milk')).toBeTruthy();
+  });
+
+  test('Create picked with Enter moves focus to the category, as Add is not usable yet', async () => {
+    await renderAdd();
+    await searchFor('Gochujang');
+    await enter();
+    expect(within(screen.getByTestId('add-summary')).getByText('New item, just for Home')).toBeTruthy();
+    expect(lastFocused()).toBe('add-category-1');
+  });
+
+  test('when locations fail to load, focus goes to their Retry', async () => {
+    server.use(http.get(apiUrl('/locations'), () => apiError(500, 'internal')));
+    await renderAdd();
+    await searchFor('milk');
+    await enter();
+    await screen.findByText("Couldn't load locations");
+    expect(lastFocused()).toBe('add-locations-retry');
   });
 
   test('on phones, Enter picks nothing', async () => {
