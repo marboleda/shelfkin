@@ -33,6 +33,11 @@ export const queryKeys = {
     invites: (householdId: string) => ['households', householdId, 'invites'] as const,
     catalogSearch: (householdId: string, query: string) =>
       ['households', householdId, 'catalog', 'search', query] as const,
+    /**
+     * One catalog item with the household's defaults. Not under `'catalog'`,
+     * so invalidating the household's search results leaves it alone.
+     */
+    catalogItem: (householdId: string, itemId: string) => ['households', householdId, 'catalog-items', itemId] as const,
   },
 };
 
