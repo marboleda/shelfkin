@@ -6,7 +6,7 @@ import { useMeQuery } from '@/auth/profile';
 import { AddItemButton } from '@/components/add-item-button';
 import { Button } from '@/components/button';
 import { HouseholdSwitcher } from '@/components/household-switcher';
-import { FilterLine, FilterPanel, PantryToolbar } from '@/components/pantry-controls';
+import { ExpiringCard, FilterLine, FilterPanel, PantryToolbar } from '@/components/pantry-controls';
 import { PantryList } from '@/components/pantry-list';
 import { Screen } from '@/components/screen';
 import { ThemedText } from '@/components/themed-text';
@@ -14,7 +14,15 @@ import { useIsWideLayout } from '@/hooks/use-is-wide-layout';
 import { useNow } from '@/hooks/use-now';
 import { useHouseholdKeys } from '@/household/current-household';
 import { useCategoriesQuery, useLocationNames, useLocationsQuery, usePantryQuery } from '@/pantry/pantry';
-import { buildSections, hasNoEntries, knownFilters, NO_FILTERS, type PantryFilters, type ViewMode } from '@/pantry/sections';
+import {
+  buildSections,
+  expiringSummary,
+  hasNoEntries,
+  knownFilters,
+  NO_FILTERS,
+  type PantryFilters,
+  type ViewMode,
+} from '@/pantry/sections';
 import { usePantryView, type PantryView } from '@/pantry/use-pantry-view';
 import { useTheme, useThemedStyles, type Theme } from '@/theme';
 
@@ -54,14 +62,17 @@ function PantryContent({ wide, view }: { wide: boolean; view: PantryView }) {
   const [panelOpen, setPanelOpen] = useState(false);
 
   const mode: ViewMode = view.choices?.mode ?? 'location';
-  // Saved IDs that are not in the loaded lists are ignored, and dropped the
-  // next time the choices are saved (every change saves these).
+  // From the API's expiryStatus only, across the whole pantry (filters aside).
+  const expiring = useMemo(() => expiringSummary(pantry.data?.groups ?? []), [pantry.data]);
+  // Saved IDs that are not in the loaded lists are ignored, as is Expiring
+  // while nothing is expiring; both are dropped the next time the choices are
+  // saved (every change saves these).
   const filters = useMemo<PantryFilters>(
     () =>
       view.choices && locations.data && categories.data
-        ? knownFilters(view.choices.filters, locations.data, categories.data)
+        ? knownFilters(view.choices.filters, locations.data, categories.data, expiring.count)
         : NO_FILTERS,
-    [view.choices, locations.data, categories.data],
+    [view.choices, locations.data, categories.data, expiring.count],
   );
   // Worked out from what is already loaded, so toggling and filtering send no request.
   const sections = useMemo(
@@ -81,6 +92,7 @@ function PantryContent({ wide, view }: { wide: boolean; view: PantryView }) {
     const setMode = (next: ViewMode) => view.setChoices({ mode: next, filters });
     const setFilters = (next: PantryFilters) => view.setChoices({ mode, filters: next });
     const clearFilters = () => setFilters(NO_FILTERS);
+    const setExpiring = (on: boolean) => setFilters({ ...filters, expiring: on });
 
     const refreshError = pantry.isError ? (
       <View role="alert" testID="pantry-refresh-error" style={styles.refreshError}>
@@ -131,6 +143,8 @@ function PantryContent({ wide, view }: { wide: boolean; view: PantryView }) {
               filters={filters}
               panelOpen={panelOpen}
               onTogglePanel={() => setPanelOpen((open) => !open)}
+              expiringCount={expiring.count}
+              onToggleExpiring={() => setExpiring(!filters.expiring)}
               wide={wide}
             />
             {panelOpen ? (
@@ -147,6 +161,9 @@ function PantryContent({ wide, view }: { wide: boolean; view: PantryView }) {
               filters={filters}
               onClear={clearFilters}
             />
+            {expiring.count > 0 && !filters.expiring ? (
+              <ExpiringCard count={expiring.count} names={expiring.names} onPress={() => setExpiring(true)} />
+            ) : null}
           </View>
         }
         empty={

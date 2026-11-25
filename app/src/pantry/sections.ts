@@ -6,22 +6,57 @@
 // location it has entries in, each row keeping only that location's entries,
 // so "×N", the summary and the highlight follow what the row shows.
 
-import type { Category, Location, PantryGroup } from './pantry';
+import type { Category, Location, PantryGroup, PantryListEntry } from './pantry';
 
 export type ViewMode = 'location' | 'category';
 
 export const VIEW_MODES: readonly ViewMode[] = ['location', 'category'];
 
 /**
- * The active filters, as location and category IDs. Several of one kind match
- * any of them; a location and a category must both match (the #20 rule).
+ * The active filters, as location and category IDs plus the Expiring chip.
+ * Several of one kind match any of them; a location, a category and Expiring
+ * must all match (the #20 rule).
  */
 export type PantryFilters = {
   locationIds: readonly number[];
   categoryIds: readonly number[];
+  /** Only entries that are expiring soon or expired (#110). */
+  expiring: boolean;
 };
 
-export const NO_FILTERS: PantryFilters = { locationIds: [], categoryIds: [] };
+export const NO_FILTERS: PantryFilters = { locationIds: [], categoryIds: [], expiring: false };
+
+/** The filter line's name for the Expiring chip. */
+export const EXPIRING_FILTER_NAME = 'Expiring';
+
+/**
+ * Whether an entry counts as expiring: not out, and the API's `expiryStatus`
+ * is `soon` or `expired`. Only the API's status is used (no date maths here),
+ * so the app agrees with the expiry push notifications (#22).
+ */
+export function isExpiring(entry: PantryListEntry): boolean {
+  return entry.level !== 'out' && (entry.expiryStatus === 'soon' || entry.expiryStatus === 'expired');
+}
+
+export type ExpiringSummary = {
+  /** How many entries are expiring, across the whole pantry (filters aside). */
+  count: number;
+  /** The names of the items with an expiring entry, each once, in the API's order. */
+  names: string[];
+};
+
+/** What the Expiring chip and summary card show, for the whole pantry. */
+export function expiringSummary(groups: readonly PantryGroup[]): ExpiringSummary {
+  let count = 0;
+  const names: string[] = [];
+  for (const group of groups) {
+    const expiring = group.entries.filter(isExpiring).length;
+    if (expiring === 0) continue;
+    count += expiring;
+    names.push(group.name);
+  }
+  return { count, names };
+}
 
 export type PantrySection = {
   /** Unique within one view, e.g. `location-2`, `category-5` or `unknown`. */
@@ -48,29 +83,39 @@ export function rowKey(sectionKey: string, catalogItemId: string): string {
   return `${sectionKey}:${catalogItemId}`;
 }
 
-/** How many filters are on, for "Filters · 2". */
+/**
+ * How many of the Filters panel's chips are on, for "Filters · 2". The
+ * Expiring chip sits outside the panel, so it is not counted.
+ */
 export function activeFilterCount(filters: PantryFilters): number {
   return filters.locationIds.length + filters.categoryIds.length;
 }
 
 /**
  * The filters with any ID that is not in the loaded lists dropped, in chip
- * order (the lists' order) and without duplicates.
+ * order (the lists' order) and without duplicates. Expiring is dropped when
+ * nothing is expiring (`expiringCount` 0), as its chip is hidden then.
  */
 export function knownFilters(
   filters: PantryFilters,
   locations: readonly Location[],
   categories: readonly Category[],
+  expiringCount: number,
 ): PantryFilters {
   const locationIds = new Set(filters.locationIds);
   const categoryIds = new Set(filters.categoryIds);
   return {
     locationIds: locations.filter((location) => locationIds.has(location.id)).map((location) => location.id),
     categoryIds: categories.filter((category) => categoryIds.has(category.id)).map((category) => category.id),
+    expiring: filters.expiring && expiringCount > 0,
   };
 }
 
-/** The names of the active filters, locations first, in chip order: ["Fridge", "Dairy"]. */
+/**
+ * The names of the active filters, Expiring first (its chip comes before the
+ * Filters button), then locations and categories in chip order:
+ * ["Expiring", "Fridge", "Dairy"].
+ */
 export function filterNames(
   filters: PantryFilters,
   locations: readonly Location[],
@@ -79,6 +124,7 @@ export function filterNames(
   const locationIds = new Set(filters.locationIds);
   const categoryIds = new Set(filters.categoryIds);
   return [
+    ...(filters.expiring ? [EXPIRING_FILTER_NAME] : []),
     ...locations.filter((location) => locationIds.has(location.id)).map((location) => location.name),
     ...categories.filter((category) => categoryIds.has(category.id)).map((category) => category.name),
   ];
@@ -91,22 +137,26 @@ export function toggleId(ids: readonly number[], id: number): number[] {
 
 /**
  * The groups the filters keep. A category filter keeps or drops whole groups
- * by `categoryId`; a location filter keeps only the matching entries of each
- * group and drops groups left with none. Groups and entries keep their order.
+ * by `categoryId`; a location filter and Expiring keep only the matching
+ * entries of each group (both must match) and drop groups left with none.
+ * Groups and entries keep their order.
  */
 export function filterGroups(groups: readonly PantryGroup[], filters: PantryFilters): PantryGroup[] {
   const categoryIds = filters.categoryIds.length > 0 ? new Set(filters.categoryIds) : null;
   const locationIds = filters.locationIds.length > 0 ? new Set(filters.locationIds) : null;
-  if (!categoryIds && !locationIds) return [...groups];
+  const { expiring } = filters;
+  if (!categoryIds && !locationIds && !expiring) return [...groups];
 
   const kept: PantryGroup[] = [];
   for (const group of groups) {
     if (categoryIds && !categoryIds.has(group.categoryId)) continue;
-    if (!locationIds) {
+    if (!locationIds && !expiring) {
       kept.push(group);
       continue;
     }
-    const entries = group.entries.filter((entry) => locationIds.has(entry.locationId));
+    const entries = group.entries.filter(
+      (entry) => (!locationIds || locationIds.has(entry.locationId)) && (!expiring || isExpiring(entry)),
+    );
     if (entries.length === 0) continue;
     kept.push(entries.length === group.entries.length ? group : { ...group, entries });
   }
