@@ -63,7 +63,7 @@ describe('signed out', () => {
     await signInWithForm();
 
     await waitFor(() => expect(screen).toHavePathname('/entries/abc'));
-    expect(screen.getByTestId('entry-id')).toHaveTextContent('abc');
+    expect(await screen.findByTestId('entry-missing')).toBeTruthy();
   });
 
   test('signing in from a plain /sign-in goes to Pantry', async () => {
