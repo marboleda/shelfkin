@@ -33,6 +33,14 @@ export function updateEntryIn(
   return found ? { ...pantry, groups } : pantry;
 }
 
+/**
+ * Returns the pantry with its entry of the same ID replaced by `entry`, or the
+ * same pantry when it has no such entry (it never adds one back).
+ */
+export function replaceEntryIn(pantry: Pantry, entry: PantryListEntry): Pantry {
+  return updateEntryIn(pantry, entry.id, () => entry);
+}
+
 /** Where a removed entry was, so it can be put back exactly there. */
 export type RemovedEntry = {
   entry: PantryListEntry;
