@@ -3,9 +3,11 @@ import type { Category, Location, PantryGroup } from '@/pantry/pantry';
 import {
   activeFilterCount,
   buildSections,
+  expiringSummary,
   filterGroups,
   filterNames,
   hasNoEntries,
+  isExpiring,
   knownFilters,
   NO_FILTERS,
   rowKey,
@@ -51,8 +53,8 @@ function ids(entries: { id: string }[]): string[] {
   return entries.map((entry) => entry.id);
 }
 
-function filters(locationIds: number[] = [], categoryIds: number[] = []): PantryFilters {
-  return { locationIds, categoryIds };
+function filters(locationIds: number[] = [], categoryIds: number[] = [], expiring = false): PantryFilters {
+  return { locationIds, categoryIds, expiring };
 }
 
 // Groups in the API's order (by name).
@@ -199,19 +201,86 @@ describe('filters', () => {
   });
 
   test('knownFilters drops unknown IDs and puts the rest in chip order', () => {
-    expect(knownFilters(filters([FREEZER, 42, FRIDGE], [9, DAIRY, PRODUCE]), LOCATIONS, CATEGORIES)).toEqual(
+    expect(knownFilters(filters([FREEZER, 42, FRIDGE], [9, DAIRY, PRODUCE]), LOCATIONS, CATEGORIES, 0)).toEqual(
       filters([FRIDGE, FREEZER], [PRODUCE, DAIRY]),
     );
+  });
+
+  test('knownFilters keeps Expiring only while something is expiring', () => {
+    expect(knownFilters(filters([], [], true), LOCATIONS, CATEGORIES, 2).expiring).toBe(true);
+    expect(knownFilters(filters([], [], true), LOCATIONS, CATEGORIES, 0).expiring).toBe(false);
+    expect(knownFilters(filters([], [], false), LOCATIONS, CATEGORIES, 2).expiring).toBe(false);
   });
 
   test('filterNames lists locations first, in chip order', () => {
     expect(filterNames(filters([FREEZER, FRIDGE], [DAIRY]), LOCATIONS, CATEGORIES)).toEqual(['Fridge', 'Freezer', 'Dairy']);
   });
 
-  test('activeFilterCount and toggleId', () => {
+  test('filterNames puts "Expiring" first', () => {
+    expect(filterNames(filters([FRIDGE], [DAIRY], true), LOCATIONS, CATEGORIES)).toEqual(['Expiring', 'Fridge', 'Dairy']);
+    expect(filterNames(filters([], [], true), LOCATIONS, CATEGORIES)).toEqual(['Expiring']);
+  });
+
+  test('activeFilterCount counts the panel\'s chips, not Expiring, and toggleId', () => {
     expect(activeFilterCount(filters([FRIDGE], [DAIRY, GRAINS]))).toBe(3);
+    expect(activeFilterCount(filters([FRIDGE], [], true))).toBe(1);
     expect(toggleId([1, 2], 3)).toEqual([1, 2, 3]);
     expect(toggleId([1, 2], 1)).toEqual([2]);
+  });
+});
+
+describe('expiring', () => {
+  const YOGURT_SOON = testEntry({ locationId: FRIDGE, expiresOn: '2026-11-04', expiryStatus: 'soon' });
+  const YOGURT_LATER = testEntry({ locationId: FRIDGE, expiresOn: '2026-12-01' });
+  const YOGURT_FREEZER_EXPIRED = testEntry({ locationId: FREEZER, expiresOn: '2026-10-30', expiryStatus: 'expired' });
+  const YOGURT = testGroup('Yogurt', [YOGURT_SOON, YOGURT_LATER, YOGURT_FREEZER_EXPIRED], { categoryId: DAIRY });
+  const BREAD_EXPIRED = testEntry({ locationId: PANTRY, expiresOn: '2026-11-01', expiryStatus: 'expired' });
+  const BREAD = testGroup('Bread', [BREAD_EXPIRED], { categoryId: GRAINS });
+  // Out entries are never expiring, whatever their status says.
+  const KALE = testGroup('Kale', [
+    testEntry({ locationId: FRIDGE, level: 'out', expiresOn: '2026-11-03', expiryStatus: 'soon' }),
+  ]);
+  const EXPIRING_GROUPS = [BREAD, ...GROUPS, KALE, YOGURT];
+
+  function expiringSections(mode: 'location' | 'category', active: PantryFilters) {
+    return buildSections(EXPIRING_GROUPS, { mode, filters: active, locations: LOCATIONS, categories: CATEGORIES });
+  }
+
+  test('isExpiring uses the API\'s expiryStatus only, and never for an out entry', () => {
+    expect(isExpiring(YOGURT_SOON)).toBe(true);
+    expect(isExpiring(BREAD_EXPIRED)).toBe(true);
+    expect(isExpiring(YOGURT_LATER)).toBe(false);
+    // A past date with no status is not counted: the app does no date maths.
+    expect(isExpiring(testEntry({ expiresOn: '2020-01-01', expiryStatus: null }))).toBe(false);
+    expect(isExpiring(KALE.entries[0])).toBe(false);
+  });
+
+  test('counting: every expiring entry across the pantry, and each item\'s name once in the API\'s order', () => {
+    expect(expiringSummary(EXPIRING_GROUPS)).toEqual({ count: 3, names: ['Bread', 'Yogurt'] });
+    expect(expiringSummary(GROUPS)).toEqual({ count: 0, names: [] });
+    expect(expiringSummary([])).toEqual({ count: 0, names: [] });
+  });
+
+  test('Expiring alone keeps only the expiring entries and drops groups left with none', () => {
+    const kept = filterGroups(EXPIRING_GROUPS, filters([], [], true));
+    expect(kept.map((group) => group.name)).toEqual(['Bread', 'Yogurt']);
+    expect(kept[0]).toBe(BREAD);
+    expect(ids(kept[1].entries)).toEqual(ids([YOGURT_SOON, YOGURT_FREEZER_EXPIRED]));
+  });
+
+  test('Expiring combined with a location filter: both must match', () => {
+    const kept = filterGroups(EXPIRING_GROUPS, filters([FRIDGE], [], true));
+    expect(kept.map((group) => group.name)).toEqual(['Yogurt']);
+    expect(ids(kept[0].entries)).toEqual(ids([YOGURT_SOON]));
+    expect(outline(expiringSections('location', filters([FRIDGE, FREEZER], [], true)))).toEqual([
+      ['Fridge', ['Yogurt']],
+      ['Freezer', ['Yogurt']],
+    ]);
+  });
+
+  test('Expiring combined with a category filter, and a combination that matches nothing', () => {
+    expect(outline(expiringSections('category', filters([], [DAIRY], true)))).toEqual([['Dairy', ['Yogurt ×2']]]);
+    expect(expiringSections('location', filters([PANTRY], [DAIRY], true))).toEqual([]);
   });
 });
 
