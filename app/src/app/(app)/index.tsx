@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 
 import { userMessage } from '@/api/errors';
@@ -64,9 +64,9 @@ function PantryContent({ wide, view }: { wide: boolean; view: PantryView }) {
   const mode: ViewMode = view.choices?.mode ?? 'location';
   // From the API's expiryStatus only, across the whole pantry (filters aside).
   const expiring = useMemo(() => expiringSummary(pantry.data?.groups ?? []), [pantry.data]);
-  // Saved IDs that are not in the loaded lists are ignored, as is Expiring
-  // while nothing is expiring; both are dropped the next time the choices are
-  // saved (every change saves these).
+  // Saved IDs that are not in the loaded lists are ignored, and dropped the
+  // next time the choices are saved (every change saves these). Expiring is
+  // ignored while nothing is expiring, and saved back as off below.
   const filters = useMemo<PantryFilters>(
     () =>
       view.choices && locations.data && categories.data
@@ -74,6 +74,19 @@ function PantryContent({ wide, view }: { wide: boolean; view: PantryView }) {
         : NO_FILTERS,
     [view.choices, locations.data, categories.data, expiring.count],
   );
+  // A saved Expiring with nothing expiring is saved back as off, so the chip
+  // does not come back already on when something starts expiring later. Only
+  // once the pantry has loaded successfully: a slow or failed request (the
+  // query's status is 'error' after a failed refresh, even with data) never
+  // wipes the choice. The rest of the saved choices are kept as saved.
+  const savedChoices = view.choices;
+  const setChoices = view.setChoices;
+  const staleExpiring = pantry.isSuccess && savedChoices?.filters.expiring === true && expiring.count === 0;
+  useEffect(() => {
+    if (staleExpiring && savedChoices) {
+      setChoices({ ...savedChoices, filters: { ...savedChoices.filters, expiring: false } });
+    }
+  }, [staleExpiring, savedChoices, setChoices]);
   // Worked out from what is already loaded, so toggling and filtering send no request.
   const sections = useMemo(
     () =>

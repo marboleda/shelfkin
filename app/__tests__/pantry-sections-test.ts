@@ -255,10 +255,48 @@ describe('expiring', () => {
     expect(isExpiring(KALE.entries[0])).toBe(false);
   });
 
-  test('counting: every expiring entry across the pantry, and each item\'s name once in the API\'s order', () => {
-    expect(expiringSummary(EXPIRING_GROUPS)).toEqual({ count: 3, names: ['Bread', 'Yogurt'] });
+  test('counting: items with an expiring entry, not entries, each name once, soonest first', () => {
+    // Yogurt has two expiring entries (counted once); its soonest, expired on
+    // 30 Oct, puts it before Bread (expired 1 Nov). Kale is out.
+    expect(expiringSummary(EXPIRING_GROUPS)).toEqual({ count: 2, names: ['Yogurt', 'Bread'] });
     expect(expiringSummary(GROUPS)).toEqual({ count: 0, names: [] });
     expect(expiringSummary([])).toEqual({ count: 0, names: [] });
+  });
+
+  test('one item with one expiring entry, and one item with two, both count 1', () => {
+    expect(expiringSummary([BREAD])).toEqual({ count: 1, names: ['Bread'] });
+    const milk = testGroup('Milk', [
+      testEntry({ locationId: FRIDGE, expiresOn: '2026-11-03', expiryStatus: 'soon' }),
+      testEntry({ locationId: FREEZER, expiresOn: '2026-11-04', expiryStatus: 'soon' }),
+    ]);
+    expect(expiringSummary([milk])).toEqual({ count: 1, names: ['Milk'] });
+  });
+
+  test('names are sorted by each item\'s soonest expiring entry: expired, then today, tomorrow and so on', () => {
+    const group = (name: string, ...entries: [string, 'soon' | 'expired' | null][]) =>
+      testGroup(
+        name,
+        entries.map(([expiresOn, expiryStatus]) => testEntry({ expiresOn, expiryStatus })),
+      );
+    // In the API's order (by name). TEST_TODAY is 2 Nov.
+    const groups = [
+      group('Apples', ['2026-11-04', 'soon']),
+      group('Bread', ['2026-11-03', 'soon']),
+      // Its soonest expiring entry (today) counts, not its later one; its
+      // entry with no status is not expiring, so its earlier date is ignored.
+      group('Cheese', ['2026-11-05', 'soon'], ['2026-11-02', 'soon'], ['2026-11-01', null]),
+      group('Eggs', ['2026-10-28', 'expired']),
+      group('Ham', ['2026-11-03', 'soon']),
+      group('Milk', ['2026-12-01', null]),
+    ];
+    expect(expiringSummary(groups)).toEqual({ count: 5, names: ['Eggs', 'Cheese', 'Bread', 'Ham', 'Apples'] });
+  });
+
+  test('items with the same soonest date keep the API\'s order', () => {
+    const groups = ['Apples', 'Bread', 'Cheese', 'Dates'].map((name, index) =>
+      testGroup(name, [testEntry({ expiresOn: index === 2 ? '2026-11-02' : '2026-11-04', expiryStatus: 'soon' })]),
+    );
+    expect(expiringSummary(groups).names).toEqual(['Cheese', 'Apples', 'Bread', 'Dates']);
   });
 
   test('Expiring alone keeps only the expiring entries and drops groups left with none', () => {
