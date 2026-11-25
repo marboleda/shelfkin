@@ -1144,7 +1144,7 @@ describe('view toggle and filters', () => {
       /** Lets the screen's save-back effect and the (mocked) storage write finish. */
       async function flushSave() {
         await act(async () => {
-          await new Promise((resolve) => setImmediate(resolve));
+          await new Promise<void>((resolve) => setImmediate(() => resolve()));
         });
       }
 
@@ -1199,7 +1199,7 @@ describe('view toggle and filters', () => {
         // Let the saved choices and the locations and categories load (setImmediate is not faked).
         for (let i = 0; i < 10; i += 1) {
           await act(async () => {
-            await new Promise((resolve) => setImmediate(resolve));
+            await new Promise<void>((resolve) => setImmediate(() => resolve()));
           });
         }
         expect(screen.getByTestId('pantry-loading')).toBeTruthy();

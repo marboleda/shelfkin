@@ -35,7 +35,7 @@ type PantryToolbarProps = {
  * "Group by", the Expiring chip and the Filters button, on one line (wrapping
  * when narrow). The chip and Filters wrap together, so on a phone Group by
  * takes the first line and they share the second, rather than Filters being
- * left alone on a line (#126).
+ * left alone on a line.
  */
 export function PantryToolbar({
   mode,
