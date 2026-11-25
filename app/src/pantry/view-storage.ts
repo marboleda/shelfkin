@@ -30,7 +30,8 @@ function idList(value: unknown): number[] | null {
 /**
  * The choices in a saved value, or the defaults when it is missing or
  * malformed. IDs are not checked against the locations and categories here;
- * the screen ignores unknown ones (see `knownFilters`).
+ * the screen ignores unknown ones (see `knownFilters`). A value saved before
+ * the Expiring chip (#110) has no `expiring`, which reads as off.
  */
 export function parsePantryView(raw: string | null): PantryViewChoices {
   if (raw === null) return DEFAULT_PANTRY_VIEW;
@@ -41,11 +42,13 @@ export function parsePantryView(raw: string | null): PantryViewChoices {
     return DEFAULT_PANTRY_VIEW;
   }
   if (typeof value !== 'object' || value === null) return DEFAULT_PANTRY_VIEW;
-  const { mode, locationIds, categoryIds } = value as Record<string, unknown>;
+  const { mode, locationIds, categoryIds, expiring = false } = value as Record<string, unknown>;
   const locations = idList(locationIds);
   const categories = idList(categoryIds);
-  if (!VIEW_MODES.includes(mode as ViewMode) || !locations || !categories) return DEFAULT_PANTRY_VIEW;
-  return { mode: mode as ViewMode, filters: { locationIds: locations, categoryIds: categories } };
+  if (!VIEW_MODES.includes(mode as ViewMode) || !locations || !categories || typeof expiring !== 'boolean') {
+    return DEFAULT_PANTRY_VIEW;
+  }
+  return { mode: mode as ViewMode, filters: { locationIds: locations, categoryIds: categories, expiring } };
 }
 
 export function serializePantryView(choices: PantryViewChoices): string {
@@ -53,6 +56,7 @@ export function serializePantryView(choices: PantryViewChoices): string {
     mode: choices.mode,
     locationIds: choices.filters.locationIds,
     categoryIds: choices.filters.categoryIds,
+    expiring: choices.filters.expiring,
   });
 }
 
