@@ -5,11 +5,13 @@ import { useHouseholds, useOptionalCurrentHousehold } from './current-household'
 
 /**
  * Screens that show one item of the current household (Add item, Entry
- * detail). After switching household they no longer apply, so the app goes to
+ * detail, Item settings). After switching household they no longer apply, so the app goes to
  * Pantry for the new household.
  */
 export function isHouseholdItemPath(pathname: string): boolean {
-  return pathname === '/add' || pathname.startsWith('/add/') || pathname.startsWith('/entries/');
+  return (
+    pathname === '/add' || pathname.startsWith('/add/') || pathname.startsWith('/entries/') || pathname.startsWith('/items/')
+  );
 }
 
 /**
