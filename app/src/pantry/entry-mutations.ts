@@ -6,6 +6,15 @@
 // mutation `scope`, so TanStack Query sends them one at a time in the order
 // they were made: an earlier change can never land after a later one.
 //
+// A failed change is undone by rebuilding the entry, not by putting back what
+// was on screen before it: while an entry has writes pending, it keeps a
+// confirmed version (what the last pantry fetch said, moved forward by every
+// write that has succeeded since), and the screen shows that version with the
+// changes still pending applied on top, in the order they were made. A failure
+// takes its own change out of that list, so the entry goes straight to what
+// the user should see: the latest change still on its way, or else the last
+// value the server accepted, and never the value of another failed change.
+//
 // A failed request that may succeed later (a network error or a 5xx) is
 // retried by TanStack Query with the same variables, so with the same
 // `eventId`: the API applies it once, and a change that succeeds on a retry is
@@ -15,7 +24,7 @@
 // refetched so `lastChange` and `expiryStatus` come from the server. Refetching
 // earlier would overwrite the optimistic values of the writes still pending.
 
-import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient, type Mutation, type QueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect } from 'react';
 
 import { isApiError, userMessage } from '@/api/errors';
@@ -27,7 +36,15 @@ import { newId } from '@/lib/ids';
 import { queryRetryDelay } from '@/lib/retry';
 
 import { deleteEntry, updateEntry, type UpdateEntryBody } from './entries';
-import { findEntry, provisionalExpiryStatus, removeEntryFrom, restoreEntryIn, updateEntryIn, type RemovedEntry } from './entry-cache';
+import {
+  findEntry,
+  provisionalExpiryStatus,
+  removeEntryFrom,
+  replaceEntryIn,
+  restoreEntryIn,
+  updateEntryIn,
+  type RemovedEntry,
+} from './entry-cache';
 import type { LastChange, StockLevel } from './format';
 import type { Pantry, PantryListEntry } from './pantry';
 
@@ -48,11 +65,6 @@ type UpdateVariables = {
   /** The item's name, for messages ("Couldn't update Milk. Try again."). */
   itemName: string;
 };
-
-/** What the entry was before the change, to put back if it fails. */
-type UpdateContext = {
-  previous: Pick<PantryListEntry, 'expiryStatus' | 'lastChange'> & { change: EntryChange };
-} | null;
 
 type DeleteVariables = {
   householdId: string;
@@ -87,10 +99,6 @@ const CHANGE_KEYS: Record<EntryField, string> = {
   purchasedOn: 'purchased_on',
   expiresOn: 'expires_on',
 };
-
-function currentValue(entry: PantryListEntry, field: EntryField): EntryChange {
-  return { field, value: entry[field] } as EntryChange;
-}
 
 function requestBody(change: EntryChange, eventId: string): UpdateEntryBody {
   switch (change.field) {
@@ -139,7 +147,7 @@ function isNotFound(error: unknown): boolean {
   return isApiError(error) && error.status === 404;
 }
 
-/** Marks the mutations whose optimistic changes `keepPendingWrites` re-applies. */
+/** Marks the mutations whose optimistic changes are applied on top of the confirmed entries. */
 type EntryWriteMeta = { entryWrite: 'update' | 'delete' };
 
 const UPDATE_META: EntryWriteMeta = { entryWrite: 'update' };
@@ -149,15 +157,103 @@ function isPantryKey(queryKey: readonly unknown[]): boolean {
   return queryKey.length === 3 && queryKey[0] === 'households' && queryKey[2] === 'entries';
 }
 
+/** A pending write to one entry. */
+type PendingWrite =
+  | { kind: 'update'; mutationId: number; variables: UpdateVariables }
+  | { kind: 'delete'; mutationId: number; variables: DeleteVariables };
+
+function asPendingWrite(mutation: Mutation<unknown, Error, unknown, unknown>): PendingWrite | null {
+  const kind = (mutation.options.meta as EntryWriteMeta | undefined)?.entryWrite;
+  const variables = mutation.state.variables;
+  if (!kind || !variables) return null;
+  return kind === 'update'
+    ? { kind, mutationId: mutation.mutationId, variables: variables as UpdateVariables }
+    : { kind, mutationId: mutation.mutationId, variables: variables as DeleteVariables };
+}
+
+/**
+ * The pending writes of the household (of one entry, with `entryId`), in the
+ * order they were made. Every write of a scope is pending from the moment it
+ * is made, even while it waits for the ones before it, and it is still pending
+ * while its own `onSuccess`, `onError` and `onSettled` run: those leave it out
+ * with `exceptEventId`.
+ */
+function pendingWrites(
+  queryClient: QueryClient,
+  householdId: string,
+  entryId?: string,
+  exceptEventId?: string,
+): PendingWrite[] {
+  const mutationKey = entryId ? entryMutationKey(householdId, entryId) : queryKeys.households.pantry(householdId);
+  return queryClient
+    .getMutationCache()
+    .findAll({ mutationKey, status: 'pending' })
+    .map(asPendingWrite)
+    .filter((write): write is PendingWrite => write !== null && write.variables.eventId !== exceptEventId)
+    .sort((a, b) => a.mutationId - b.mutationId);
+}
+
+/**
+ * The confirmed version of each entry that has writes pending, per
+ * QueryClient, by `householdId:entryId`: what the server is known to have.
+ *
+ * - The first write of a run sets it to the entry on screen. No write to the
+ *   entry is pending then, so nothing on screen is optimistic.
+ * - A pantry fetch that answers while writes are pending replaces it with the
+ *   fetched entry, before their changes are applied again on top of the answer.
+ * - A write that succeeds applies its change to it.
+ * - It is dropped once the entry's last pending write has settled.
+ */
+const confirmedEntries = new WeakMap<QueryClient, Map<string, PantryListEntry>>();
+
+function confirmed(queryClient: QueryClient): Map<string, PantryListEntry> {
+  let entries = confirmedEntries.get(queryClient);
+  if (!entries) {
+    entries = new Map();
+    confirmedEntries.set(queryClient, entries);
+  }
+  return entries;
+}
+
+function confirmedKey(householdId: string, entryId: string): string {
+  return `${householdId}:${entryId}`;
+}
+
+/**
+ * Shows the entry as its confirmed version with the `pending` changes applied
+ * on top, in order. Does nothing when there is no confirmed version or the
+ * pantry no longer has the entry (a pending delete has taken it out).
+ */
+function showRebuiltEntry(queryClient: QueryClient, householdId: string, entryId: string, pending: PendingWrite[]) {
+  const pantryKey = queryKeys.households.pantry(householdId);
+  const pantry = queryClient.getQueryData<Pantry>(pantryKey);
+  const base = confirmed(queryClient).get(confirmedKey(householdId, entryId));
+  if (!pantry || !base) return;
+  const me = queryClient.getQueryData<Me>(queryKeys.me());
+  let entry = base;
+  for (const write of pending) {
+    if (write.kind === 'update') entry = applyChange(entry, write.variables.change, pantry.today, me);
+  }
+  queryClient.setQueryData<Pantry>(pantryKey, replaceEntryIn(pantry, entry));
+}
+
+/** Drops the entry's confirmed version, unless another write to it is still pending. */
+function forgetWhenSettled(queryClient: QueryClient, variables: { householdId: string; entryId: string; eventId: string }) {
+  if (pendingWrites(queryClient, variables.householdId, variables.entryId, variables.eventId).length === 0) {
+    confirmed(queryClient).delete(confirmedKey(variables.householdId, variables.entryId));
+  }
+}
+
 const guardedClients = new WeakSet<QueryClient>();
 
 /**
  * Keeps the optimistic changes of pending writes on screen when a pantry
  * request that started after them (Pantry mounting, a pull to refresh)
- * answers with what the server had before they landed: their changes are
- * applied again on top of the answer, in the order they were made. Pantry
- * requests already on their way when a write starts are cancelled instead
- * (see `onMutate`). Installed once per QueryClient.
+ * answers with what the server had before they landed: the answer becomes the
+ * confirmed version of each entry with writes pending, and their changes are
+ * applied again on top of it, in the order they were made. Pantry requests
+ * already on their way when a write starts are cancelled instead (see
+ * `onMutate`). Installed once per QueryClient.
  */
 function keepPendingWrites(queryClient: QueryClient) {
   if (guardedClients.has(queryClient)) return;
@@ -166,25 +262,27 @@ function keepPendingWrites(queryClient: QueryClient) {
     if (event.type !== 'updated' || event.action.type !== 'success' || event.action.manual) return;
     const pantryKey = event.query.queryKey;
     if (!isPantryKey(pantryKey)) return;
-    const pending = queryClient
-      .getMutationCache()
-      .findAll({ mutationKey: pantryKey, status: 'pending' })
-      .filter((mutation) => (mutation.options.meta as EntryWriteMeta | undefined)?.entryWrite);
+    const householdId = String(pantryKey[1]);
+    const pending = pendingWrites(queryClient, householdId);
     if (pending.length === 0) return;
     const fetched = event.query.state.data as Pantry | undefined;
     if (!fetched) return;
+    const entries = confirmed(queryClient);
+    for (const write of pending) {
+      const found = findEntry(fetched, write.variables.entryId);
+      const key = confirmedKey(householdId, write.variables.entryId);
+      if (found) entries.set(key, found.entry);
+      else entries.delete(key);
+    }
     const me = queryClient.getQueryData<Me>(queryKeys.me());
     let pantry = fetched;
-    for (const mutation of pending) {
-      const kind = (mutation.options.meta as EntryWriteMeta).entryWrite;
-      if (kind === 'update') {
-        const variables = mutation.state.variables as UpdateVariables | undefined;
-        if (!variables) continue;
-        pantry = updateEntryIn(pantry, variables.entryId, (entry) => applyChange(entry, variables.change, pantry.today, me));
+    for (const write of pending) {
+      if (write.kind === 'update') {
+        pantry = updateEntryIn(pantry, write.variables.entryId, (entry) =>
+          applyChange(entry, write.variables.change, pantry.today, me),
+        );
       } else {
-        const variables = mutation.state.variables as DeleteVariables | undefined;
-        if (!variables) continue;
-        pantry = removeEntryFrom(pantry, variables.entryId)?.pantry ?? pantry;
+        pantry = removeEntryFrom(pantry, write.variables.entryId)?.pantry ?? pantry;
       }
     }
     if (pantry !== fetched) queryClient.setQueryData<Pantry>(pantryKey, pantry);
@@ -211,7 +309,7 @@ export function useUpdateEntry(entryId: string) {
 
   useEffect(() => keepPendingWrites(queryClient), [queryClient]);
 
-  const mutation = useMutation<unknown, unknown, UpdateVariables, UpdateContext>({
+  const mutation = useMutation<unknown, unknown, UpdateVariables>({
     mutationKey: entryMutationKey(householdId, entryId),
     meta: UPDATE_META,
     scope: entryMutationScope(householdId, entryId),
@@ -223,54 +321,52 @@ export function useUpdateEntry(entryId: string) {
       const pantryKey = queryKeys.households.pantry(variables.householdId);
       // A pantry request already on its way would overwrite the optimistic value with the old one.
       await queryClient.cancelQueries({ queryKey: pantryKey });
-      const pantry = queryClient.getQueryData<Pantry>(pantryKey);
-      const found = findEntry(pantry, variables.entryId);
-      if (!pantry || !found) return null;
-      const me = queryClient.getQueryData<Me>(queryKeys.me());
-      queryClient.setQueryData<Pantry>(
-        pantryKey,
-        updateEntryIn(pantry, variables.entryId, (entry) => applyChange(entry, variables.change, pantry.today, me)),
+      const found = findEntry(queryClient.getQueryData<Pantry>(pantryKey), variables.entryId);
+      if (!found) return;
+      const entries = confirmed(queryClient);
+      const key = confirmedKey(variables.householdId, variables.entryId);
+      // Only the first write of a run takes the entry on screen as confirmed. A pantry fetch that
+      // answers while this write is starting (this write is pending by then) sets the confirmed
+      // version to the fetched entry itself, so this change never becomes its own rollback value.
+      if (!entries.has(key)) entries.set(key, found.entry);
+      showRebuiltEntry(
+        queryClient,
+        variables.householdId,
+        variables.entryId,
+        pendingWrites(queryClient, variables.householdId, variables.entryId),
       );
-      return {
-        previous: {
-          change: currentValue(found.entry, variables.change.field),
-          expiryStatus: found.entry.expiryStatus,
-          lastChange: found.entry.lastChange,
-        },
-      };
     },
-    onError: (error, variables, context) => {
+    onSuccess: (_data, variables) => {
+      const entries = confirmed(queryClient);
+      const key = confirmedKey(variables.householdId, variables.entryId);
+      const base = entries.get(key);
+      const pantry = queryClient.getQueryData<Pantry>(queryKeys.households.pantry(variables.householdId));
+      if (!base || !pantry) return;
+      const me = queryClient.getQueryData<Me>(queryKeys.me());
+      entries.set(key, applyChange(base, variables.change, pantry.today, me));
+    },
+    onError: (error, variables) => {
       const pantryKey = queryKeys.households.pantry(variables.householdId);
-      const pantry = queryClient.getQueryData<Pantry>(pantryKey);
-      if (!pantry) return;
       if (isNotFound(error)) {
         // Deleted by someone else: Entry detail now says it isn't in the household any more.
-        const result = removeEntryFrom(pantry, variables.entryId);
+        const pantry = queryClient.getQueryData<Pantry>(pantryKey);
+        const result = pantry ? removeEntryFrom(pantry, variables.entryId) : null;
         if (result) queryClient.setQueryData<Pantry>(pantryKey, result.pantry);
         return;
       }
-      const previous = context?.previous;
-      const found = findEntry(pantry, variables.entryId);
-      // Put the old value back, unless a later change to the same field has replaced this one.
-      if (previous && found && found.entry[variables.change.field] === variables.change.value) {
-        queryClient.setQueryData<Pantry>(
-          pantryKey,
-          updateEntryIn(
-            pantry,
-            variables.entryId,
-            (entry) =>
-              ({
-                ...entry,
-                [previous.change.field]: previous.change.value,
-                expiryStatus: previous.expiryStatus,
-                lastChange: previous.lastChange,
-              }) as PantryListEntry,
-          ),
-        );
-      }
-      showNotice(updateErrorMessage(variables.itemName, error));
+      // The confirmed entry with the other pending changes on top: this change is gone, the others stay.
+      const others = pendingWrites(queryClient, variables.householdId, variables.entryId, variables.eventId);
+      showRebuiltEntry(queryClient, variables.householdId, variables.entryId, others);
+      // A later change to the same field, still on its way, has replaced this one: only its own failure counts.
+      const replaced = others.some(
+        (write) => write.kind === 'update' && write.variables.change.field === variables.change.field,
+      );
+      if (!replaced) showNotice(updateErrorMessage(variables.itemName, error));
     },
-    onSettled: (_data, _error, variables) => refreshWhenSettled(queryClient, variables.householdId),
+    onSettled: (_data, _error, variables) => {
+      forgetWhenSettled(queryClient, variables);
+      refreshWhenSettled(queryClient, variables.householdId);
+    },
   });
 
   const { mutate } = mutation;
@@ -324,7 +420,10 @@ export function useDeleteEntry(entryId: string) {
       }
       showNotice(deleteErrorMessage(variables.itemName, error));
     },
-    onSettled: (_data, _error, variables) => refreshWhenSettled(queryClient, variables.householdId),
+    onSettled: (_data, _error, variables) => {
+      forgetWhenSettled(queryClient, variables);
+      refreshWhenSettled(queryClient, variables.householdId);
+    },
   });
 
   const { mutate } = mutation;

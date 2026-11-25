@@ -12,7 +12,7 @@ import { useTheme } from '@/theme';
 
 /**
  * The app shell: Pantry and Settings in a bottom tab bar on narrow windows, or a left
- * side nav on wide ones. Add item and Entry detail live in the same navigator, so the
+ * side nav on wide ones. Add item, Entry detail and Item settings live in the same navigator, so the
  * Android back button returns to Pantry (the first route). They have no nav item because
  * `AppNav` only renders `NAV_ITEMS`; `href: null` is not used because it stops the routes
  * from being opened directly by URL. Signed-out users are sent to /sign-in, and users
@@ -50,6 +50,7 @@ function Shell() {
         <Tabs.Screen name="settings/household" options={{ title: 'Household' }} />
         <Tabs.Screen name="add" options={{ title: 'Add item' }} />
         <Tabs.Screen name="entries/[id]" options={{ title: 'Entry detail' }} />
+        <Tabs.Screen name="items/[id]" options={{ title: 'Item settings' }} />
       </Tabs>
       <HouseholdNotice />
     </View>

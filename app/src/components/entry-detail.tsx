@@ -204,6 +204,21 @@ function EntryForm({ group, entry, today }: EntryFormProps) {
         ) : null}
       </View>
 
+      <View style={styles.itemSection}>
+        <Text role="heading" aria-level={2} style={styles.sectionHeading}>
+          For all {name}
+        </Text>
+        <PressableLink
+          href={{ pathname: '/items/[id]', params: { id: group.catalogItemId, from: entry.id } }}
+          accessibilityRole="link"
+          accessibilityHint={`Default category and location for ${name}`}
+          style={styles.linkRow}
+          testID="entry-item-settings"
+        >
+          <Text style={styles.linkLabel}>Item settings ›</Text>
+        </PressableLink>
+      </View>
+
       <Button variant="danger" label="Delete this entry" onPress={() => setConfirming(true)} testID="entry-delete" />
 
       <ConfirmDialog
@@ -318,5 +333,8 @@ function createStyles(theme: Theme) {
       paddingHorizontal: theme.spacing.md,
     },
     linkLabel: { ...theme.typography.label, color: theme.colors.primary },
+    itemSection: { gap: theme.spacing.xs },
+    sectionHeading: { ...theme.typography.label, color: theme.colors.mutedText },
+    linkRow: { minHeight: MIN_TOUCH_TARGET, justifyContent: 'center' as const, alignSelf: 'flex-start' as const },
   };
 }
