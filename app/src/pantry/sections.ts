@@ -39,23 +39,45 @@ export function isExpiring(entry: PantryListEntry): boolean {
 }
 
 export type ExpiringSummary = {
-  /** How many entries are expiring, across the whole pantry (filters aside). */
+  /**
+   * How many items have an expiring entry, across the whole pantry (filters
+   * aside). Items, not entries, so the number matches the names: Milk expiring
+   * in the Fridge and the Freezer counts once (#126).
+   */
   count: number;
-  /** The names of the items with an expiring entry, each once, in the API's order. */
+  /**
+   * The names of those items, each once, soonest first: by each item's
+   * earliest `expiresOn` among its expiring entries (expired ones come first,
+   * as their dates are earliest). Ties keep the API's order (by name).
+   */
   names: string[];
 };
 
 /** What the Expiring chip and summary card show, for the whole pantry. */
 export function expiringSummary(groups: readonly PantryGroup[]): ExpiringSummary {
-  let count = 0;
-  const names: string[] = [];
+  const items: { name: string; soonest: string | null }[] = [];
   for (const group of groups) {
-    const expiring = group.entries.filter(isExpiring).length;
-    if (expiring === 0) continue;
-    count += expiring;
-    names.push(group.name);
+    let found = false;
+    let soonest: string | null = null;
+    for (const entry of group.entries) {
+      if (!isExpiring(entry)) continue;
+      found = true;
+      // `YYYY-MM-DD` strings sort as dates, so no date maths is needed.
+      if (entry.expiresOn && (soonest === null || entry.expiresOn < soonest)) soonest = entry.expiresOn;
+    }
+    if (found) items.push({ name: group.name, soonest });
   }
-  return { count, names };
+  // Array.prototype.sort is stable, so ties keep the API's order. An expiring
+  // entry always has a date in practice; one without sorts last.
+  items.sort((a, b) => compareDates(a.soonest, b.soonest));
+  return { count: items.length, names: items.map((item) => item.name) };
+}
+
+function compareDates(a: string | null, b: string | null): number {
+  if (a === b) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return a < b ? -1 : 1;
 }
 
 export type PantrySection = {

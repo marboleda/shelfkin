@@ -950,7 +950,11 @@ describe('view toggle and filters', () => {
 
       const chip = screen.getByRole('checkbox', { name: 'Expiring 3' });
       expect(within(chip).getByText('Expiring 3')).toBeTruthy();
-      expect(chip.parent).toBe(screen.getByTestId('pantry-group-by').parent);
+      // In the toolbar, next to Group by, wrapping together with Filters (#126).
+      const actions = screen.getByTestId('pantry-toolbar-actions');
+      expect(within(actions).getByTestId('pantry-expiring-chip')).toBeTruthy();
+      expect(within(actions).getByTestId('pantry-filters-button')).toBeTruthy();
+      expect(actions.parent).toBe(screen.getByTestId('pantry-group-by').parent);
       expect(chip.props.accessibilityState).toMatchObject({ checked: false });
       expect(chip).toHaveStyle({ backgroundColor: colors.light.expiringSubtle });
       expect(StyleSheet.flatten(within(chip).getByText('Expiring 3').props.style).color).toBe(colors.light.expiringSoon);
@@ -1056,6 +1060,171 @@ describe('view toggle and filters', () => {
       expect(screen.queryByTestId('pantry-expiring-card')).toBeNull();
       expect(screen.queryByTestId('pantry-filter-line')).toBeNull();
       expect(sectionOutline()).toEqual(['Fridge 1', 'Freezer 1', 'Pantry 1']);
+      // Group by and Filters, with no chip between them.
+      expect(within(screen.getByTestId('pantry-toolbar-actions')).getByTestId('pantry-filters-button')).toBeTruthy();
+    });
+
+    describe('the #110 QA seed: Milk expiring in the Fridge and the Freezer, plus six other items', () => {
+      // In the API's order (by name). TEST_TODAY is 2 Nov.
+      const MILK_FRIDGE = testEntry({ locationId: FRIDGE, expiresOn: '2026-11-04', expiryStatus: 'soon' });
+      const MILK_FREEZER = testEntry({ locationId: FREEZER, expiresOn: '2026-11-03', expiryStatus: 'soon' });
+      const SEED = [
+        testGroup('Apples', [testEntry({ locationId: PANTRY, expiresOn: '2026-11-05', expiryStatus: 'soon' })]),
+        testGroup('Bread', [testEntry({ locationId: PANTRY, expiresOn: '2026-10-30', expiryStatus: 'expired' })], {
+          categoryId: GRAINS,
+        }),
+        testGroup('Chicken', [testEntry({ locationId: FRIDGE, expiresOn: '2026-11-02', expiryStatus: 'soon' })]),
+        testGroup('Eggs', [testEntry({ locationId: FRIDGE, expiresOn: '2026-11-03', expiryStatus: 'soon' })]),
+        testGroup('Milk', [MILK_FRIDGE, MILK_FREEZER], { categoryId: DAIRY }),
+        PEAS,
+        testGroup('Spinach', [testEntry({ locationId: FRIDGE, expiresOn: '2026-11-01', expiryStatus: 'expired' })], {
+          categoryId: PRODUCE,
+        }),
+        testGroup('Yogurt', [testEntry({ locationId: FRIDGE, expiresOn: '2026-11-05', expiryStatus: 'soon' })], {
+          categoryId: DAIRY,
+        }),
+      ];
+      const SOONEST_FIRST = 'Bread, Spinach, Chicken, Eggs, Milk, Apples, Yogurt';
+
+      test('the chip says "Expiring 7" and the card "7 items expiring soon" above 7 names, soonest first', async () => {
+        server.use(pantryHandler(testPantry(SEED)));
+        await renderPantry();
+        await screen.findByTestId('pantry-section-location-1');
+
+        expect(screen.getByRole('checkbox', { name: 'Expiring 7' })).toBeTruthy();
+        const card = screen.getByTestId('pantry-expiring-card');
+        expect(within(card).getByText('7 items expiring soon')).toBeTruthy();
+        // Milk's soonest entry (3 Nov, in the Freezer) places it; Eggs keeps its API place on the tie.
+        expect(within(card).getByTestId('pantry-expiring-card-names')).toHaveTextContent(SOONEST_FIRST);
+        expect(card.props.accessibilityLabel).toBe(`7 items expiring soon: ${SOONEST_FIRST}`);
+      });
+
+      test('turning the chip on still shows every expiring entry: Milk in the Fridge and the Freezer', async () => {
+        server.use(pantryHandler(testPantry(SEED)));
+        await renderPantry();
+        await screen.findByTestId('pantry-section-location-1');
+
+        await press(screen.getByRole('checkbox', { name: 'Expiring 7' }));
+        expect(screen.getByRole('checkbox', { name: 'Expiring 7' }).props.accessibilityState).toMatchObject({ checked: true });
+        expect(screen.getByTestId(rowTestId(SEED[4], 'location-1'))).toBeTruthy();
+        expect(screen.getByTestId(rowTestId(SEED[4], 'location-2'))).toBeTruthy();
+        // Eight rows for seven items: Milk is in two sections. Peas (fresh) is dropped.
+        expect(sectionOutline()).toEqual(['Fridge 5', 'Freezer 1', 'Pantry 2']);
+        expect(screen.queryByText('Peas')).toBeNull();
+      });
+    });
+
+    test('with 18 expiring items, the card\'s two lines start with the most urgent', async () => {
+      // Named so the API's order (by name) is the reverse of the urgency order.
+      const groups = Array.from({ length: 18 }, (_, index) => {
+        const day = 18 - index; // Item 00 expires last (Nov 18), Item 17 first (Nov 1, expired).
+        const expiresOn = `2026-11-${String(day).padStart(2, '0')}`;
+        return testGroup(`Item ${String(index).padStart(2, '0')}`, [
+          testEntry({ locationId: FRIDGE, expiresOn, expiryStatus: day < 2 ? 'expired' : 'soon' }),
+        ]);
+      });
+      server.use(pantryHandler(testPantry(groups)));
+      await renderPantry();
+
+      const card = await screen.findByTestId('pantry-expiring-card');
+      expect(within(card).getByText('18 items expiring soon')).toBeTruthy();
+      const names = within(card).getByTestId('pantry-expiring-card-names');
+      expect(names.props.numberOfLines).toBe(2);
+      // The ellipsis cuts the end of the text, which is now the least urgent.
+      const expected = groups.map((group) => group.name).reverse().join(', ');
+      expect(names).toHaveTextContent(expected);
+      expect(String(names.props.children).startsWith('Item 17, Item 16, Item 15')).toBe(true);
+    });
+
+    describe('a saved Expiring with nothing expiring', () => {
+      // An unknown location ID (99) too: only Expiring is saved back, the rest stays as saved.
+      const SAVED = { mode: 'category', locationIds: [FREEZER, 99], categoryIds: [DAIRY], expiring: true };
+      const NOTHING_EXPIRING = [KALE_OUT, PEAS, RICE];
+
+      /** Lets the screen's save-back effect and the (mocked) storage write finish. */
+      async function flushSave() {
+        await act(async () => {
+          await new Promise((resolve) => setImmediate(resolve));
+        });
+      }
+
+      test('is saved back as off once the pantry loads; when something starts expiring the chip shows off', async () => {
+        await saveChoices(SAVED);
+        let groups = NOTHING_EXPIRING;
+        server.use(http.get(apiUrl('/households/:householdId/pantry'), () => HttpResponse.json(testPantry(groups))));
+        await renderPantry();
+        await screen.findByTestId('pantry-no-matches');
+
+        await flushSave();
+
+        expect((await savedChoices()).expiring).toBe(false);
+        expect(await savedChoices()).toEqual({ ...SAVED, expiring: false });
+
+        groups = [...NOTHING_EXPIRING, YOGURT_E];
+        await act(async () => {
+          await appQueryClient().refetchQueries({ queryKey: queryKeys.households.pantry(HOME.id) });
+        });
+        const chip = await screen.findByRole('checkbox', { name: 'Expiring 1' });
+        expect(chip.props.accessibilityState).toMatchObject({ checked: false });
+        expect(screen.getByTestId('pantry-expiring-card')).toBeTruthy();
+        expect(screen.getByText('Filtered: Freezer, Dairy')).toBeTruthy();
+        expect(await savedChoices()).toEqual({ ...SAVED, expiring: false });
+      });
+
+      test('an empty pantry counts as nothing expiring', async () => {
+        await saveChoices(SAVED);
+        server.use(pantryHandler(testPantry([])));
+        await renderPantry();
+        await screen.findByText('Your pantry is empty');
+
+        await flushSave();
+
+        expect(await savedChoices()).toEqual({ ...SAVED, expiring: false });
+      });
+
+      test('is left alone while the pantry is still loading', async () => {
+        await saveChoices(SAVED);
+        let release: () => void = () => {};
+        const held = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        server.use(
+          http.get(apiUrl('/households/:householdId/pantry'), async () => {
+            await held;
+            return HttpResponse.json(testPantry(NOTHING_EXPIRING));
+          }),
+        );
+        await renderPantry();
+        expect(await screen.findByTestId('pantry-loading')).toBeTruthy();
+        // Let the saved choices and the locations and categories load (setImmediate is not faked).
+        for (let i = 0; i < 10; i += 1) {
+          await act(async () => {
+            await new Promise((resolve) => setImmediate(resolve));
+          });
+        }
+        expect(screen.getByTestId('pantry-loading')).toBeTruthy();
+        expect(await savedChoices()).toEqual(SAVED);
+
+        await act(async () => {
+          release();
+        });
+        await screen.findByTestId('pantry-no-matches');
+        await flushSave();
+        expect((await savedChoices()).expiring).toBe(false);
+      });
+
+      test('is left alone when the pantry request fails', async () => {
+        await saveChoices(SAVED);
+        server.use(
+          http.get(apiUrl('/households/:householdId/pantry'), () =>
+            HttpResponse.json({ error: { code: 'internal', message: 'boom' } }, { status: 500 }),
+          ),
+        );
+        await renderPantry();
+        await screen.findByTestId('pantry-error');
+
+        expect(await savedChoices()).toEqual(SAVED);
+      });
     });
 
     test('the chip state is restored from storage with the other filters', async () => {

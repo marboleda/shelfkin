@@ -24,14 +24,19 @@ type PantryToolbarProps = {
   filters: PantryFilters;
   panelOpen: boolean;
   onTogglePanel: () => void;
-  /** Entries expiring soon or expired, from `expiringSummary`. The Expiring chip is hidden at 0. */
+  /** Items with an entry expiring soon or expired, from `expiringSummary`. The Expiring chip is hidden at 0. */
   expiringCount: number;
   onToggleExpiring: () => void;
   /** At 768 px and wider the segmented control is sized to its options instead of filling the line. */
   wide?: boolean;
 };
 
-/** "Group by", the Expiring chip and the Filters button, on one line (wrapping when narrow). */
+/**
+ * "Group by", the Expiring chip and the Filters button, on one line (wrapping
+ * when narrow). The chip and Filters wrap together, so on a phone Group by
+ * takes the first line and they share the second, rather than Filters being
+ * left alone on a line (#126).
+ */
 export function PantryToolbar({
   mode,
   onModeChange,
@@ -77,22 +82,24 @@ export function PantryToolbar({
           );
         })}
       </View>
-      {expiringCount > 0 ? (
-        <ExpiringChip count={expiringCount} selected={filters.expiring} onPress={onToggleExpiring} />
-      ) : null}
-      <Pressable
-        testID="pantry-filters-button"
-        accessibilityRole="button"
-        aria-label={label}
-        aria-expanded={panelOpen}
-        accessibilityState={{ expanded: panelOpen }}
-        accessibilityHint={panelOpen ? 'Hides the filters' : 'Shows the filters'}
-        onPress={onTogglePanel}
-        style={[styles.filtersButton, count > 0 ? styles.filtersButtonActive : null]}
-      >
-        <Feather name="sliders" size={16} color={count > 0 ? theme.colors.primary : theme.colors.text} aria-hidden />
-        <Text style={styles.filtersLabel}>{label}</Text>
-      </Pressable>
+      <View testID="pantry-toolbar-actions" style={styles.toolbarActions}>
+        {expiringCount > 0 ? (
+          <ExpiringChip count={expiringCount} selected={filters.expiring} onPress={onToggleExpiring} />
+        ) : null}
+        <Pressable
+          testID="pantry-filters-button"
+          accessibilityRole="button"
+          aria-label={label}
+          aria-expanded={panelOpen}
+          accessibilityState={{ expanded: panelOpen }}
+          accessibilityHint={panelOpen ? 'Hides the filters' : 'Shows the filters'}
+          onPress={onTogglePanel}
+          style={[styles.filtersButton, count > 0 ? styles.filtersButtonActive : null]}
+        >
+          <Feather name="sliders" size={16} color={count > 0 ? theme.colors.primary : theme.colors.text} aria-hidden />
+          <Text style={styles.filtersLabel}>{label}</Text>
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -267,6 +274,16 @@ function createStyles(theme: Theme) {
     toolbar: {
       flexDirection: 'row' as const,
       flexWrap: 'wrap' as const,
+      alignItems: 'center' as const,
+      gap: theme.spacing.sm,
+    },
+    // The Expiring chip and Filters: they wrap as one, and between themselves
+    // only when even a line of their own is too narrow (320 px).
+    toolbarActions: {
+      flexDirection: 'row' as const,
+      flexWrap: 'wrap' as const,
+      flexShrink: 1,
+      maxWidth: '100%' as const,
       alignItems: 'center' as const,
       gap: theme.spacing.sm,
     },
