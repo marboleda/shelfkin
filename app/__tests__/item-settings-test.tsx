@@ -1,5 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { act, fireEvent, waitFor, within } from '@testing-library/react-native';
+import { router } from 'expo-router';
 import { renderRouter, screen } from 'expo-router/testing-library';
 import { http, HttpResponse } from 'msw';
 import { Dimensions } from 'react-native';
@@ -263,6 +264,42 @@ describe('opening', () => {
 
     await press(screen.getByTestId('item-missing-back'));
     await waitFor(() => expect(screen).toHavePathname('/'));
+  });
+
+  test('a malformed ID (400 invalid_id) says the item is not available too', async () => {
+    server.use(http.get(apiUrl('/households/:householdId/catalog-items/:itemId'), () => apiError(400, 'invalid_id')));
+    await renderRouter(APP_DIR, { initialUrl: '/items/not-a-real-id' });
+    expect(await screen.findByTestId('item-missing')).toHaveTextContent(/This item isn't available/);
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+  });
+
+  test('a draft and the location note do not carry over to the next item', async () => {
+    const kimchiId = '0190f3a1-7c2e-7b3d-9a4f-00000000b003';
+    catalogApi.state.items.set(kimchiId, {
+      item: salsaItem({ id: kimchiId, name: 'Kimchi', shelfLifeDays: 14 }),
+      builtIn: undefined,
+    });
+    catalogApi.state.items.get(SALSA_ID)!.item = salsaItem({ shelfLifeDays: 14 });
+    // Both items cached, so the second opens straight from the cache on the same mounted screen.
+    await openItem(SALSA_ID);
+    await act(async () => {
+      router.navigate(`/items/${kimchiId}`);
+    });
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Kimchi' })).toBeTruthy());
+
+    await press(screen.getByTestId(`item-location-${FREEZER}`));
+    await waitFor(() => expect(screen.getByTestId('item-location-note')).toBeTruthy());
+    await typeShelfLife('abc');
+    expect(screen.getByText(/Enter a whole number of days from 1 to 3650/)).toBeTruthy();
+    await waitForSaved();
+
+    await act(async () => {
+      router.navigate(`/items/${SALSA_ID}`);
+    });
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Salsa' })).toBeTruthy());
+    expect(screen.getByTestId('item-shelf-life').props.value).toBe('14');
+    expect(screen.queryByText(/Enter a whole number of days/)).toBeNull();
+    expect(screen.queryByTestId('item-location-note')).toBeNull();
   });
 
   test('another error can be retried', async () => {

@@ -43,13 +43,14 @@ export function ItemSettings({ itemId, fromEntryId }: ItemSettingsProps) {
   if (item.data) {
     return (
       <Screen title={item.data.name} inShell accessory={back}>
-        <ItemSettingsForm item={item.data} />
+        {/* Keyed by item: a draft or location note never carries over to another item reusing this screen. */}
+        <ItemSettingsForm key={item.data.id} item={item.data} />
       </Screen>
     );
   }
 
   let body;
-  if (item.isError && isApiError(item.error) && item.error.status === 404) {
+  if (item.isError && isUnavailable(item.error)) {
     body = (
       <View testID="item-missing" style={styles.centered}>
         <Text role="alert" style={styles.centeredText}>
@@ -85,6 +86,11 @@ export function ItemSettings({ itemId, fromEntryId }: ItemSettingsProps) {
       {body}
     </Screen>
   );
+}
+
+/** A 404 (unknown item, or another household's custom item), or an ID that is not an ID at all (400 `invalid_id`). */
+function isUnavailable(error: unknown): boolean {
+  return isApiError(error) && (error.status === 404 || (error.status === 400 && error.code === 'invalid_id'));
 }
 
 function BackLink({ fromEntryId }: { fromEntryId?: string | null }) {
