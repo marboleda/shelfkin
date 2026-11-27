@@ -1,4 +1,4 @@
-import { useId, type ChangeEvent, type CSSProperties } from 'react';
+import { useId, type ChangeEvent, type CSSProperties, type KeyboardEvent } from 'react';
 import { Pressable, Text, View } from 'react-native';
 
 import { MIN_TOUCH_TARGET, useTheme, useThemedStyles, type Theme } from '@/theme';
@@ -12,7 +12,18 @@ export type { DateFieldProps } from './date-field-props';
  * not run in a browser, so this uses `<input type="date">`, whose value is
  * already `YYYY-MM-DD` (or '' when emptied).
  */
-export function DateField({ label, value, onChange, error, hint, clearLabel, disabled = false, testID = 'date-field' }: DateFieldProps) {
+export function DateField({
+  label,
+  value,
+  onChange,
+  error,
+  hint,
+  clearLabel,
+  disabled = false,
+  testID = 'date-field',
+  onBlur,
+  onSubmitEditing,
+}: DateFieldProps) {
   const styles = useThemedStyles(createStyles);
   const theme = useTheme();
   const id = useId();
@@ -33,6 +44,14 @@ export function DateField({ label, value, onChange, error, hint, clearLabel, dis
           aria-invalid={error ? true : undefined}
           aria-describedby={error || hint ? messageId : undefined}
           onChange={(event: ChangeEvent<HTMLInputElement>) => onChange(event.target.value)}
+          onBlur={onBlur ? () => onBlur() : undefined}
+          onKeyDown={
+            onSubmitEditing
+              ? (event: KeyboardEvent<HTMLInputElement>) => {
+                  if (event.key === 'Enter') onSubmitEditing();
+                }
+              : undefined
+          }
           style={{
             flex: 1,
             minWidth: 0,

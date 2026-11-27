@@ -3,15 +3,14 @@
 // per change, see src/pantry/entry-mutations.ts); there is no Save button.
 
 import { useQuery } from '@tanstack/react-query';
-import { useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Platform, Text, View } from 'react-native';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
+import { ActivityIndicator, Text, View } from 'react-native';
 
 import { userMessage } from '@/api/errors';
 import { useMeQuery } from '@/auth/profile';
 import { useNow } from '@/hooks/use-now';
 import { useCurrentHousehold, useHouseholdKeys } from '@/household/current-household';
-import { isValidCalendarDate } from '@/pantry/dates';
 import { findEntry } from '@/pantry/entry-cache';
 import { useDeleteEntry, useUpdateEntry, type EntryChange } from '@/pantry/entry-mutations';
 import { expiryLabel, formatCalendarDate, lastChangeLabel, type StockLevel } from '@/pantry/format';
@@ -28,14 +27,7 @@ import { FormMessage } from './form-message';
 import { LevelPicker } from './level-picker';
 import { PressableLink } from './pressable-link';
 import { Screen } from './screen';
-
-/**
- * How long a typed date waits before it is saved. On web the date is typed
- * into `<input type="date">`, which reports a valid date after every digit of
- * the year ("0002", "0020", "0202", "2026"), so it waits until typing pauses.
- * A native picker reports the chosen date once, which is saved at once.
- */
-export const DATE_SAVE_DELAY_MS = Platform.OS === 'web' ? 800 : 0;
+import { DATE_SAVE_MODE, useDateDraft } from './use-date-draft';
 
 /**
  * The detail screen for `/entries/<id>`. It reads the entry from the current
@@ -248,63 +240,33 @@ type EntryDateFieldProps = {
 };
 
 /**
- * A `DateField` that saves each date it is given. It keeps what is being
- * typed (web) until it is a whole date and typing pauses, so a half-typed date
- * is neither saved nor replaced by the saved one.
+ * A `DateField` that saves the dates it is given. A native picker's date is
+ * saved at once. On web a typed date is saved when the person has finished
+ * (leaving the field, Enter, leaving the screen or hiding the page), never
+ * after a pause, since `<input type="date">` reports a valid date after every
+ * digit of the year. Until then what is typed is kept, so a half-typed date is
+ * neither saved nor replaced by the saved one (see use-date-draft.ts).
  */
 function EntryDateField({ label, testID, value, onSave, incompleteHint, hint }: EntryDateFieldProps) {
-  const [draft, setDraft] = useState<{ text: string; saved: string } | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pending = useRef<string | null>(null);
-  const onSaveRef = useRef(onSave);
-  useEffect(() => {
-    onSaveRef.current = onSave;
-  });
-
-  // A draft is dropped once the saved date changes under it (a save, a rollback, someone else's change).
-  const shown = draft && draft.saved === value ? draft.text : value;
-
-  const flush = () => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = null;
-    const next = pending.current;
-    pending.current = null;
-    if (next !== null) onSaveRef.current(next);
-  };
-
-  // Save a date that is still waiting when the screen goes away.
-  useEffect(() => flush, []);
-
-  const onChange = (text: string) => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = null;
-    pending.current = null;
-    if (!isValidCalendarDate(text)) {
-      setDraft({ text, saved: value });
-      return;
-    }
-    if (DATE_SAVE_DELAY_MS <= 0) {
-      setDraft(null);
-      onSave(text);
-      return;
-    }
-    setDraft({ text, saved: value });
-    pending.current = text;
-    timer.current = setTimeout(flush, DATE_SAVE_DELAY_MS);
-  };
-
-  const incomplete = shown !== '' && !isValidCalendarDate(shown);
-  const emptied = shown === '' && value !== '';
+  const draft = useDateDraft(value, onSave, DATE_SAVE_MODE);
+  const { commit } = draft;
+  // Leaving the screen doesn't always unmount it (the app's screens are tabs), so save on blur too.
+  useFocusEffect(useCallback(() => commit, [commit]));
   return (
     <DateField
       label={label}
       testID={testID}
-      value={shown}
-      onChange={onChange}
-      hint={incomplete || emptied ? incompleteHint : hint}
+      value={draft.shown}
+      onChange={draft.onChange}
+      onBlur={commit}
+      onSubmitEditing={commit}
+      hint={draft.status === 'incomplete' ? incompleteHint : draft.status === 'unsaved' ? UNSAVED_DATE_HINT : hint}
     />
   );
 }
+
+/** The hint under a typed date that is not saved yet (web). */
+const UNSAVED_DATE_HINT = 'Press Enter or leave the field to save';
 
 function createStyles(theme: Theme) {
   return {

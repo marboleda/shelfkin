@@ -35,6 +35,21 @@ export function isValidCalendarDate(value: string): boolean {
   return date.month >= 1 && date.month <= 12 && date.day >= 1 && date.day <= daysInMonth(date.year, date.month);
 }
 
+/** The years a typed pantry date can plausibly be in (see `isPlausibleCalendarDate`). */
+export const PLAUSIBLE_YEARS = { from: 2000, to: 2099 } as const;
+
+/**
+ * Whether `value` is a valid date whose year is 2000-2099. A browser's
+ * `<input type="date">` reports a valid date after every digit of the year
+ * ("0002", "0020", "0202", "2026"), so a year outside this range is treated as
+ * still being typed.
+ */
+export function isPlausibleCalendarDate(value: string): boolean {
+  if (!isValidCalendarDate(value)) return false;
+  const { year } = parseCalendarDate(value)!;
+  return year >= PLAUSIBLE_YEARS.from && year <= PLAUSIBLE_YEARS.to;
+}
+
 // Days since 1970-01-01 for a proleptic Gregorian date, and back
 // (Howard Hinnant's `days_from_civil` / `civil_from_days`).
 function daysFromCivil(year: number, month: number, day: number): number {
