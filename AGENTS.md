@@ -17,3 +17,7 @@ Reference `docs/process.md` to see how work is organized and how features should
 ## Expo conventions
 
 Reference `app/AGENTS.md` for context only when modifying Expo/React Native code.
+
+## General conventions
+
+- When updating the README.md, make sure to clearly separate instructions between local development and production setup. Put local setup instructions under the `##Local development` section, put production setup instructions under the `##Production` section.

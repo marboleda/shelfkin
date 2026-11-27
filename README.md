@@ -34,7 +34,7 @@ SQL migrations live in `api/db/migrations/` (see [Local database](#local-databas
 
 ## Local development
 
-Everything you need to run, change and test Shelfkin on your own machine. Nothing here touches the production project.
+Everything you need to run, change and test Shelfkin on your own machine.
 
 1. Install the [requirements](#requirements) and the app's dependencies ([Getting started](#getting-started)).
 2. Start Postgres and the Auth emulator and apply the migrations ([Local database](#local-database)).
