@@ -32,12 +32,22 @@ Don't feel the need to read all the README contents below as it's quite technica
 
 SQL migrations live in `api/db/migrations/` (see [Local database](#local-database)).
 
-## Requirements
+## Local development
+
+Everything you need to run, change and test Shelfkin on your own machine. Nothing here touches the production project.
+
+1. Install the [requirements](#requirements) and the app's dependencies ([Getting started](#getting-started)).
+2. Start Postgres and the Auth emulator and apply the migrations ([Local database](#local-database)).
+3. Run the API ([Running the API](#running-the-api)), then the app.
+4. Run the [tests](#tests) before opening a pull request.
+
+### Requirements
 
 - Go 1.26+
 - Node.js 24+ and npm
+- Docker with Compose v2 (for the local database and Auth emulator)
 
-## Getting started
+### Getting started
 
 Install the app's dependencies once:
 
@@ -51,7 +61,7 @@ Run the app (press `w` for web, or scan the QR code with Expo Go). To sign in lo
 npm --prefix app start
 ```
 
-## Local database
+### Local database
 
 The API uses PostgreSQL 18, the newest major version Cloud SQL for PostgreSQL offers; Cloud SQL must run the same major version. Locally it runs in Docker from [`compose.yaml`](compose.yaml), using a pinned `postgres:18.x` image. You need Docker with Compose v2. Migrations live in `api/db/migrations/` and are applied by a small Go program built on goose, so you do not need goose installed.
 
@@ -81,7 +91,7 @@ New migrations go in `api/db/migrations/` and are named `YYYYMMDDHHMMSS_name.sql
 
 Go tests that need a database call `dbtest.New(t)` from `api/db/dbtest`. It creates a database named `shelfkin_test_<random>`, applies every migration, returns a `pgxpool.Pool` and drops the database when the test ends. If Postgres is not reachable, the test fails, so run `npm run db:up` before `npm test`. The same goes for the auth emulator integration tests, which fail rather than skip when the emulator is not running.
 
-## Running the API
+### Running the API
 
 The API server is `api/main.go`. It reads its configuration from environment variables:
 
@@ -124,13 +134,13 @@ go -C api run .
 
 Change `5432` if you set `SHELFKIN_DB_PORT`, and `9099` if you set `SHELFKIN_AUTH_PORT`. Check it with `curl http://localhost:8080/health`, which returns `{"status":"ok"}`, or 503 with code `database_unavailable` if the database does not answer within 2s. The server starts even when the database is down. Logs are JSON lines on stdout: a `listening` line with the port, one `request` line per request (method, path, status, `duration_ms`), and a `stopped` line after shutdown. Ctrl+C (or SIGTERM) stops it gracefully: it stops accepting connections, gives in-flight requests up to 9s to finish, closes the database pool and exits 0.
 
-### Authentication
+#### Authentication
 
 Every endpoint except `GET /health` needs a Firebase ID token in an `Authorization: Bearer <token>` header. Without one, or with a token that is malformed, expired or issued for another project, the API returns 401 with code `unauthorized`. The first request from a Firebase user creates their Shelfkin user: the display name comes from the token's `name` claim, else the part of the email before `@`, else `Shelfkin user`, and the time zone starts as `UTC`. Later requests copy a changed email from the token but never overwrite the display name. `GET /me` returns the caller's profile and `PATCH /me` changes `displayName` and `timezone`.
 
 Tokens are verified with the Firebase Admin SDK, which caches Google's public keys; it does not check for revoked tokens, since ID tokens expire within an hour.
 
-### Auth emulator
+#### Auth emulator
 
 Locally, and in tests and CI, the API uses the [Firebase Auth emulator](https://firebase.google.com/docs/emulator-suite/connect_auth), never a real Firebase project. It runs as the `auth` service in `compose.yaml` (`firebase-tools` pinned to an exact version, built into a small Node image), so you need neither Java nor a global `firebase-tools`. `npm run db:up` starts it together with Postgres; the first run builds the image, which takes a minute. It serves the demo project `demo-shelfkin` (the `demo-` prefix means it can never reach a real project) on `localhost:9099`, or the port in `SHELFKIN_AUTH_PORT`. Its users live in memory and disappear when it stops.
 
@@ -158,21 +168,15 @@ The app uses the same emulator in development: see [Sign-in and the Auth emulato
 
 Go tests that need an authenticated caller do not need the emulator: build the server with `authtest.NewVerifier()` (`api/internal/auth/authtest`) and send `authtest.Bearer(v.Issue(auth.Token{UID: "alice", Name: "Alice"}))` as the `Authorization` header. Only the integration tests that check real token verification use the emulator.
 
-### CORS
+#### CORS
 
 The web app is served from a different origin than the API, so the API sends CORS headers. For a request whose `Origin` is in `CORS_ALLOWED_ORIGINS`, every response (including 4xx and 5xx errors, so the app can read the error body) carries `Access-Control-Allow-Origin` set to that origin and `Vary: Origin`. A preflight (`OPTIONS` with `Access-Control-Request-Method`) from an allowed origin gets 204, allowing the methods `GET`, `POST`, `PATCH` and `DELETE` and the headers `Authorization` and `Content-Type`, cached for 10 minutes. Requests from any other origin are still served but get no CORS headers, so the browser does not let the page read the response. `*` is never sent, because requests carry a bearer token; `Access-Control-Allow-Credentials` is not sent either, since auth does not use cookies.
 
 Locally the default allows `npx expo start --web` on `http://localhost:8081`. If you run Expo web on another port or open it as `http://127.0.0.1:8081`, set `CORS_ALLOWED_ORIGINS` to that origin (setting it replaces the default, so list `http://localhost:8081` too if you still need it).
 
-In production set it to both Firebase Hosting origins of the web app:
+For the production value, see [CORS in production](#cors-in-production).
 
-```
-CORS_ALLOWED_ORIGINS=https://<hosting_site_id>.web.app,https://<hosting_site_id>.firebaseapp.com
-```
-
-which is `https://shelfkin-5da75.web.app,https://shelfkin-5da75.firebaseapp.com` for the site ID in [Infrastructure](#infrastructure). Terraform sets this on the `shelfkin-api` Cloud Run service (`infra/run.tf`). Add any custom domain here if one is added later.
-
-## Expiry notification job
+### Expiry notification job
 
 `api/cmd/expiry-job` sends expiry push notifications. It runs once and exits, and runs hourly in production as a Cloud Run job (see [Expiry job in production](#expiry-job-in-production)). Each run handles every user with `push_enabled` and at least one push token whose local hour (from `users.timezone`, or UTC if that cannot be loaded) is 9, and sends them one push per household listing the items there that are not `out` and expire within 3 days (already expired ones included), via the [Expo Push API](https://docs.expo.dev/push-notifications/sending-notifications/). Each entry is announced to each user once per expiry date (recorded in `expiry_notifications`), so running it twice in the same hour sends nothing the second time. Each run also deletes `expiry_notifications` rows whose expiry date is more than 30 days ago.
 
@@ -204,7 +208,7 @@ $env:DATABASE_URL = 'postgres://shelfkin:shelfkin@localhost:5432/shelfkin?sslmod
 
 Without `--dry-run` it sends real pushes to the tokens in the database. Logs are JSON lines on stdout and never contain push tokens; outside dry runs they contain no item names either. Every run ends with one `expiry job finished` line with `users_processed`, `pushes_sent` (messages Expo accepted, one per household per device) and `failures` (users whose processing failed). The process exits 1 if any user failed, and 0 otherwise. A failure for one user (a database error, an Expo error after 3 retries of HTTP 429 or 5xx, or every token rejected) does not stop the others; that user's entries are not recorded and are tried again at their next 9am. Tokens Expo reports as `DeviceNotRegistered` are deleted. All database access runs as `shelfkin_app` through `api/internal/dbtx`, as the user being processed, so row-level security applies.
 
-## API spec and generated code
+### API spec and generated code
 
 The API contract lives in one file, [`openapi/openapi.yaml`](openapi/openapi.yaml). Its `info.description` lists the shared conventions (IDs, timestamps, dates, error format, auth). Generated code:
 
@@ -224,7 +228,7 @@ npm run generate
 
 Queries go in `api/db/queries/*.sql`, each starting with a sqlc annotation such as `-- name: Ping :one`. sqlc reads only the `-- +goose Up` sections of the migrations.
 
-## Tests
+### Tests
 
 Run every test suite from the repository root:
 
@@ -241,7 +245,17 @@ npm run test:api         # go test ./... in api/
 npm run test:app         # Jest in app/
 ```
 
-## Infrastructure
+## Production
+
+How the production GCP and Firebase project is set up, deployed and operated. You only need this if you own or maintain a production instance.
+
+1. Create the project and its resources with Terraform ([Infrastructure](#infrastructure)).
+2. Copy the Terraform outputs into GitHub Actions and EAS ([Outputs](#outputs-to-github-actions-and-eas-variables)).
+3. Deploy the API and the web app (automatic on every green push to `main`: [Deploying the API](#deploying-the-api), [Deploying the web app](#deploying-the-web-app)).
+4. Build and release the mobile apps ([Mobile releases](#mobile-releases)).
+5. Operate the hourly expiry job ([Expiry job in production](#expiry-job-in-production)).
+
+### Infrastructure
 
 The production GCP and Firebase project is defined in Terraform under `infra/`: Cloud SQL for PostgreSQL 18, Secret Manager, Artifact Registry, the `shelfkin-api` Cloud Run service and the `shelfkin-migrate` and `shelfkin-expiry-job` jobs, the Cloud Scheduler job that runs the expiry job hourly, the expiry job's alerts (Cloud Monitoring), service accounts, Workload Identity Federation for GitHub Actions, Firebase (Auth, Hosting and the web, Android and Apple apps) and a billing budget. `terraform apply` against an empty project (after the one-time bootstrap below) recreates all of it. Apply from a developer machine, never from CI.
 
@@ -256,7 +270,7 @@ Fixed values:
 
 If the Hosting site ID is taken when first applied, pick another, then update `terraform.tfvars` and this table.
 
-### Prerequisites
+#### Prerequisites
 
 - A Google account with Owner on the target project, or permission to create one
 - Billing Account User on the billing account (to link it) and Billing Account Costs Manager or Administrator (to create the budget)
@@ -264,7 +278,7 @@ If the Hosting site ID is taken when first applied, pick another, then update `t
 - `bash` and `curl` 7.76 or later on `PATH` (the email-privacy `PATCH` uses `curl --fail-with-body`, which older versions reject with an "unknown option" error), and `gcloud` logged in with `gcloud auth login` (not only application-default credentials). `terraform apply` runs a bash script that turns on email enumeration protection with `curl` and `gcloud auth print-access-token` (see [Email enumeration protection](#email-enumeration-protection)). Current macOS and Linux have both (check with `curl --version`; macOS 11 ships 7.64, which is too old). On Windows, install [Git for Windows](https://git-scm.com/download/win) and run `terraform` from Git Bash, so `bash` is Git's and not WSL's `C:\Windows\System32\bash.exe` (which cannot see the Windows `gcloud`)
 - Admin on `marboleda/shelfkin`, to add the GitHub Actions variables. No repository secrets are needed
 
-### One-time bootstrap
+#### One-time bootstrap
 
 These steps are not done by Terraform: the project and its billing link must exist before anything can be created in it, the Firebase terms are accepted by a person, and Terraform cannot keep its state in a bucket it has not created yet.
 
@@ -290,7 +304,7 @@ gcloud storage buckets update "gs://$PROJECT_ID-tfstate" --versioning
 
 3. Accept the Firebase terms once with the same Google account: open the [Firebase console](https://console.firebase.google.com/) and follow the prompt (you do not need to create a project there).
 
-### Init, plan and apply
+#### Init, plan and apply
 
 ```sh
 cd infra
@@ -304,7 +318,7 @@ Running `terraform plan` again after an apply should show "No changes" (check th
 
 CI runs `terraform fmt -check`, `terraform init -backend=false`, `terraform validate` and `terraform test` (all providers mocked) with no credentials. Run the same locally from `infra/`.
 
-### Outputs to GitHub Actions and EAS variables
+#### Outputs to GitHub Actions and EAS variables
 
 `terraform output` prints these. Copy them into the repository's Actions **variables** (Settings > Secrets and variables > Actions > Variables) and the EAS environment variables:
 
@@ -330,7 +344,7 @@ Notes for the workflows and the app:
 - The `authDomain` output is Firebase's default `<project_id>.firebaseapp.com`, which is **not** in the authorized domains (those are exactly `<hosting_site_id>.web.app`, `<hosting_site_id>.firebaseapp.com` and `localhost`). Decision (#39): the web build uses this default `authDomain` as is (`EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN` = `firebase_web_config.authDomain`). That is fine because the app only uses email/password (`signInWithEmailAndPassword`, `createUserWithEmailAndPassword`, and `sendPasswordResetEmail` with no `continueUrl`), with no popup or redirect sign-in, so the auth domain is never loaded as a page from the site. Adding a popup or redirect provider (Google, Apple) would need this revisited: either use `<hosting_site_id>.firebaseapp.com` as `authDomain` or add the default domain to `authorized_domains` in `infra/firebase.tf`.
 - Do not click "Get started" under Hosting in the Firebase console: it can create a default site named after the project and add its domains to the authorized domains. If a plan ever shows a change to `authorized_domains`, apply restores the list.
 
-### IAM: Owner and Editor
+#### IAM: Owner and Editor
 
 Every member with `roles/owner` or `roles/editor` should be either a human admin (`user:`) or a Google-managed service agent that GCP grants automatically. Terraform grants Owner or Editor to none of the service accounts it creates, and it removes Editor from the Compute Engine default service account (`<project_number>-compute@developer.gserviceaccount.com`) if enabling an API creates it. After an apply, `gcloud projects get-iam-policy` still shows `roles/editor` for the **Google APIs Service Agent**, `<project_number>@cloudservices.gserviceaccount.com`. GCP grants it on every project and uses it to run internal Google processes for you. Google's docs say not to remove or change it, because that breaks managed instance groups, autoscaling and other services ([Compute Engine service accounts](https://cloud.google.com/compute/docs/access/service-accounts#google_apis_service_agent), [Service agents](https://cloud.google.com/iam/docs/service-agents)), so Terraform leaves it alone. To check after an apply, list the Owner and Editor members and confirm each is a `user:` or a Google-managed agent:
 
@@ -338,7 +352,7 @@ Every member with `roles/owner` or `roles/editor` should be either a human admin
 gcloud projects get-iam-policy "$PROJECT_ID" --flatten=bindings --filter='bindings.role:(roles/owner OR roles/editor)' --format='table(bindings.role, bindings.members)'
 ```
 
-### Auth request logs
+#### Auth request logs
 
 Identity Platform request logging is on (`monitoring.request_logging` in `infra/firebase.tf`), so every Firebase Auth API request is written to Cloud Logging in the project, including failed ones. This is the record of sign-in attempts by **disabled accounts**: the app shows them "Email or password is incorrect", the same as a wrong password, and logs nothing itself.
 
@@ -376,7 +390,7 @@ curl -sS -X POST "https://identitytoolkit.googleapis.com/v1/accounts:signInWithP
 
 **PII.** Each entry contains the user's email address and the caller's IP address. `jsonPayload.request` holds the email (and `returnSecureToken`) but **no password**, and `requestMetadata` holds the caller IP (confirmed in production on #86). Anyone with `roles/logging.viewer` (or Owner or Editor) on the project can read the entries. They are deleted after the 30-day retention, and nothing exports them anywhere else.
 
-### Email enumeration protection
+#### Email enumeration protection
 
 Email enumeration protection ("improved email privacy") is on, so Firebase's sign-in and password reset responses do not reveal whether an email has an account: a wrong password and an unknown email both return `auth/invalid-credential`, and a password reset succeeds for unknown emails. Sign-up still says when an email is taken (`auth/email-already-in-use`); that is accepted.
 
@@ -393,7 +407,7 @@ If it shows `false` or no `emailPrivacyConfig`, run the `PATCH` again with `terr
 
 The `email_privacy_patch` variable only exists so the offline `terraform test` never runs the `PATCH`. Leave it at its default (`true`) in `terraform.tfvars`.
 
-### Rotating the database passwords
+#### Rotating the database passwords
 
 The passwords of `shelfkin_api` and `shelfkin_migrator` are generated by Terraform and kept only in Secret Manager (`api-database-url`, `migrator-database-url`) and the Terraform state.
 
@@ -430,11 +444,11 @@ terraform -chdir=infra apply -replace=random_password.migrator
 
 This sets the new password on the Cloud SQL user and replaces the `migrator-database-url` version. `shelfkin-migrate` reads the latest version on every execution, so it needs nothing more. Never run `gcloud sql users set-password` for `shelfkin_migrator`: the secret would no longer match.
 
-### Destroying
+#### Destroying
 
 Cloud SQL has deletion protection on, so `terraform destroy` fails until it is turned off. Set both `deletion_protection = false` and `settings.deletion_protection_enabled = false` in `infra/database.tf`, run `terraform apply`, then `terraform destroy`. This deletes the database and its backups. A deleted Workload Identity pool keeps its ID reserved for 30 days. The state bucket, the project and its billing link are not managed by Terraform.
 
-## Deploying the web app
+### Deploying the web app
 
 `.github/workflows/deploy-web.yml` builds the Expo web app with `npx expo export --platform web` and publishes `app/dist` to Firebase Hosting, at `https://shelfkin-5da75.web.app` (and `https://shelfkin-5da75.firebaseapp.com`). It authenticates with Workload Identity Federation as `github-deployer`, the same as [Deploying the API](#deploying-the-api), and uses no Firebase CI token, key or secret. `firebase-tools` is pinned in the workflow (`FIREBASE_TOOLS_VERSION`).
 
@@ -446,14 +460,14 @@ The Hosting config is in `firebase.json` and `.firebaserc`:
 - `/.well-known/apple-app-site-association` and `/.well-known/assetlinks.json` are served as `application/json` from `app/public/.well-known/` (added in #33). `ignore` in `firebase.json` is empty on purpose: the default would drop dotfiles (`.well-known`) and `node_modules` paths (Expo puts font and image assets under `assets/node_modules/`).
 - `firebase.json` deploys the Hosting target `web`, and `.firebaserc` maps it to the site `shelfkin-5da75` in project `shelfkin-514420`. The workflow fails if that mapping differs from the `FIREBASE_HOSTING_SITE` variable.
 
-### What triggers a web deploy
+#### What triggers a web deploy
 
 - **Automatically**, when the `CI` workflow succeeds for a push to `main`. It builds the exact commit CI tested. A failed CI run, a pull request (including from a fork) or any other branch deploys nothing. As with the API, a run whose commit is no longer the tip of `main` deploys nothing and says so in its summary; the newer commit deploys when its CI passes.
 - **By hand**: Actions > Deploy web > Run workflow, on `main` (or `gh workflow run deploy-web.yml --ref main`). It deploys the commit `main` points to. Other branches are refused.
 
 Only one web deploy runs at a time. It runs independently of the API deploy.
 
-### Actions variables
+#### Actions variables
 
 Set these as repository Actions **variables** (Settings > Secrets and variables > Actions > Variables), from `terraform output` (see [Outputs to GitHub Actions and EAS variables](#outputs-to-github-actions-and-eas-variables)). None is a secret; the Firebase web API key ships in the bundle.
 
@@ -468,7 +482,7 @@ Set these as repository Actions **variables** (Settings > Secrets and variables 
 
 If any of them is missing or blank, the run fails before building, so a site that would only show the app's configuration error screen is never published. The build also forces `EXPO_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST` empty and fails if the configured values were not inlined into the bundle.
 
-### What a web deploy does
+#### What a web deploy does
 
 1. Checks the variables and the Hosting target, checks out the commit, runs `npm ci` and `npx expo export --platform web` in `app/` with the variables above.
 2. Runs `firebase deploy --only hosting:web` with the message `Commit <sha>`, which creates a new release on the live channel.
@@ -476,7 +490,7 @@ If any of them is missing or blank, the run fails before building, so a site tha
 
 The run summary shows the commit SHA, the site and the Hosting release (`sites/<site>/versions/<version>`).
 
-### Rolling back the web app
+#### Rolling back the web app
 
 Every deploy is a release in the site's history, labelled `Commit <sha>`. To go back:
 
@@ -492,7 +506,7 @@ Every deploy is a release in the site's history, labelled `Commit <sha>`. To go 
 
 The next deploy from `main` replaces a rolled-back release. Viewing the release history needs at least Firebase Hosting Viewer on the project.
 
-### Production checks after the first web deploy
+#### Production checks after the first web deploy
 
 Run these once and record the results on #39. Creating an account, sign-in, password reset and the route guards use only Firebase Auth, so everything outside the last two groups works before the API is deployed. Until then, screens that load data from the API show load errors (on Settings, the name and the Server line), and the name entered at sign-up is not saved: it stays in that browser and is sent with PATCH /me the next time the app starts there after the API is up.
 
@@ -511,13 +525,13 @@ Run these once and record the results on #39. Creating an account, sign-in, pass
   - Settings shows "Server: Connected".
   - The site also works at `https://shelfkin-5da75.firebaseapp.com`, including Settings showing "Server: Connected" there (both origins are allowed by CORS).
 
-## Deploying the API
+### Deploying the API
 
 `.github/workflows/deploy-api.yml` builds the API image, runs the migrations on Cloud SQL and deploys `shelfkin-api` to Cloud Run. It authenticates with Workload Identity Federation as `github-deployer`; it uses the Actions variables from [Outputs to GitHub Actions and EAS variables](#outputs-to-github-actions-and-eas-variables) (`GCP_PROJECT_ID`, `GCP_REGION`, `GCP_WIF_PROVIDER`, `GCP_DEPLOYER_SA`, `API_URL`) and no secrets.
 
 Every migration runs as `shelfkin_migrator` through the `shelfkin-migrate` job, never by hand as `postgres` or another admin user. `shelfkin_migrator` must own every table and the `SECURITY DEFINER` helpers (#10), which only work when they run as the owner of `household_members`.
 
-### What triggers a deploy
+#### What triggers a deploy
 
 - **Automatically**, when the `CI` workflow succeeds for a push to `main`. It deploys the exact commit CI tested. A failed CI run, a pull request (including from a fork) or any other branch deploys nothing.
 - **By hand**: Actions > Deploy API > Run workflow, on `main` (or `gh workflow run deploy-api.yml --ref main`). It deploys the commit `main` points to. Other branches are refused.
@@ -531,7 +545,7 @@ CI runs can finish out of order, so an automatic deploy whose commit is no longe
 - fix or revert on `main`; its CI then deploys as usual, or
 - run the workflow by hand, but only when the latest CI run on `main` is green, because a manual run deploys the tip of `main`, not the older commit.
 
-### What a deploy does
+#### What a deploy does
 
 1. Builds `api/Dockerfile` and pushes it to Artifact Registry as `<region>-docker.pkg.dev/<project>/shelfkin/api:<full commit SHA>`.
 2. Points the `shelfkin-migrate` job at the new image and runs `migrate up` with `--wait`, logged in as `shelfkin_migrator`. After the migrations it creates the `shelfkin_api` login if it is missing, or sets its password if the `api-database-url` password no longer logs in, then grants `shelfkin_app` to `shelfkin_api`, and finally logs in as `shelfkin_api` once to check that the API will be able to connect (see [Database roles](#database-roles-in-production)). Once done, this changes nothing. If anything fails, the workflow stops and the API is **not** deployed.
@@ -543,7 +557,7 @@ The job and the migrate binary are chosen per execution (`gcloud run jobs execut
 
 Terraform sets the same values as the job's defaults (`args = ["/usr/local/bin/migrate", "up"]` and `API_DB_ROLE=shelfkin_api`, #40), so a bare `gcloud run jobs execute shelfkin-migrate --region "$REGION" --wait` also runs the migrations and the grant step, instead of starting the API server. The workflow keeps passing its overrides, so deploys work whether or not that apply has happened. The job has no `command` on purpose: with one, the workflow's `--args` would be appended to it and break the deploy.
 
-### Where to watch it
+#### Where to watch it
 
 - The run in GitHub Actions (Actions > Deploy API). Its summary shows the commit SHA, the image digest and the Cloud Run revision.
 - Migration output: Cloud Run > Jobs > `shelfkin-migrate` > Executions, or `gcloud run jobs executions list --job shelfkin-migrate --region "$REGION"` and the execution's logs.
@@ -551,7 +565,7 @@ Terraform sets the same values as the job's defaults (`args = ["/usr/local/bin/m
 
 Viewing needs Viewer, Cloud Run Viewer and Logs Viewer on the project.
 
-### Rolling back
+#### Rolling back
 
 Send traffic back to the previous revision:
 
@@ -564,7 +578,7 @@ The next deploy sends traffic to its new revision again.
 
 **Migrations are forward-only and are never rolled back**, by a deploy or by hand. Rolling back the API leaves the newer schema in place, so every migration must keep the previous release working: add first (new tables, nullable or defaulted columns), and remove or rename only in a later release, once nothing uses the old shape.
 
-### Running the migrate job by hand
+#### Running the migrate job by hand
 
 Always through the job, so migrations run as `shelfkin_migrator` (see above), never by hand as `postgres` or another admin user.
 
@@ -578,7 +592,7 @@ gcloud run jobs execute shelfkin-migrate --region "$REGION" --wait --args=/usr/l
 
 The output is in the execution's logs.
 
-### Database roles in production
+#### Database roles in production
 
 The API and the expiry job log in as `shelfkin_api`, which must be able to do **less** than `shelfkin_app` on its own: `dbtx` runs `SET LOCAL ROLE shelfkin_app`, and SQL in that transaction could run `RESET ROLE`.
 
@@ -603,7 +617,7 @@ Why per grantor: on Postgres 16 and later, `pg_auth_members` keeps **one row per
 
 Do not weaken this check to get a deploy through.
 
-### Moving `shelfkin_api` off the Cloud SQL built-in user
+#### Moving `shelfkin_api` off the Cloud SQL built-in user
 
 **This applies once, to the existing production instance only.** A fresh project needs no admin step: Terraform no longer creates a Cloud SQL user for `shelfkin_api`, so the first deploy creates it with SQL and passes end to end.
 
@@ -646,7 +660,7 @@ Then run every check in [Production checks](#production-checks-after-the-first-d
 
 If the migrate job fails at `ALTER ROLE` with an error naming this section, the role it found is one `shelfkin_migrator` did not create, and the password in `api-database-url` does not log in: most likely the built-in user still exists. Do step 3, then deploy again. A grant-step failure naming a `cloudsqlsuperuser` membership means the same. Do not weaken the check, and do not create or change any table as `postgres`.
 
-### Production checks after the first deploy
+#### Production checks after the first deploy
 
 Run these once, connected as `postgres` through the Cloud SQL Auth Proxy (see the section above), and record the results on the deploy issue.
 
@@ -725,7 +739,17 @@ BEGIN; SET LOCAL ROLE shelfkin_app; RESET ROLE; SELECT FROM household_members; R
 BEGIN; SET LOCAL ROLE shelfkin_app; RESET ROLE; SELECT FROM users; ROLLBACK;
 ```
 
-## Mobile releases
+#### CORS in production
+
+The API's allowed origins are set to both Firebase Hosting origins of the web app (see [CORS](#cors) for how the API uses them):
+
+```
+CORS_ALLOWED_ORIGINS=https://<hosting_site_id>.web.app,https://<hosting_site_id>.firebaseapp.com
+```
+
+which is `https://shelfkin-5da75.web.app,https://shelfkin-5da75.firebaseapp.com` for the site ID in [Infrastructure](#infrastructure). Terraform sets this on the `shelfkin-api` Cloud Run service (`infra/run.tf`). Add any custom domain here if one is added later.
+
+### Mobile releases
 
 The iOS and Android apps are built and signed in the cloud with [EAS Build](https://docs.expo.dev/build/introduction/) and uploaded to TestFlight and Google Play internal testing with [EAS Submit](https://docs.expo.dev/submit/introduction/). Nothing is built in CI, and over-the-air updates (`eas update`) are not used in v1. Run EAS CLI from `app/` as `npx eas-cli@latest <command>` (see [app/AGENTS.md](app/AGENTS.md)). `ios/` and `android/` are generated at build time and never committed.
 
@@ -740,7 +764,7 @@ The configuration lives in:
 
 `app/__tests__/mobile-build-config-test.ts` checks all three, and CI's `app` job also resolves the full native config (`npx expo config --type introspect`).
 
-### Accounts needed
+#### Accounts needed
 
 - An **Expo account** that owns the EAS project. It runs `eas init`, `eas build`, `eas credentials` and `eas submit`, and manages the EAS environment variables.
 - **Apple Developer Program** membership (paid) with the Account Holder or Admin role, so EAS can create the bundle ID, the distribution certificate, provisioning profiles and the APNs key. Also **App Store Connect** access, and an **App Store Connect API key** (Issuer ID, Key ID, `.p8`) stored in EAS for `eas submit`.
@@ -750,7 +774,7 @@ The configuration lives in:
 
 Credentials are managed by EAS: the iOS distribution certificate, provisioning profiles and APNs key, the Android upload keystore, the FCM V1 key and both store submission keys are stored on Expo's servers, and `npx eas-cli@latest credentials` shows them. None of them is committed. `app/.gitignore` ignores `google-services.json`, `GoogleService-Info.plist`, `*.p8`, `*.p12`, `*.jks`, `*.keystore`, `*.mobileprovision`, service account keys and `credentials.json`. If you download one to upload it, delete the local copy afterwards.
 
-### Build profiles
+#### Build profiles
 
 | Profile | What it is | Distribution | EAS environment | API and sign-in |
 |---|---|---|---|---|
@@ -758,7 +782,7 @@ Credentials are managed by EAS: the iOS distribution certificate, provisioning p
 | `preview` | A release build for testing on your own phone. Android builds an APK | Internal (install from the build page) | `preview` | The production API and the production Firebase project |
 | `production` | The store build. Android builds an AAB. EAS increments the build number on every build | Store (TestFlight, Play internal testing) | `production` | The production API and the production Firebase project |
 
-### EAS environment variables
+#### EAS environment variables
 
 Set these in the EAS project (expo.dev > the project > Environment variables, or `eas env:set`), from `terraform output` (see [Outputs to GitHub Actions and EAS variables](#outputs-to-github-actions-and-eas-variables)). They are the same values the web deploy uses. The `EXPO_PUBLIC_*` values end up in the app bundle and are not secrets, so make them **plain text** or **sensitive**, not **secret**: EAS CLI cannot read secret variables when it resolves the build config on your computer.
 
@@ -789,7 +813,7 @@ rm google-services.json
 
 Check with `npx eas-cli@latest env:list --environment production` (and `preview`). An Android development build without `GOOGLE_SERVICES_JSON` still builds, but cannot get a push token. iOS needs no Firebase file: the app signs in with the Firebase JS SDK, and push goes through APNs with the key stored in EAS.
 
-### One-time setup
+#### One-time setup
 
 Done once by the owner, in this order. Record the results on #41.
 
@@ -800,7 +824,7 @@ Done once by the owner, in this order. Record the results on #41.
 5. **Google Play Console.** Create the app (package `com.marboleda.shelfkin`) and the internal testing track. Google requires the **first AAB to be uploaded by hand**: build it (`npx eas-cli@latest build -p android --profile production`), download the `.aab` from the build page and upload it in Testing > Internal testing > Create new release. **Finish the release**: add release notes, Next > Save, then roll it out to internal testing (Play Console may first ask you to complete the app's setup tasks on the Dashboard). Until the app has a rolled-out release, Play treats it as a draft app and accepts only draft releases, so `eas submit -p android` fails with "Only releases with status draft may be created on draft app". The submit profile does not set `releaseStatus`, so it creates `completed` releases and needs this first rollout. Then create a Google Cloud service account with a JSON key, invite it in Play Console (Users and permissions) with release rights for the app, and add the key with `npx eas-cli@latest credentials -p android` > Google Service Account > "Manage your Google Service Account Key for submissions". From then on, `eas submit -p android` uploads Android builds and releases them to internal testing.
 6. **Record the signing values** for universal links and app links in [the table below](#signing-values-for-universal-links-and-app-links), and replace the placeholders in `app/public/.well-known/` in a PR (#33).
 
-### Building
+#### Building
 
 From `app/`:
 
@@ -812,13 +836,13 @@ npx eas-cli@latest build --profile production --platform all
 
 The `development` profile needs `expo-dev-client`, which is already in `app/package.json`, so EAS does not stop to install it and the build also works with `--non-interactive`. EAS prints a link to the build page, and the build is also listed under the project on expo.dev. A preview or production build that fails while reading the app config with "This build is missing its configuration" lists the EAS variables to fix.
 
-### Installing preview and development builds on a phone
+#### Installing preview and development builds on a phone
 
 - **Android:** open the build page on the phone (or scan its QR code) and install the APK. Allow installs from the browser when Android asks.
 - **iOS:** internal builds only install on registered devices. Register each iPhone once with `npx eas-cli@latest device:create` (it gives a link to open on the phone, which installs a profile), then build again so the provisioning profile includes it. On iOS 16 and later, turn on Settings > Privacy & Security > Developer Mode. Open the build page on the iPhone and install.
 - **Development build:** after installing, run `npx expo start` in `app/` on the same network and open the project from the development client: the Shelfkin app shows the `expo-dev-client` launcher, which lists dev servers on the network (or scan the QR code that `npx expo start` prints). To use the local API and Auth emulator, `app/.env.local` must use your computer's LAN IP for both `EXPO_PUBLIC_API_URL` and `EXPO_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST` (see [app/README.md](app/README.md#sign-in-and-the-auth-emulator)).
 
-### Submitting to TestFlight and Google Play internal testing
+#### Submitting to TestFlight and Google Play internal testing
 
 ```sh
 npx eas-cli@latest submit -p ios --latest       # the latest production build to App Store Connect and TestFlight
@@ -829,16 +853,16 @@ npx eas-cli@latest build --profile production --platform all --auto-submit
 
 The first `eas submit -p ios` can create the app in App Store Connect. The build sets `ITSAppUsesNonExemptEncryption` to `false`, so App Store Connect does not ask about export compliance. Processing takes a few minutes before the build shows in TestFlight.
 
-### Adding testers
+#### Adding testers
 
 - **TestFlight:** App Store Connect > the app > TestFlight > Internal Testing. Create a group and add people who are users of the App Store Connect team (any role). Internal testers need no Beta App Review. They install the TestFlight app and accept the invitation.
 - **Google Play internal testing:** Play Console > Testing > Internal testing > Testers. Add an email list (up to 100 testers) and copy the opt-in link. Testers open the link with that Google account, accept, and install from Google Play.
 
-### Versions and build numbers
+#### Versions and build numbers
 
 The version people see is `version` in `app/app.json` (`1.0.0`). Build numbers (`ios.buildNumber`, `android.versionCode`) are kept by EAS (`appVersionSource: remote`), and the `production` profile increments them on every build, so they are not in `app.json`. Show them with `npx eas-cli@latest build:version:get`. If a store already has a higher build number (for example, a build uploaded without EAS), set it once with `npx eas-cli@latest build:version:set -p <ios|android>`.
 
-### Signing values for universal links and app links
+#### Signing values for universal links and app links
 
 #33's association files need these values. They are public and committed. Until they are known, `app/public/.well-known/` holds the `*_PLACEHOLDER_SEE_ISSUE_41` values (see [app/README.md](app/README.md#invite-links)).
 
@@ -850,7 +874,7 @@ The version people see is `version` in `app/app.json` (`1.0.0`). Build numbers (
 
 Fingerprints are upper-case hex pairs separated by colons (`AB:CD:…`, 32 pairs), which `__tests__/association-files-test.ts` checks. Play re-signs every build with the app signing key, so app links fail verification without its fingerprint. iOS reads the association file when the app is installed or updated, so after the web deploy publishes the new values, reinstall the app before checking links.
 
-### Production checks after the first mobile builds
+#### Production checks after the first mobile builds
 
 Run these once and record the results on #41. Then run the deferred device checks of #33 and #34 with the same builds, and record those on their issues.
 
@@ -864,7 +888,7 @@ Run these once and record the results on #41. Then run the deferred device check
 - The icon, the Android adaptive (and themed) icon, and the splash in light and dark mode look right on both phones.
 - The three signing values above are recorded, and the association files are updated.
 
-## Expiry job in production
+### Expiry job in production
 
 The [expiry notification job](#expiry-notification-job) runs as the Cloud Run job `shelfkin-expiry-job`, started at minute 0 of every hour by the Cloud Scheduler job of the same name. Both are defined in `infra/expiry.tf`:
 
@@ -873,7 +897,7 @@ The [expiry notification job](#expiry-notification-job) runs as the Cloud Run jo
 - **Image**: each API deploy points the job at the new image after the smoke checks pass (step 5 of [What a deploy does](#what-a-deploy-does)). Terraform ignores the image, so an apply never rolls it back.
 - **Schedule**: `0 * * * *` in `Etc/UTC`. Cloud Scheduler calls the Cloud Run Admin API (`POST https://run.googleapis.com/v2/projects/<project>/locations/<region>/jobs/shelfkin-expiry-job:run`) with an OAuth token for the `scheduler-invoker` service account, which is Cloud Run Invoker on this job and has no other role. Cloud Run Invoker can start the job but not with overrides. The scheduler runs in the `scheduler_region` variable, or in `region` when that is unset; set it only if Cloud Scheduler is not offered in `region` (it is offered in `us-central1`).
 
-### Running it by hand
+#### Running it by hand
 
 Running the job with overrides (`--args`) needs Cloud Run Developer or Owner on the project. Run these from a machine with `gcloud` logged in, with `REGION=us-central1`:
 
@@ -893,12 +917,12 @@ gcloud run jobs execute shelfkin-expiry-job --region "$REGION" --wait --args=--d
 
 `--args` replaces the job's (empty) arguments for that execution only, so the job still runs `/usr/local/bin/expiry-job`. The output is in the execution's logs (Cloud Run > Jobs > `shelfkin-expiry-job` > Executions, or `gcloud run jobs executions list --job shelfkin-expiry-job --region "$REGION"`).
 
-### Missed and repeated runs
+#### Missed and repeated runs
 
 - **A retry, or a second run in the same hour, sends nothing twice.** Each entry is recorded in `expiry_notifications` once it is announced to a user (#22), so a retry of a failed run (or a manual run in the same hour) only sends what the first attempt did not.
 - **A run more than an hour late skips users.** A run handles the users whose local time is 9:00-9:59 at the moment it runs (or at `--now`). If the 13:00 UTC run only starts at 14:05, the users whose 9am hour was 13:00 UTC are not handled, and nothing retries them later. They get their next push at their next 9am, which includes entries still expiring within 3 days. To catch up, replay the missed hour with `--now` set to its start, as above; the de-duplication makes that safe even if part of the hour was handled.
 
-### Pausing and resuming the schedule
+#### Pausing and resuming the schedule
 
 ```sh
 gcloud scheduler jobs pause  shelfkin-expiry-job --location "$REGION"
@@ -908,7 +932,7 @@ gcloud scheduler jobs describe shelfkin-expiry-job --location "$REGION"   # stat
 
 (Use the `scheduler_region` value as the location if it is set.) Terraform ignores the paused state, so an apply does not resume a paused schedule. While paused, the "no successful run for 3 hours" alert fires after 3 hours; that is expected. Replay the hours you skipped with `--now` after resuming, if needed.
 
-### Alerts
+#### Alerts
 
 Alerts are emailed to the address in the `alert_email` Terraform variable (a Cloud Monitoring email notification channel). Two alert policies, in Monitoring > Alerting:
 
@@ -921,7 +945,7 @@ The job exits 1 when any user failed, so a partial failure (for example Expo rej
 
 To change the address, set `alert_email` in `infra/terraform.tfvars` and apply.
 
-### Finding each run's summary
+#### Finding each run's summary
 
 Every run ends with one `expiry job finished` log line with `now`, `dry_run`, `users_processed`, `pushes_sent`, `failures`, `receipts_processed` and `tokens_deleted`. In Logs Explorer (Logging > Logs Explorer), run this query and save it (Save > name it `shelfkin-expiry-job summaries`):
 
@@ -940,7 +964,7 @@ gcloud logging read 'resource.type="cloud_run_job" AND resource.labels.job_name=
 
 Viewing needs Logs Viewer on the project.
 
-### Setting `EXPO_ACCESS_TOKEN`
+#### Setting `EXPO_ACCESS_TOKEN`
 
 The job only needs an Expo access token if [enhanced push security](https://docs.expo.dev/push-notifications/sending-notifications/#additional-security) is turned on for the Expo project (#41). Otherwise leave the secret empty and `expo_access_token_enabled` off; the job then sends no token.
 
@@ -960,7 +984,7 @@ Terraform creates the Secret Manager secret `expo-access-token` but never a valu
 
 The job reads the `latest` version when each execution starts, so to rotate the token add a new version (step 2), check the next run, then disable the old version with `gcloud secrets versions disable <n> --secret expo-access-token`. Nothing needs to be redeployed.
 
-### Owner rollout (#40)
+#### Owner rollout (#40)
 
 Done once by the project owner after this change is merged. Needs the same account as [Infrastructure](#infrastructure) (Owner covers Cloud Run Admin, Cloud Scheduler Admin, Monitoring Admin, Secret Manager Admin and IAM admin) and the inbox for `alert_email`. Record the results on #40.
 
