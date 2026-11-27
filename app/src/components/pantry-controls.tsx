@@ -1,6 +1,7 @@
 // The controls above the Pantry list: the "Group by" Location / Category
-// segmented control, the Filters button and its panel of location and category
-// chips, and the "Filtered: …" line that stays visible while any filter is on.
+// segmented control, the "Expiring N" chip, the Filters button and its panel of
+// location and category chips, the "Filtered: …" line that stays visible while
+// any filter is on, and the "N items expiring soon" summary card.
 
 import Feather from '@expo/vector-icons/Feather';
 import { Pressable, Text, View } from 'react-native';
@@ -23,12 +24,29 @@ type PantryToolbarProps = {
   filters: PantryFilters;
   panelOpen: boolean;
   onTogglePanel: () => void;
+  /** Items with an entry expiring soon or expired, from `expiringSummary`. The Expiring chip is hidden at 0. */
+  expiringCount: number;
+  onToggleExpiring: () => void;
   /** At 768 px and wider the segmented control is sized to its options instead of filling the line. */
   wide?: boolean;
 };
 
-/** "Group by" and the Filters button, on one line. */
-export function PantryToolbar({ mode, onModeChange, filters, panelOpen, onTogglePanel, wide = false }: PantryToolbarProps) {
+/**
+ * "Group by", the Expiring chip and the Filters button, on one line (wrapping
+ * when narrow). The chip and Filters wrap together, so on a phone Group by
+ * takes the first line and they share the second, rather than Filters being
+ * left alone on a line.
+ */
+export function PantryToolbar({
+  mode,
+  onModeChange,
+  filters,
+  panelOpen,
+  onTogglePanel,
+  expiringCount,
+  onToggleExpiring,
+  wide = false,
+}: PantryToolbarProps) {
   const styles = useThemedStyles(createStyles);
   const theme = useTheme();
   const count = activeFilterCount(filters);
@@ -64,20 +82,80 @@ export function PantryToolbar({ mode, onModeChange, filters, panelOpen, onToggle
           );
         })}
       </View>
-      <Pressable
-        testID="pantry-filters-button"
-        accessibilityRole="button"
-        aria-label={label}
-        aria-expanded={panelOpen}
-        accessibilityState={{ expanded: panelOpen }}
-        accessibilityHint={panelOpen ? 'Hides the filters' : 'Shows the filters'}
-        onPress={onTogglePanel}
-        style={[styles.filtersButton, count > 0 ? styles.filtersButtonActive : null]}
-      >
-        <Feather name="sliders" size={16} color={count > 0 ? theme.colors.primary : theme.colors.text} aria-hidden />
-        <Text style={styles.filtersLabel}>{label}</Text>
-      </Pressable>
+      <View testID="pantry-toolbar-actions" style={styles.toolbarActions}>
+        {expiringCount > 0 ? (
+          <ExpiringChip count={expiringCount} selected={filters.expiring} onPress={onToggleExpiring} />
+        ) : null}
+        <Pressable
+          testID="pantry-filters-button"
+          accessibilityRole="button"
+          aria-label={label}
+          aria-expanded={panelOpen}
+          accessibilityState={{ expanded: panelOpen }}
+          accessibilityHint={panelOpen ? 'Hides the filters' : 'Shows the filters'}
+          onPress={onTogglePanel}
+          style={[styles.filtersButton, count > 0 ? styles.filtersButtonActive : null]}
+        >
+          <Feather name="sliders" size={16} color={count > 0 ? theme.colors.primary : theme.colors.text} aria-hidden />
+          <Text style={styles.filtersLabel}>{label}</Text>
+        </Pressable>
+      </View>
     </View>
+  );
+}
+
+/** "Expiring 3": on, it shows only the entries expiring soon or expired. */
+function ExpiringChip({ count, selected, onPress }: { count: number; selected: boolean; onPress: () => void }) {
+  const styles = useThemedStyles(createStyles);
+  const theme = useTheme();
+  const label = `Expiring ${count}`;
+  const color = selected ? theme.colors.surface : theme.colors.expiringSoon;
+  return (
+    <Pressable
+      testID="pantry-expiring-chip"
+      role="checkbox"
+      aria-checked={selected}
+      aria-selected={selected}
+      accessibilityState={{ checked: selected, selected }}
+      aria-label={label}
+      accessibilityHint={selected ? 'Shows every item again' : 'Shows only the items expiring soon'}
+      onPress={onPress}
+      style={[styles.expiringChip, selected ? styles.expiringChipSelected : null]}
+    >
+      <Feather name="clock" size={16} color={color} aria-hidden />
+      <Text style={[styles.expiringChipLabel, { color }]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+/**
+ * "3 items expiring soon" with the items' names, shown above the list while
+ * the Expiring chip is off. Tapping it turns the chip on.
+ */
+export function ExpiringCard({ count, names, onPress }: { count: number; names: readonly string[]; onPress: () => void }) {
+  const styles = useThemedStyles(createStyles);
+  const theme = useTheme();
+  const title = `${count} ${count === 1 ? 'item' : 'items'} expiring soon`;
+  const list = names.join(', ');
+  return (
+    <Pressable
+      testID="pantry-expiring-card"
+      accessibilityRole="button"
+      aria-label={`${title}: ${list}`}
+      accessibilityHint="Shows only the items expiring soon"
+      onPress={onPress}
+      style={styles.expiringCard}
+    >
+      <View style={styles.expiringCardIcon} aria-hidden>
+        <Feather name="clock" size={18} color={theme.colors.expiringSoon} />
+      </View>
+      <View style={styles.expiringCardText}>
+        <Text style={styles.expiringCardTitle}>{title}</Text>
+        <Text testID="pantry-expiring-card-names" numberOfLines={2} style={styles.expiringCardNames}>
+          {list}
+        </Text>
+      </View>
+    </Pressable>
   );
 }
 
@@ -199,6 +277,16 @@ function createStyles(theme: Theme) {
       alignItems: 'center' as const,
       gap: theme.spacing.sm,
     },
+    // The Expiring chip and Filters: they wrap as one, and between themselves
+    // only when even a line of their own is too narrow (320 px).
+    toolbarActions: {
+      flexDirection: 'row' as const,
+      flexWrap: 'wrap' as const,
+      flexShrink: 1,
+      maxWidth: '100%' as const,
+      alignItems: 'center' as const,
+      gap: theme.spacing.sm,
+    },
     segmented: {
       flex: 1,
       minWidth: 200,
@@ -254,6 +342,55 @@ function createStyles(theme: Theme) {
     filtersButtonActive: {
       borderColor: theme.colors.primary,
       backgroundColor: theme.colors.primarySubtle,
+    },
+    expiringChip: {
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      gap: 6,
+      minHeight: MIN_TOUCH_TARGET + 8,
+      paddingHorizontal: theme.spacing.md,
+      borderRadius: theme.radii.pill,
+      borderWidth: 1,
+      borderColor: theme.colors.expiringSubtle,
+      backgroundColor: theme.colors.expiringSubtle,
+    },
+    expiringChipSelected: {
+      borderColor: theme.colors.expiringSoon,
+      backgroundColor: theme.colors.expiringSoon,
+    },
+    expiringChipLabel: {
+      ...theme.typography.label,
+      fontSize: 14,
+    },
+    expiringCard: {
+      flexDirection: 'row' as const,
+      alignItems: 'flex-start' as const,
+      gap: theme.spacing.md,
+      padding: theme.spacing.md,
+      borderRadius: theme.radii.card,
+      borderWidth: 1,
+      borderColor: theme.colors.expiringSoon,
+      backgroundColor: theme.colors.expiringSubtle,
+    },
+    expiringCardIcon: {
+      width: 32,
+      height: 32,
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+      borderRadius: theme.radii.pill,
+      backgroundColor: theme.colors.surface,
+    },
+    expiringCardText: {
+      flex: 1,
+      gap: 2,
+    },
+    expiringCardTitle: {
+      ...theme.typography.label,
+      color: theme.colors.expiringSoon,
+    },
+    expiringCardNames: {
+      ...theme.typography.caption,
+      color: theme.colors.expiringSoon,
     },
     filtersLabel: {
       ...theme.typography.label,

@@ -18,7 +18,7 @@ import {
   searchIn,
   testCatalogItem,
 } from '../test-utils/catalog';
-import { pantryHandler, testEntry, testGroup, testPantry } from '../test-utils/pantry';
+import { pantryHandler, TEST_CATEGORIES, TEST_LOCATIONS, testEntry, testGroup, testPantry } from '../test-utils/pantry';
 
 jest.setTimeout(180000);
 
@@ -48,12 +48,15 @@ jest.mock('@/api/query-client', () => {
 jest.mock('@/components/add-item-keyboard', () => ({ usesKeyboardHighlight: jest.fn(() => false) }));
 const mockUsesKeyboardHighlight = jest.requireMock('@/components/add-item-keyboard').usesKeyboardHighlight as jest.Mock;
 
-// Records where keyboard focus is sent (it still calls the real focusElement).
+// Records where keyboard focus is sent (it still calls the real focusElement),
+// and lets a test say the user has moved focus (Jest runs as iOS, where the
+// real focusIsOnBodyOr is always true).
 jest.mock('@/components/focus', () => {
   const actual = jest.requireActual('@/components/focus');
-  return { ...actual, focusElement: jest.fn(actual.focusElement) };
+  return { ...actual, focusElement: jest.fn(actual.focusElement), focusIsOnBodyOr: jest.fn(actual.focusIsOnBodyOr) };
 });
 const mockFocusElement = jest.requireMock('@/components/focus').focusElement as jest.Mock;
+const mockFocusIsOnBodyOr = jest.requireMock('@/components/focus').focusIsOnBodyOr as jest.Mock;
 
 /** The test ID of the element focus was last sent to. */
 function lastFocused(): string | undefined {
@@ -843,6 +846,184 @@ describe('keyboard (web)', () => {
     await searchFor('milk');
     await enter();
     expect(screen.queryByTestId('add-summary')).toBeNull();
+  });
+});
+
+describe('focus in the details (web)', () => {
+  const actualFocusIsOnBodyOr = jest.requireActual('@/components/focus').focusIsOnBodyOr;
+
+  beforeEach(() => {
+    mockUsesKeyboardHighlight.mockReturnValue(true);
+    mockFocusElement.mockClear();
+    mockFocusIsOnBodyOr.mockImplementation(actualFocusIsOnBodyOr);
+  });
+  afterEach(() => {
+    mockUsesKeyboardHighlight.mockReturnValue(false);
+    mockFocusIsOnBodyOr.mockImplementation(actualFocusIsOnBodyOr);
+  });
+
+  async function enter() {
+    await act(async () => {
+      fireEvent(screen.getByTestId('add-item-name'), 'submitEditing', { nativeEvent: { text: '' } });
+    });
+  }
+
+  /** Holds the locations response back until the returned function is called. */
+  function delayLocations() {
+    const gate = deferred<void>();
+    server.use(
+      http.get(apiUrl('/locations'), async () => {
+        await gate.promise;
+        return HttpResponse.json({ items: TEST_LOCATIONS });
+      }),
+    );
+    return async () => {
+      await act(async () => {
+        gate.resolve();
+      });
+    };
+  }
+
+  /** Locations and categories fail while the returned flags are set. */
+  function failingLists() {
+    const fail = { locations: true, categories: true };
+    server.use(
+      http.get(apiUrl('/locations'), () =>
+        fail.locations ? apiError(500, 'internal') : HttpResponse.json({ items: TEST_LOCATIONS }),
+      ),
+      http.get(apiUrl('/categories'), () =>
+        fail.categories ? apiError(500, 'internal') : HttpResponse.json({ items: TEST_CATEGORIES }),
+      ),
+    );
+    return fail;
+  }
+
+  test('while locations load after an Enter pick, focus waits on the summary, then moves to Add', async () => {
+    const release = delayLocations();
+    await renderAdd();
+    await searchFor('milk');
+    await enter();
+    expect(screen.getByTestId('add-details-loading')).toBeTruthy();
+    expect(lastFocused()).toBe('add-summary');
+    // Focusable by script only, not a Tab stop.
+    expect(screen.getByTestId('add-summary').props.tabIndex).toBe(-1);
+
+    await release();
+    await screen.findByTestId('add-location-1');
+    expect(lastFocused()).toBe('add-submit');
+  });
+
+  test('when everything has loaded, a pick focuses Add with no stop on the summary', async () => {
+    await renderAdd();
+    await pick('milk', MILK);
+    await screen.findByTestId('add-location-1');
+    mockFocusElement.mockClear();
+    await press(screen.getByTestId('add-change'));
+    await press(await screen.findByTestId(`add-suggestion-${MILK.id}`));
+    expect(mockFocusElement.mock.calls.map(([element]) => element?.props?.testID)).toEqual(['add-submit']);
+  });
+
+  test('an item picked with a click moves focus to Add, so Enter adds it', async () => {
+    await renderAdd();
+    await pick('milk', MILK);
+    await waitFor(() => expect(lastFocused()).toBe('add-submit'));
+    await submitAndWaitForReset();
+    expect(lastEntry()).toMatchObject({ catalogItemId: MILK.id });
+  });
+
+  test('Create picked with a click moves focus to the category', async () => {
+    await renderAdd();
+    await pickCreate('Gochujang');
+    await waitFor(() => expect(lastFocused()).toBe('add-category-1'));
+  });
+
+  test('focus the user moves while the details load stays where it is', async () => {
+    const release = delayLocations();
+    await renderAdd();
+    await searchFor('milk');
+    await enter();
+    expect(lastFocused()).toBe('add-summary');
+
+    // The user clicks into Bought: focus is no longer on the page or the summary.
+    mockFocusIsOnBodyOr.mockReturnValue(false);
+    mockFocusElement.mockClear();
+    await release();
+    await screen.findByTestId('add-location-1');
+    expect(mockFocusElement).not.toHaveBeenCalled();
+  });
+
+  test('Change while the details load cancels the move, and a later pick starts afresh', async () => {
+    const release = delayLocations();
+    await renderAdd();
+    await searchFor('milk');
+    await enter();
+    expect(lastFocused()).toBe('add-summary');
+
+    await press(screen.getByTestId('add-change'));
+    await screen.findByTestId(`add-suggestion-${MILK.id}`);
+    mockFocusElement.mockClear();
+    await release();
+    await waitFor(() => expect(appQueryClient().getQueryState(queryKeys.locations())?.status).toBe('success'));
+    expect(mockFocusElement).not.toHaveBeenCalled();
+
+    await enter();
+    expect(lastFocused()).toBe('add-submit');
+  });
+
+  test('a Retry that loads moves focus on to the next target', async () => {
+    const fail = failingLists();
+    await renderAdd();
+    await searchFor('milk');
+    await enter();
+    await screen.findByText("Couldn't load categories");
+    await waitFor(() => expect(lastFocused()).toBe('add-locations-retry'));
+
+    // Locations load: the categories are still failing, so their Retry is next.
+    fail.locations = false;
+    await press(screen.getByTestId('add-locations-retry'));
+    await screen.findByTestId('add-location-1');
+    await waitFor(() => expect(lastFocused()).toBe('add-categories-retry'));
+
+    fail.categories = false;
+    await press(screen.getByTestId('add-categories-retry'));
+    await waitFor(() => expect(screen.queryByText("Couldn't load categories")).toBeNull());
+    await waitFor(() => expect(lastFocused()).toBe('add-submit'));
+  });
+
+  test('a Retry that fails again leaves focus on that Retry', async () => {
+    failingLists();
+    await renderAdd();
+    await searchFor('milk');
+    await enter();
+    await screen.findByText("Couldn't load categories");
+    await waitFor(() => expect(lastFocused()).toBe('add-locations-retry'));
+
+    const failures = appQueryClient().getQueryState(queryKeys.categories())?.errorUpdateCount ?? 0;
+    await press(screen.getByTestId('add-categories-retry'));
+    await waitFor(() => {
+      const state = appQueryClient().getQueryState(queryKeys.categories());
+      expect(state?.fetchStatus).toBe('idle');
+      expect(state?.errorUpdateCount).toBe(failures + 1);
+    });
+    // Not the locations Retry, which comes first otherwise.
+    await waitFor(() => expect(lastFocused()).toBe('add-categories-retry'));
+    expect(screen.getByTestId('add-locations-retry')).toBeTruthy();
+  });
+
+  test('focus the user moves while a Retry loads stays where it is', async () => {
+    const fail = failingLists();
+    await renderAdd();
+    await searchFor('milk');
+    await enter();
+    await waitFor(() => expect(lastFocused()).toBe('add-locations-retry'));
+
+    fail.locations = false;
+    fail.categories = false;
+    mockFocusIsOnBodyOr.mockReturnValue(false);
+    mockFocusElement.mockClear();
+    await press(screen.getByTestId('add-locations-retry'));
+    await screen.findByTestId('add-location-1');
+    expect(mockFocusElement).not.toHaveBeenCalled();
   });
 });
 

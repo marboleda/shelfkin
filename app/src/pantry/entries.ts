@@ -20,3 +20,42 @@ export function createEntry(householdId: string, body: CreateEntryBody, signal?:
     apiClient.POST('/households/{householdId}/entries', { params: { path: { householdId } }, body, signal }),
   );
 }
+
+export type UpdateEntryBody = components['schemas']['UpdateEntry'];
+
+/**
+ * `PATCH /households/{householdId}/entries/{entryId}`: changes exactly one
+ * field. Repeating it with the same `eventId` is applied once.
+ */
+export function updateEntry(
+  householdId: string,
+  entryId: string,
+  body: UpdateEntryBody,
+  signal?: AbortSignal,
+): Promise<PantryEntry> {
+  return callApi(() =>
+    apiClient.PATCH('/households/{householdId}/entries/{entryId}', {
+      params: { path: { householdId, entryId } },
+      body,
+      signal,
+    }),
+  );
+}
+
+/**
+ * `DELETE /households/{householdId}/entries/{entryId}?eventId=...`. Repeating
+ * it with the same `eventId` after it succeeded answers 204 again.
+ */
+export async function deleteEntry(
+  householdId: string,
+  entryId: string,
+  eventId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  await callApi(() =>
+    apiClient.DELETE('/households/{householdId}/entries/{entryId}', {
+      params: { path: { householdId, entryId }, query: { eventId } },
+      signal,
+    }),
+  );
+}

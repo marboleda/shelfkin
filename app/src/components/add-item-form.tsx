@@ -27,7 +27,7 @@ import { AddItemSearch } from './add-item-search';
 import { Button } from './button';
 import { ChoiceChips } from './choice-chips';
 import { DateField } from './date-field';
-import { focusElement } from './focus';
+import { focusElement, focusIsOnBodyOr } from './focus';
 import { FormMessage } from './form-message';
 import { LevelPicker } from './level-picker';
 import { TextField } from './text-field';
@@ -127,8 +127,11 @@ export function AddItemForm({ onSaved, confirmation }: AddItemFormProps) {
   const [purchasedOn, setPurchasedOn] = useState(() => todayOnDevice());
   const [expiry, setExpiry] = useState<Expiry>({ mode: 'suggested' });
   const [notice, setNotice] = useState<string | null>(null);
-  // Set when an item is picked with Enter (web), so focus moves on into the details.
+  // Set when an item is picked or a Retry is pressed (web), so focus moves on
+  // into the details once they have loaded. `retried` is the list being retried.
   const focusDetailsNext = useRef(false);
+  const retried = useRef<'locations' | 'categories' | null>(null);
+  const summary = useRef<ComponentRef<typeof View>>(null);
   const addButton = useRef<ComponentRef<typeof Pressable>>(null);
   const categoryChip = useRef<ComponentRef<typeof Pressable>>(null);
   const locationChip = useRef<ComponentRef<typeof Pressable>>(null);
@@ -211,7 +214,7 @@ export function AddItemForm({ onSaved, confirmation }: AddItemFormProps) {
     setExpiry({ mode: 'manual', value: expiresOn });
   };
 
-  const startDetails = (next: PickedItem, defaultLocation: number | null, byKeyboard: boolean) => {
+  const startDetails = (next: PickedItem, defaultLocation: number | null) => {
     save.reset();
     setPicked(next);
     setIds(newWriteIds());
@@ -223,13 +226,22 @@ export function AddItemForm({ onSaved, confirmation }: AddItemFormProps) {
     setExpiry({ mode: 'suggested' });
     setNotice(null);
     setStep('details');
-    focusDetailsNext.current = byKeyboard;
+    focusDetailsNext.current = true;
+    retried.current = null;
   };
 
   const backToSearch = () => {
     save.reset();
     setNotice(null);
     setStep('search');
+    focusDetailsNext.current = false;
+    retried.current = null;
+  };
+
+  const retry = (list: 'locations' | 'categories') => {
+    focusDetailsNext.current = true;
+    retried.current = list;
+    void (list === 'locations' ? locations : categories).refetch();
   };
 
   const locationsReady = locations.isSuccess;
@@ -252,22 +264,36 @@ export function AddItemForm({ onSaved, confirmation }: AddItemFormProps) {
     !shelfLifeError &&
     !expiryError;
 
-  // On web, an item picked with Enter moves focus to Add, so a second Enter
-  // adds it. When Add cannot be used yet, focus goes to the first thing that
-  // needs the user instead (a Retry, the category, the location), never to
-  // the page. While locations or categories are still loading, it waits.
+  // Loading for the first time, or again after Retry.
+  const locationsWaiting = locations.isPending || (locations.isError && locations.isFetching);
+  const categoriesWaiting = categories.isPending || (categories.isError && categories.isFetching);
+
+  // On web, a picked item moves focus to Add, so Enter adds it. When Add
+  // cannot be used yet, focus goes to the first thing that needs the user
+  // instead (a Retry, the category, the location), never to the page. While
+  // locations or categories load (after a pick or a Retry), focus waits on the
+  // summary. Focus the user has moved elsewhere in the meantime is left alone.
   useEffect(() => {
     if (step !== 'details' || !focusDetailsNext.current) return;
+    const focusIsOurs = focusIsOnBodyOr(summary.current);
+    if (locationsWaiting || categoriesWaiting) {
+      if (focusIsOurs) focusElement(summary.current);
+      return;
+    }
+    focusDetailsNext.current = false;
+    const retriedList = retried.current;
+    retried.current = null;
+    if (!focusIsOurs) return;
     let target: ComponentRef<typeof Pressable> | null = null;
-    if (locations.isError) target = locationsRetry.current;
+    if (retriedList === 'locations' && locations.isError) target = locationsRetry.current;
+    else if (retriedList === 'categories' && categories.isError) target = categoriesRetry.current;
+    else if (locations.isError) target = locationsRetry.current;
     else if (categories.isError) target = categoriesRetry.current;
-    else if (!locationsReady || !categoriesReady) return;
     else if (categoryError) target = categoryChip.current;
     else if (locationError) target = locationChip.current;
     else target = addButton.current;
-    focusDetailsNext.current = false;
     focusElement(target);
-  }, [step, picked, locations.isError, categories.isError, locationsReady, categoriesReady, categoryError, locationError]);
+  }, [step, picked, locationsWaiting, categoriesWaiting, locations.isError, categories.isError, categoryError, locationError]);
 
   const submit = () => {
     if (!picked || !canSave || save.isPending || locationId === null) return;
@@ -315,8 +341,8 @@ export function AddItemForm({ onSaved, confirmation }: AddItemFormProps) {
         householdName={householdName}
         pantryCount={pantryCount}
         confirmation={confirmation}
-        onPickItem={(item, byKeyboard) => startDetails({ kind: 'catalog', item }, item.locationId, byKeyboard)}
-        onPickNew={(name, byKeyboard) => startDetails({ kind: 'new', name: cleanItemName(name) }, null, byKeyboard)}
+        onPickItem={(item) => startDetails({ kind: 'catalog', item }, item.locationId)}
+        onPickNew={(name) => startDetails({ kind: 'new', name: cleanItemName(name) }, null)}
       />
     );
   }
@@ -331,7 +357,8 @@ export function AddItemForm({ onSaved, confirmation }: AddItemFormProps) {
     <View style={styles.root}>
       <ScrollView style={styles.scroll} contentContainerStyle={styles.details} keyboardShouldPersistTaps="handled">
         {notice ? <FormMessage tone="info" message={notice} testID="add-notice" /> : null}
-        <View style={styles.summary} testID="add-summary">
+        {/* Focusable by script only: holds focus while the details load (web). */}
+        <View ref={summary} style={styles.summary} testID="add-summary" tabIndex={-1}>
           <View style={styles.summaryText}>
             <Text style={styles.summaryName}>{itemName}</Text>
             <Text style={styles.muted}>
@@ -349,7 +376,7 @@ export function AddItemForm({ onSaved, confirmation }: AddItemFormProps) {
               ref={locationsRetry}
               variant="link"
               label="Retry"
-              onPress={() => void locations.refetch()}
+              onPress={() => retry('locations')}
               testID="add-locations-retry"
             />
           </FormMessage>
@@ -360,7 +387,7 @@ export function AddItemForm({ onSaved, confirmation }: AddItemFormProps) {
               ref={categoriesRetry}
               variant="link"
               label="Retry"
-              onPress={() => void categories.refetch()}
+              onPress={() => retry('categories')}
               testID="add-categories-retry"
             />
           </FormMessage>

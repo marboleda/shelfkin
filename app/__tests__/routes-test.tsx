@@ -62,10 +62,10 @@ describe('routes', () => {
     expect(await screen.findByRole('heading', { name: 'Set up your pantry' })).toBeTruthy();
   });
 
-  test('entry detail shows the id from the URL', async () => {
+  test('entry detail for an ID that is not in the pantry says so', async () => {
     await renderRouter(APP_DIR, { initialUrl: '/entries/abc' });
 
-    expect(screen.getByTestId('entry-id')).toHaveTextContent('abc');
+    expect(await screen.findByTestId('entry-missing')).toHaveTextContent(/This item isn't in Home any more/);
   });
 
   test.each(['/sign-in', '/sign-up', '/onboarding'])('%s has no tab bar or side nav', async (url) => {
@@ -117,7 +117,7 @@ describe('Pantry navigation', () => {
       fireEvent.press(row);
     });
     expect(screen).toHavePathname(`/entries/${entry.id}`);
-    expect(screen.getByTestId('entry-id')).toHaveTextContent(entry.id);
+    expect(await screen.findByRole('heading', { name: 'Milk' })).toBeTruthy();
 
     await act(async () => {
       fireEvent.press(screen.getByLabelText('Back to Pantry'));

@@ -3,6 +3,7 @@
 import { http, HttpResponse } from 'msw';
 
 import type { components } from '@/api/schema';
+import { addDays } from '@/pantry/dates';
 
 import { apiUrl } from './api';
 
@@ -80,4 +81,141 @@ export function locationsHandler(locations: Location[] = TEST_LOCATIONS) {
 
 export function categoriesHandler(categories: Category[] = TEST_CATEGORIES) {
   return http.get(apiUrl('/categories'), () => HttpResponse.json({ items: categories }));
+}
+
+type UpdateEntry = components['schemas']['UpdateEntry'];
+
+/** The API's `expiryStatus` rule: expired before `today`, soon up to `today` + 3 days, null when out or with no expiry. */
+export function expiryStatusOn(entry: Pick<PantryListEntry, 'level' | 'expiresOn'>, today: string): PantryListEntry['expiryStatus'] {
+  if (entry.level === 'out' || !entry.expiresOn) return null;
+  if (entry.expiresOn < today) return 'expired';
+  return entry.expiresOn <= addDays(today, 3) ? 'soon' : null;
+}
+
+export type RecordedUpdate = { householdId: string; entryId: string; body: UpdateEntry };
+export type RecordedDelete = { householdId: string; entryId: string; eventId: string | null };
+
+type Answer<T> = (request: T, call: number) => Response | undefined | Promise<Response | undefined>;
+
+/**
+ * A small in-memory pantry API for tests that change entries:
+ * `GET /households/:id/pantry` returns `state.pantry`, `PATCH .../entries/:entryId`
+ * applies the one field it is given (and sets `lastChange` to `actor`), and
+ * `DELETE .../entries/:entryId` removes the entry. Each request is recorded, in
+ * the order it arrived. `answerUpdate` and `answerDelete` can return another
+ * response instead (an error, or a promise to answer later); returning
+ * undefined applies the request as usual.
+ */
+export function fakePantryApi(
+  initial: Pantry,
+  options: {
+    actor?: { id: string; name: string };
+    answerUpdate?: Answer<RecordedUpdate>;
+    answerDelete?: Answer<RecordedDelete>;
+    answerPantry?: (call: number) => Response | undefined | Promise<Response | undefined>;
+  } = {},
+) {
+  const state = {
+    pantry: structuredClone(initial),
+    updates: [] as RecordedUpdate[],
+    deletes: [] as RecordedDelete[],
+    pantryGets: 0,
+    /** Requests that have arrived but not been answered yet. */
+    inFlight: 0,
+    /** The most requests that were ever waiting for an answer at the same time. */
+    maxInFlight: 0,
+    answerUpdate: options.answerUpdate,
+    answerDelete: options.answerDelete,
+    answerPantry: options.answerPantry,
+  };
+  const actor = options.actor ?? { id: '0190f3a1-7c2e-7b3d-9a4f-2c1e5d6b7a80', name: 'Sam' };
+
+  function find(entryId: string) {
+    for (const group of state.pantry.groups) {
+      const entry = group.entries.find((candidate) => candidate.id === entryId);
+      if (entry) return { group, entry };
+    }
+    return null;
+  }
+
+  async function track<T>(work: () => Promise<T>): Promise<T> {
+    state.inFlight += 1;
+    state.maxInFlight = Math.max(state.maxInFlight, state.inFlight);
+    try {
+      return await work();
+    } finally {
+      state.inFlight -= 1;
+    }
+  }
+
+  const notFound = () => HttpResponse.json({ error: { code: 'entry_not_found', message: 'No such entry.' } }, { status: 404 });
+
+  const handlers = [
+    http.get(apiUrl('/households/:householdId/pantry'), async () => {
+      state.pantryGets += 1;
+      const custom = await state.answerPantry?.(state.pantryGets);
+      if (custom) return custom;
+      return HttpResponse.json(structuredClone(state.pantry));
+    }),
+    http.patch(apiUrl('/households/:householdId/entries/:entryId'), async ({ request, params }) =>
+      track(async () => {
+        const recorded: RecordedUpdate = {
+          householdId: String(params.householdId),
+          entryId: String(params.entryId),
+          body: (await request.json()) as UpdateEntry,
+        };
+        state.updates.push(recorded);
+        const custom = await state.answerUpdate?.(recorded, state.updates.length);
+        if (custom) return custom;
+        const found = find(recorded.entryId);
+        if (!found) return notFound();
+        const { eventId, ...fields } = recorded.body;
+        void eventId;
+        const [field, value] = Object.entries(fields)[0] ?? [];
+        const column = { level: 'level', locationId: 'location_id', purchasedOn: 'purchased_on', expiresOn: 'expires_on' }[
+          field as 'level'
+        ];
+        const type = {
+          level: 'level_changed',
+          locationId: 'location_changed',
+          purchasedOn: 'purchase_date_changed',
+          expiresOn: 'expiry_changed',
+        }[field as 'level'] as NonNullable<PantryListEntry['lastChange']>['type'];
+        const entry = found.entry as Record<string, unknown>;
+        const from = entry[field];
+        entry[field] = value;
+        found.entry.expiryStatus = expiryStatusOn(found.entry, state.pantry.today);
+        found.entry.lastChange = {
+          type,
+          changes: { [column]: { from, to: value } },
+          actorId: actor.id,
+          actorName: actor.name,
+          occurredAt: new Date().toISOString(),
+        };
+        const { expiryStatus: _status, lastChange: _change, ...plain } = found.entry;
+        void _status;
+        void _change;
+        return HttpResponse.json(plain);
+      }),
+    ),
+    http.delete(apiUrl('/households/:householdId/entries/:entryId'), async ({ request, params }) =>
+      track(async () => {
+        const recorded: RecordedDelete = {
+          householdId: String(params.householdId),
+          entryId: String(params.entryId),
+          eventId: new URL(request.url).searchParams.get('eventId'),
+        };
+        state.deletes.push(recorded);
+        const custom = await state.answerDelete?.(recorded, state.deletes.length);
+        if (custom) return custom;
+        const found = find(recorded.entryId);
+        if (!found) return notFound();
+        found.group.entries = found.group.entries.filter((entry) => entry !== found.entry);
+        state.pantry.groups = state.pantry.groups.filter((group) => group.entries.length > 0);
+        return new HttpResponse(null, { status: 204 });
+      }),
+    ),
+  ];
+
+  return { state, handlers };
 }

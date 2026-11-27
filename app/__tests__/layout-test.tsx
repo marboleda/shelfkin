@@ -164,7 +164,7 @@ describe('phone and desktop layout', () => {
     expect(screen.getByTestId('side-nav')).toBeTruthy();
     expect(screen.queryByTestId('bottom-tab-bar')).toBeNull();
     expect(screen).toHavePathname('/entries/abc');
-    expect(screen.getByTestId('entry-id')).toHaveTextContent('abc');
+    expect(await screen.findByTestId('entry-missing')).toBeTruthy();
 
     await setWindowWidth(600);
     expect(screen.getByTestId('bottom-tab-bar')).toBeTruthy();
