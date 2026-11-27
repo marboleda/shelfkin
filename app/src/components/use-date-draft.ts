@@ -31,6 +31,9 @@ type Draft = {
   committed: boolean;
 };
 
+/** How a save was triggered. `keepalive`: the page is being hidden and may unload right after. */
+export type DateSaveOptions = { keepalive?: boolean };
+
 export type DateDraftStatus =
   /** The field holds something that is not a whole date, or was emptied. */
   | 'incomplete'
@@ -44,7 +47,11 @@ export type DateDraftStatus =
  * dropped as soon as the saved date changes (a save, a rollback, someone
  * else's change after a refetch).
  */
-export function useDateDraft(value: string, onSave: (value: string) => void, mode: DateSaveMode) {
+export function useDateDraft(
+  value: string,
+  onSave: (value: string, options?: DateSaveOptions) => void,
+  mode: DateSaveMode,
+) {
   const [draft, setDraftState] = useState<Draft | null>(null);
   const draftRef = useRef<Draft | null>(null);
   const latest = useRef({ value, onSave });
@@ -67,14 +74,15 @@ export function useDateDraft(value: string, onSave: (value: string) => void, mod
     if (draftRef.current && draftRef.current.saved !== value) draftRef.current = null;
   }, [value]);
 
-  const commitNow = () => {
+  const commitNow = (options?: DateSaveOptions) => {
     const pending = draftRef.current;
     const saved = latest.current.value;
     if (!pending || pending.committed || pending.saved !== saved) return;
     if (pending.text === saved || !isComplete(pending.text)) return;
     // Keep showing the date until the saved date changes to it (the save is optimistic, but not synchronous).
     setDraft({ ...pending, committed: true });
-    latest.current.onSave(pending.text);
+    if (options) latest.current.onSave(pending.text, options);
+    else latest.current.onSave(pending.text);
   };
   const commitRef = useRef(commitNow);
   useEffect(() => {
@@ -89,19 +97,22 @@ export function useDateDraft(value: string, onSave: (value: string) => void, mod
   // Save a date that is still waiting when the screen goes away.
   useEffect(() => () => commitRef.current(), []);
 
-  // ...or when the page is hidden: switching tabs, or closing it.
+  // ...or when the page is hidden: switching tabs, closing it or navigating away. The page may
+  // unload right after, so the save is asked to leave at once (`keepalive`).
   useEffect(() => {
     if (mode !== 'commit' || typeof document === 'undefined') return;
     if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
+    const doc = document;
+    const win = window;
     const onVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') commitRef.current();
+      if (doc.visibilityState === 'hidden') commitRef.current({ keepalive: true });
     };
-    const onPageHide = () => commitRef.current();
-    document.addEventListener('visibilitychange', onVisibilityChange);
-    window.addEventListener('pagehide', onPageHide);
+    const onPageHide = () => commitRef.current({ keepalive: true });
+    doc.addEventListener('visibilitychange', onVisibilityChange);
+    win.addEventListener('pagehide', onPageHide);
     return () => {
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-      window.removeEventListener('pagehide', onPageHide);
+      doc.removeEventListener('visibilitychange', onVisibilityChange);
+      win.removeEventListener('pagehide', onPageHide);
     };
   }, [mode]);
 

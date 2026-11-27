@@ -23,6 +23,7 @@ export function DateField({
   testID = 'date-field',
   onBlur,
   onSubmitEditing,
+  reserveHintSpace = false,
 }: DateFieldProps) {
   const styles = useThemedStyles(createStyles);
   const theme = useTheme();
@@ -91,6 +92,11 @@ export function DateField({
       ) : hint ? (
         <Text nativeID={messageId} style={styles.hint}>
           {hint}
+        </Text>
+      ) : reserveHintSpace ? (
+        // An empty line as tall as a hint (see `reserveHintSpace`).
+        <Text aria-hidden testID={`${testID}-hint-space`} style={styles.hint}>
+          {' '}
         </Text>
       ) : null}
     </View>

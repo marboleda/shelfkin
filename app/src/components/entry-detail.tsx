@@ -12,7 +12,7 @@ import { useMeQuery } from '@/auth/profile';
 import { useNow } from '@/hooks/use-now';
 import { useCurrentHousehold, useHouseholdKeys } from '@/household/current-household';
 import { findEntry } from '@/pantry/entry-cache';
-import { useDeleteEntry, useUpdateEntry, type EntryChange } from '@/pantry/entry-mutations';
+import { useDeleteEntry, useUpdateEntry, type ChangeOptions, type EntryChange } from '@/pantry/entry-mutations';
 import { expiryLabel, formatCalendarDate, lastChangeLabel, type StockLevel } from '@/pantry/format';
 import { fetchPantry, useLocationNames, useLocationsQuery, type PantryGroup, type PantryListEntry } from '@/pantry/pantry';
 import { MIN_TOUCH_TARGET, useTheme, useThemedStyles, type Theme } from '@/theme';
@@ -27,7 +27,7 @@ import { FormMessage } from './form-message';
 import { LevelPicker } from './level-picker';
 import { PressableLink } from './pressable-link';
 import { Screen } from './screen';
-import { DATE_SAVE_MODE, useDateDraft } from './use-date-draft';
+import { DATE_SAVE_MODE, useDateDraft, type DateSaveOptions } from './use-date-draft';
 
 /**
  * The detail screen for `/entries/<id>`. It reads the entry from the current
@@ -118,9 +118,9 @@ function EntryForm({ group, entry, today }: EntryFormProps) {
   });
 
   /** Sends `next` unless the entry already has that value. */
-  const send = (next: EntryChange) => {
+  const send = (next: EntryChange, options?: ChangeOptions) => {
     if (entry[next.field] === next.value) return;
-    change(next, name);
+    change(next, name, options);
   };
 
   const confirmDelete = () => {
@@ -170,7 +170,7 @@ function EntryForm({ group, entry, today }: EntryFormProps) {
         label="Bought"
         testID="entry-bought-date"
         value={entry.purchasedOn}
-        onSave={(value) => send({ field: 'purchasedOn', value })}
+        onSave={(value, options) => send({ field: 'purchasedOn', value }, options)}
         incompleteHint="Enter the date you bought it"
       />
 
@@ -179,7 +179,7 @@ function EntryForm({ group, entry, today }: EntryFormProps) {
           label="Expires"
           testID="entry-expires"
           value={entry.expiresOn ?? ''}
-          onSave={(value) => send({ field: 'expiresOn', value })}
+          onSave={(value, options) => send({ field: 'expiresOn', value }, options)}
           incompleteHint={entry.expiresOn ? 'Enter a date, or choose No expiry' : null}
           hint={entry.expiresOn ? null : 'No expiry'}
         />
@@ -232,8 +232,8 @@ type EntryDateFieldProps = {
   testID: string;
   /** The saved date, `YYYY-MM-DD`, or '' for none. */
   value: string;
-  /** Called with a new valid date. */
-  onSave: (value: string) => void;
+  /** Called with a new valid date (see `DateSaveOptions`). */
+  onSave: (value: string, options?: DateSaveOptions) => void;
   /** Shown while the field holds something that is not a whole date (web only). */
   incompleteHint: string | null;
   hint?: string | null;
@@ -260,6 +260,7 @@ function EntryDateField({ label, testID, value, onSave, incompleteHint, hint }: 
       onChange={draft.onChange}
       onBlur={commit}
       onSubmitEditing={commit}
+      reserveHintSpace
       hint={draft.status === 'incomplete' ? incompleteHint : draft.status === 'unsaved' ? UNSAVED_DATE_HINT : hint}
     />
   );

@@ -6,8 +6,9 @@
 // change, blur and Enter the same way.
 
 import type { QueryClient } from '@tanstack/react-query';
-import { act, fireEvent, renderHook, waitFor } from '@testing-library/react-native';
+import { act, cleanup, fireEvent, renderHook, waitFor } from '@testing-library/react-native';
 import { renderRouter, screen } from 'expo-router/testing-library';
+import { HttpResponse } from 'msw';
 
 import { useDateDraft } from '@/components/use-date-draft';
 import { isPlausibleCalendarDate } from '@/pantry/dates';
@@ -55,6 +56,7 @@ jest.mock('@/components/date-field', () => {
       onSubmitEditing?: () => void;
       hint?: string | null;
       testID?: string;
+      reserveHintSpace?: boolean;
     }) => (
       <View>
         <TextInput
@@ -65,7 +67,11 @@ jest.mock('@/components/date-field', () => {
           onBlur={props.onBlur}
           onSubmitEditing={props.onSubmitEditing}
         />
-        {props.hint ? <Text testID={`${props.testID}-hint`}>{props.hint}</Text> : null}
+        {props.hint ? (
+          <Text testID={`${props.testID}-hint`}>{props.hint}</Text>
+        ) : props.reserveHintSpace ? (
+          <Text testID={`${props.testID}-hint-space`}>{' '}</Text>
+        ) : null}
       </View>
     ),
   };
@@ -222,6 +228,112 @@ describe('typed dates (web)', () => {
   });
 });
 
+/** Whether the field has exactly one line under it: a hint, or the space kept for one. */
+function hintLines(field: string): number {
+  return (screen.queryByTestId(`${field}-hint`) ? 1 : 0) + (screen.queryByTestId(`${field}-hint-space`) ? 1 : 0);
+}
+
+describe('typed dates (web), layout', () => {
+  test('the line under Bought and Expires is always there, so the unsaved hint never moves what is below', async () => {
+    await openEntry();
+    expect(hintLines('entry-bought-date')).toBe(1);
+    expect(hintLines('entry-expires')).toBe(1);
+    await type('entry-bought-date', '2026-10-25');
+    expect(hint('entry-bought-date')).toBe(UNSAVED_HINT);
+    expect(hintLines('entry-bought-date')).toBe(1);
+    await blur('entry-bought-date');
+    await waitForSaved();
+    expect(hint('entry-bought-date')).toBeNull();
+    expect(hintLines('entry-bought-date')).toBe(1);
+  });
+});
+
+describe('typed dates (web), hiding the page', () => {
+  // Jest has no DOM: stand in for `document` and `window`'s events while Entry detail is open.
+  const globals = globalThis as { document?: unknown; window?: { addEventListener?: unknown; removeEventListener?: unknown } };
+  let fakeDocument: EventTarget & { visibilityState: string };
+  let fakeWindowEvents: EventTarget;
+  let restore: () => void;
+
+  beforeEach(() => {
+    fakeDocument = Object.assign(new EventTarget(), { visibilityState: 'visible' });
+    fakeWindowEvents = new EventTarget();
+    const saved = {
+      document: globals.document,
+      add: globals.window?.addEventListener,
+      remove: globals.window?.removeEventListener,
+    };
+    globals.document = fakeDocument;
+    if (globals.window) {
+      globals.window.addEventListener = fakeWindowEvents.addEventListener.bind(fakeWindowEvents);
+      globals.window.removeEventListener = fakeWindowEvents.removeEventListener.bind(fakeWindowEvents);
+    }
+    restore = () => {
+      globals.document = saved.document;
+      if (globals.window) {
+        globals.window.addEventListener = saved.add;
+        globals.window.removeEventListener = saved.remove;
+      }
+    };
+  });
+
+  afterEach(async () => {
+    // Unmount while the stand-ins are still there, so the listeners come off them.
+    await cleanup();
+    restore();
+  });
+
+  async function hidePage() {
+    await act(async () => {
+      fakeDocument.visibilityState = 'hidden';
+      fakeDocument.dispatchEvent(new Event('visibilitychange'));
+    });
+  }
+
+  test('hiding the page sends the unsaved date at once with keepalive and the last token, once', async () => {
+    await openEntry();
+    await type('entry-bought-date', '2026-10-26');
+    const fetchSpy = jest.spyOn(globalThis, 'fetch');
+    try {
+      await hidePage();
+      // Sent before anything asynchronous could run.
+      const patches = fetchSpy.mock.calls.filter(([, init]) => init?.method === 'PATCH');
+      expect(patches).toHaveLength(1);
+      const [url, init] = patches[0];
+      expect(String(url)).toMatch(new RegExp(`/households/${HOME.id}/entries/${MILK_ENTRY.id}$`));
+      expect(init?.keepalive).toBe(true);
+      expect((init?.headers as Record<string, string>).Authorization).toMatch(/^Bearer .+/);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+    await waitForSaved();
+    expect(api.state.updates).toHaveLength(1);
+    expect(api.state.updates[0].body).toEqual({ eventId: expect.any(String), purchasedOn: '2026-10-26' });
+    expect(screen.getByTestId('entry-bought-date').props.value).toBe('2026-10-26');
+
+    // Nothing more on pagehide, on return or on blur.
+    await act(async () => {
+      fakeWindowEvents.dispatchEvent(new Event('pagehide'));
+      fakeDocument.visibilityState = 'visible';
+      fakeDocument.dispatchEvent(new Event('visibilitychange'));
+    });
+    await blur('entry-bought-date');
+    await waitForSaved();
+    expect(api.state.updates).toHaveLength(1);
+  });
+
+  test('a keepalive request turned away with a 401 (a stale token) is sent again the usual way, with the same eventId', async () => {
+    api.state.answerUpdate = (_request, call) => (call === 1 ? HttpResponse.json({ error: { code: 'unauthorized', message: 'No.' } }, { status: 401 }) : undefined);
+    await openEntry();
+    await type('entry-bought-date', '2026-10-27');
+    await hidePage();
+    await waitForSaved();
+    expect(api.state.updates).toHaveLength(2);
+    expect(api.state.updates[1].body).toEqual(api.state.updates[0].body);
+    expect(screen.getByTestId('entry-bought-date').props.value).toBe('2026-10-27');
+  });
+});
+
 describe('useDateDraft', () => {
   async function setup(value: string, mode: 'change' | 'commit') {
     const onSave = jest.fn();
@@ -286,7 +398,7 @@ describe('useDateDraft', () => {
         fakeWindow.dispatchEvent(new Event('pagehide'));
       });
       expect(onSave).toHaveBeenCalledTimes(1);
-      expect(onSave).toHaveBeenCalledWith('2026-10-23');
+      expect(onSave).toHaveBeenCalledWith('2026-10-23', { keepalive: true });
       await hook.unmount();
       expect(onSave).toHaveBeenCalledTimes(1);
     } finally {

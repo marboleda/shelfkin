@@ -27,6 +27,7 @@
 import { useMutation, useQueryClient, type Mutation, type QueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect } from 'react';
 
+import { sendWithKeepalive } from '@/api/client';
 import { isApiError, userMessage } from '@/api/errors';
 import { shouldRetryQuery } from '@/api/query-client';
 import { queryKeys } from '@/api/query-keys';
@@ -35,7 +36,7 @@ import { useHouseholds, useHouseholdKeys } from '@/household/current-household';
 import { newId } from '@/lib/ids';
 import { queryRetryDelay } from '@/lib/retry';
 
-import { deleteEntry, updateEntry, type UpdateEntryBody } from './entries';
+import { deleteEntry, updateEntry, type PantryEntry, type UpdateEntryBody } from './entries';
 import {
   findEntry,
   provisionalExpiryStatus,
@@ -64,6 +65,21 @@ type UpdateVariables = {
   eventId: string;
   /** The item's name, for messages ("Couldn't update Milk. Try again."). */
   itemName: string;
+  /**
+   * The request already sent with `keepalive` as the page was hidden (see
+   * `change`), taken by the first attempt; null once taken, or when the
+   * request got no answer (a later attempt then sends it the usual way).
+   */
+  sent?: { response: Promise<PantryEntry | null> | null };
+};
+
+export type ChangeOptions = {
+  /**
+   * The page is being hidden, and may be closed or navigated away: send the
+   * request at once with `keepalive` so it is not lost. Only done while no
+   * other write to the entry is pending, so writes still land in order.
+   */
+  keepalive?: boolean;
 };
 
 type DeleteVariables = {
@@ -313,8 +329,15 @@ export function useUpdateEntry(entryId: string) {
     mutationKey: entryMutationKey(householdId, entryId),
     meta: UPDATE_META,
     scope: entryMutationScope(householdId, entryId),
-    mutationFn: (variables) =>
-      updateEntry(variables.householdId, variables.entryId, requestBody(variables.change, variables.eventId)),
+    mutationFn: async (variables) => {
+      const sent = variables.sent?.response;
+      if (sent && variables.sent) {
+        variables.sent.response = null;
+        const entry = await sent;
+        if (entry) return entry;
+      }
+      return updateEntry(variables.householdId, variables.entryId, requestBody(variables.change, variables.eventId));
+    },
     retry: shouldRetryQuery,
     retryDelay: queryRetryDelay(queryClient),
     onMutate: async (variables) => {
@@ -371,10 +394,20 @@ export function useUpdateEntry(entryId: string) {
 
   const { mutate } = mutation;
   const change = useCallback(
-    (next: EntryChange, itemName: string) => {
-      mutate({ householdId, entryId, change: next, eventId: newId(), itemName });
+    (next: EntryChange, itemName: string, options: ChangeOptions = {}) => {
+      const eventId = newId();
+      let sent: UpdateVariables['sent'];
+      if (options.keepalive && queryClient.isMutating({ mutationKey: entryMutationKey(householdId, entryId) }) === 0) {
+        // Sent before `mutate`, whose first steps are asynchronous and may not run before the page unloads.
+        const path = `/households/${encodeURIComponent(householdId)}/entries/${encodeURIComponent(entryId)}`;
+        const response = sendWithKeepalive<PantryEntry>('PATCH', path, requestBody(next, eventId));
+        // The mutation reads the outcome once it starts; don't report a failure as unhandled before then.
+        response.catch(() => {});
+        sent = { response };
+      }
+      mutate({ householdId, entryId, change: next, eventId, itemName, sent });
     },
-    [mutate, householdId, entryId],
+    [mutate, queryClient, householdId, entryId],
   );
 
   return { change };
