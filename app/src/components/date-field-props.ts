@@ -13,6 +13,15 @@ export type DateFieldProps = {
   clearLabel?: string;
   disabled?: boolean;
   testID?: string;
+  /** Called when the typed field loses focus (web only; the native field is a button). */
+  onBlur?: () => void;
+  /** Called when Enter is pressed in the typed field (web only). Focus stays in the field. */
+  onSubmitEditing?: () => void;
+  /**
+   * Keep the hint line's space when there is no hint or error (web only), so
+   * a hint that comes and goes while typing doesn't move what is below the field.
+   */
+  reserveHintSpace?: boolean;
 };
 
 /** A `YYYY-MM-DD` date as a local `Date` at midnight, for a native picker; today when empty or invalid. */

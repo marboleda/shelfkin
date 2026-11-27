@@ -1,4 +1,4 @@
-import { getIdToken } from '@/auth/session';
+import { getIdToken, onSignedOut } from '@/auth/session';
 
 /** Extra headers to send with an API request. */
 export type RequestHeaders = Record<string, string>;
@@ -18,5 +18,22 @@ export type RequestHeaderOptions = {
  */
 export async function getRequestHeaders(options: RequestHeaderOptions = {}): Promise<RequestHeaders> {
   const token = await getIdToken(options.forceRefresh ?? false);
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  lastHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+  return lastHeaders;
+}
+
+let lastHeaders: RequestHeaders = {};
+onSignedOut(() => {
+  lastHeaders = {};
+});
+
+/**
+ * The headers `getRequestHeaders` returned last, without waiting for anything.
+ * For a request that must leave before the page unloads (see
+ * `sendWithKeepalive` in client.ts), where waiting for Firebase could be too
+ * late. The token may have expired if no request was made for an hour; the API
+ * then answers 401.
+ */
+export function cachedRequestHeaders(): RequestHeaders {
+  return lastHeaders;
 }

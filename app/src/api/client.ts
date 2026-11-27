@@ -15,7 +15,7 @@ import { endSession } from '@/auth/session';
 
 import { apiConfig, normalizeBaseUrl } from './config';
 import { ApiError, errorFromResponse } from './errors';
-import { getRequestHeaders, type RequestHeaderOptions, type RequestHeaders } from './headers';
+import { cachedRequestHeaders, getRequestHeaders, type RequestHeaderOptions, type RequestHeaders } from './headers';
 import type { paths } from './schema';
 
 /** A request that gets no response in this time fails as a `network` error. */
@@ -177,6 +177,50 @@ export async function callApi<Data>(send: () => Promise<FetchResult<Data>>): Pro
  * instead of the app. The placeholder `.invalid` address can never resolve, so
  * nothing is ever sent to a real server by mistake.
  */
-export const apiClient: ApiClient = createApiClient({
-  baseUrl: apiConfig.ok ? apiConfig.baseUrl : 'https://api-url-not-configured.invalid',
-});
+const API_BASE_URL = apiConfig.ok ? apiConfig.baseUrl : 'https://api-url-not-configured.invalid';
+
+export const apiClient: ApiClient = createApiClient({ baseUrl: API_BASE_URL });
+
+/**
+ * Sends one JSON request to `path` (already filled in, e.g.
+ * `/households/<id>/entries/<id>`) at once, before this function returns,
+ * with `fetch(..., { keepalive: true })`, so the browser still delivers it if
+ * the page is closed or navigated away right after. It is for a write made as
+ * the page is hidden; everything else uses `apiClient`.
+ *
+ * Nothing is awaited before the request leaves: it carries the last token
+ * `getRequestHeaders` got (`cachedRequestHeaders`), with no refresh, retry or
+ * timeout. Resolves with the response data, or with null when the request got
+ * no response or a 401 (a stale token), so the caller can send it again the
+ * usual way while the page is still there; rejects with an `ApiError` for any
+ * other failure.
+ */
+export function sendWithKeepalive<Data>(method: 'PATCH', path: string, body: unknown): Promise<Data | null> {
+  let sent: Promise<Response>;
+  try {
+    sent = fetch(`${API_BASE_URL}${path}`, {
+      method,
+      keepalive: true,
+      headers: { 'Content-Type': 'application/json', ...cachedRequestHeaders() },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    return Promise.resolve(null);
+  }
+  return sent.then(
+    async (response) => {
+      if (response.status === 401) return null;
+      const text = NULL_BODY_STATUSES.has(response.status) ? '' : await response.text();
+      let data: unknown;
+      try {
+        data = text ? JSON.parse(text) : undefined;
+      } catch (cause) {
+        if (response.ok) throw new ApiError('unexpected', 'Could not read the response', { cause });
+        data = undefined;
+      }
+      if (!response.ok) throw errorFromResponse(response.status, data);
+      return data as Data;
+    },
+    () => null,
+  );
+}
